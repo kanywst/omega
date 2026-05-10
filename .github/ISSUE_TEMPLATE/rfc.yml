@@ -1,0 +1,48 @@
+name: RFC
+description: Open a Request for Comments on a controversial or breaking change (per GOVERNANCE.md)
+labels: ["kind/rfc"]
+body:
+  - type: input
+    id: title
+    attributes:
+      label: RFC title
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why does this change need to happen? What problem does it solve, and what evidence do you have that the problem is real?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The change in detail. Include affected packages, wire formats, config keys, CLI flags, and the migration story for existing deployments.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: textarea
+    id: drawbacks
+    attributes:
+      label: Drawbacks / open questions
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Affected layer
+      description: See docs/design-philosophy.md.
+      options:
+        - Core
+        - Plugin
+        - Out-of-tree (integration)
+        - Governance / process
+    validations:
+      required: true

@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What real workflow does this enable? Concrete is better than abstract.
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Design layer
+      description: See docs/design-philosophy.md for the layer rules.
+      options:
+        - Core (in-tree, mandatory)
+        - Plugin (in-tree interface + default)
+        - Out-of-tree (integration only)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing tools, workarounds, or other designs you considered. If this overlaps with docs/non-goals.md please address that section explicitly.
+  - type: textarea
+    id: design
+    attributes:
+      label: Sketch (optional)
+      description: API shape, schema, or pseudo-code if you have it.

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/0-draft/omega/security/advisories/new
+    about: Do not file public issues for vulnerabilities. Use private security advisories.
+  - name: Discussion
+    url: https://github.com/0-draft/omega/discussions
+    about: Open-ended questions, design discussions, and scope amendments belong here.

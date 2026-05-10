@@ -1,0 +1,37 @@
+name: Bug report
+description: Report a defect in Omega
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Omega version
+      description: Output of `omega --version`, or the commit SHA you built from.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS / Go version / Kubernetes version (if applicable)
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal repro. Include `omega server` and `omega agent` flags and the request that triggered the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include logs from `omega server` and `omega agent` if relevant.
+    validations:
+      required: true
