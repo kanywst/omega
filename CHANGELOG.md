@@ -22,6 +22,11 @@ changes (see [SECURITY.md](SECURITY.md)).
   with the design-philosophy layer check.
 - [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) forms for bug,
   feature, and RFC.
+- OpenSSF Scorecard and CodeQL workflows under `.github/workflows/`,
+  with the corresponding badges in the README.
+- [`api/openapi.yaml`](api/openapi.yaml) - OpenAPI 3.1 specification
+  covering every HTTP endpoint the control plane serves, with a CI
+  `openapi` job that runs `redocly lint` on every push.
 
 ## [0.0.1] - 2026-05-01
 

@@ -1,0 +1,14 @@
+extends:
+  - recommended
+
+rules:
+  # Omega does not ship authentication on the HTTP control-plane API
+  # in core today; deployments are expected to terminate auth at an
+  # ingress / mesh layer. Re-enable when the OIDC IdP federation hub
+  # lands (tracked in ROADMAP.md).
+  security-defined: off
+
+  # /healthz, /v1/leader, /v1/bundle, /metrics etc. have no documented
+  # 4xx failure modes worth describing; redocly's recommendation that
+  # every operation declare one is too strict for a handwritten spec.
+  operation-4xx-response: off

@@ -111,6 +111,8 @@ Components are independently runnable (`omega server identity`, `omega server po
 | GET    | `/v1/bundle`            | Trust bundle PEM (CA cert)                          |
 | POST   | `/access/v1/evaluation` | OpenID AuthZEN 1.0 PDP evaluation                   |
 
+The full HTTP surface (request/response shapes, status codes, leader-only endpoints, federation and audit routes) is described in the OpenAPI 3.1 specification at [`api/openapi.yaml`](api/openapi.yaml).
+
 Workload API gRPC (SPIFFE) is served by `omega agent` over a Unix socket and speaks the standard `SpiffeWorkloadAPI` service: `FetchX509SVID` and `FetchX509Bundles`.
 
 ## Standards alignment

@@ -1,0 +1,787 @@
+openapi: 3.1.0
+
+info:
+  title: Omega control plane API
+  version: 0.0.1
+  summary: SPIFFE-compatible workload identity + OpenID AuthZEN 1.0 PDP.
+  description: |
+    HTTP/JSON surface served by `omega server` on `--http-addr` (default
+    `127.0.0.1:8080`). The gRPC SPIFFE Workload API is served by
+    `omega agent` on a Unix socket and is not described here.
+
+    ## Leader-only endpoints
+
+    When Omega runs against Postgres with HA leader election, every
+    write endpoint plus `POST /access/v1/evaluation` is gated by the
+    advisory-lock leader state. A non-leader replica responds with
+    `503 Service Unavailable` and `Retry-After: 1`. The endpoints
+    affected are tagged `leader-only` below.
+
+    ## Audit log
+
+    Every successful write endpoint and every authorization decision
+    appends an entry to the tamper-evident audit log
+    (`GET /v1/audit`). Hash chain integrity can be verified with
+    `GET /v1/audit/verify`.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  contact:
+    name: Omega maintainers
+    url: https://github.com/0-draft/omega
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Default development listen address (single-binary quickstart).
+
+tags:
+  - name: meta
+    description: Liveness, leader state, observability surfaces.
+  - name: domains
+    description: SPIFFE namespace CRUD.
+  - name: svid
+    description: X.509-SVID and JWT-SVID issuance, trust bundles.
+  - name: federation
+    description: SPIFFE trust-bundle exchange across trust domains.
+  - name: authzen
+    description: OpenID AuthZEN 1.0 PDP evaluation.
+  - name: token-exchange
+    description: RFC 8693 token exchange with nested `act` claims.
+  - name: audit
+    description: Tamper-evident audit log readout and verification.
+  - name: leader-only
+    description: |
+      Endpoints that require the current process to hold the Postgres
+      advisory lock. A replica that is not the leader returns
+      `503 Service Unavailable` with `Retry-After: 1`. SQLite
+      single-process deployments always satisfy the leader check.
+
+paths:
+  /healthz:
+    get:
+      tags: [meta]
+      operationId: healthz
+      summary: Liveness probe.
+      description: |
+        Returns `ok` once the HTTP listener is accepting connections.
+        Does not test database, CA key material, or leader state - use
+        `/v1/leader` for leader probes.
+      responses:
+        "200":
+          description: Process is up.
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: ok
+
+  /v1/leader:
+    get:
+      tags: [meta]
+      operationId: getLeaderState
+      summary: Postgres leader state for this replica.
+      description: |
+        Read after start-up to gate writes to the leader. SQLite
+        single-process mode always reports `is_leader: true`.
+      responses:
+        "200":
+          description: Leader state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaderStateResponse"
+
+  /metrics:
+    get:
+      tags: [meta]
+      operationId: getMetrics
+      summary: Prometheus exposition of metrics.
+      description: |
+        HTTP rate / latency by route, AuthZEN decision counts and
+        evaluation latency, SVID issuance by kind, audit append count,
+        and the standard Go runtime collectors.
+      responses:
+        "200":
+          description: Prometheus text exposition.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/domains:
+    get:
+      tags: [domains]
+      operationId: listDomains
+      summary: List domains.
+      responses:
+        "200":
+          description: Domain list (possibly empty).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainListResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [domains, leader-only]
+      operationId: createDomain
+      summary: Create a SPIFFE namespace.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DomainCreateRequest"
+      responses:
+        "201":
+          description: Domain created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/domains/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Domain name (e.g. `example`).
+    get:
+      tags: [domains]
+      operationId: getDomain
+      summary: Fetch a single domain.
+      responses:
+        "200":
+          description: Domain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/svid:
+    post:
+      tags: [svid, leader-only]
+      operationId: issueSVID
+      summary: Issue an X.509-SVID from a CSR.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueSVIDRequest"
+      responses:
+        "200":
+          description: SVID and trust bundle, both PEM-encoded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueSVIDResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/svid/jwt:
+    post:
+      tags: [svid, leader-only]
+      operationId: issueJWTSVID
+      summary: Issue a JWT-SVID.
+      description: |
+        `bind_cert_thumbprint`, when set, embeds an RFC 8705
+        `cnf.x5t#S256` claim that binds the issued JWT-SVID to the
+        SHA-256 thumbprint of the client X.509-SVID (base64url, no
+        padding).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueJWTSVIDRequest"
+      responses:
+        "200":
+          description: Issued JWT-SVID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueJWTSVIDResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/bundle:
+    get:
+      tags: [svid]
+      operationId: getTrustBundle
+      summary: X.509 trust bundle (PEM).
+      responses:
+        "200":
+          description: Trust anchor bundle.
+          content:
+            application/x-pem-file:
+              schema:
+                type: string
+
+  /v1/jwt/bundle:
+    get:
+      tags: [svid]
+      operationId: getJWTBundle
+      summary: JWKS trust bundle for JWT-SVID verification.
+      responses:
+        "200":
+          description: JSON Web Key Set.
+          content:
+            application/jwk-set+json:
+              schema:
+                $ref: "#/components/schemas/JWKS"
+
+  /v1/federation/bundles:
+    get:
+      tags: [federation]
+      operationId: getFederationBundles
+      summary: Federated trust bundles (this trust domain + peers).
+      description: |
+        Returns the local trust domain's bundle plus any peer trust
+        bundles that have been fetched at least once via
+        `--federate-with`. Returns `404` when federation is not
+        configured on this server.
+      responses:
+        "200":
+          description: Bundle map keyed by trust domain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FederationBundlesResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /access/v1/evaluation:
+    post:
+      tags: [authzen, leader-only]
+      operationId: evaluateAccess
+      summary: AuthZEN 1.0 single-decision evaluation.
+      description: |
+        Implements the [OpenID AuthZEN 1.0](https://openid.net/specs/authorization-api-1_0.html)
+        single-decision endpoint. Cedar is the default in-process PDP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvalRequest"
+      responses:
+        "200":
+          description: Decision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvalResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/token/exchange:
+    post:
+      tags: [token-exchange, leader-only]
+      operationId: tokenExchange
+      summary: RFC 8693 token exchange.
+      description: |
+        Issues a new JWT-SVID that delegates the subject token's
+        principal to the actor identity, recording the chain in the
+        nested `act` claim. The output token's TTL is capped at the
+        subject token's remaining lifetime.
+
+        When the server is started with token-exchange policy
+        enforcement enabled, the request is also evaluated through
+        Cedar with `action: token.exchange` before issuance; the
+        baseline `requested_spiffe_id == actor_token.sub` rule always
+        applies regardless.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenExchangeRequest"
+      responses:
+        "200":
+          description: New JWT-SVID with delegation chain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenExchangeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/audit:
+    get:
+      tags: [audit]
+      operationId: listAudit
+      summary: List audit events.
+      parameters:
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+          description: Return events with `seq > since`. `0` returns from genesis.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Maximum number of events. Defaults to the store's internal cap.
+      responses:
+        "200":
+          description: Audit event list (possibly empty).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditListResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/audit/verify:
+    get:
+      tags: [audit]
+      operationId: verifyAudit
+      summary: Verify the audit log hash chain.
+      description: |
+        Walks the chain from genesis. `valid: true` and
+        `first_bad_seq: 0` means every row's hash matches the running
+        SHA-256. A non-zero `first_bad_seq` is the lowest sequence at
+        which the chain breaks.
+      responses:
+        "200":
+          description: Verification result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditVerifyResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+
+    LeaderStateResponse:
+      type: object
+      additionalProperties: false
+      required: [is_leader]
+      properties:
+        is_leader:
+          type: boolean
+
+    Domain:
+      type: object
+      additionalProperties: false
+      required: [name, created_at]
+      properties:
+        name:
+          type: string
+          examples: [example]
+        parent:
+          type: string
+          description: Parent domain name (omitted for top-level domains).
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DomainCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+        parent:
+          type: string
+        description:
+          type: string
+
+    DomainListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Domain"
+
+    IssueSVIDRequest:
+      type: object
+      additionalProperties: false
+      required: [spiffe_id, csr]
+      properties:
+        spiffe_id:
+          type: string
+          examples: ["spiffe://omega.local/example/web"]
+        csr:
+          type: string
+          description: PEM-encoded `CERTIFICATE REQUEST`.
+
+    IssueSVIDResponse:
+      type: object
+      additionalProperties: false
+      required: [svid, bundle, expires_at]
+      properties:
+        svid:
+          type: string
+          description: PEM-encoded leaf certificate.
+        bundle:
+          type: string
+          description: PEM-encoded trust anchor bundle.
+        expires_at:
+          type: string
+          format: date-time
+
+    IssueJWTSVIDRequest:
+      type: object
+      additionalProperties: false
+      required: [spiffe_id, audience]
+      properties:
+        spiffe_id:
+          type: string
+        audience:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        ttl_seconds:
+          type: integer
+          minimum: 0
+          description: Requested lifetime. Server-side caps may apply.
+        bind_cert_thumbprint:
+          type: string
+          description: |
+            base64url-encoded SHA-256 thumbprint of the client
+            X.509-SVID. Embedded as `cnf.x5t#S256` per RFC 8705.
+
+    IssueJWTSVIDResponse:
+      type: object
+      additionalProperties: false
+      required: [token, spiffe_id, audience, issued_at, expires_at, kid]
+      properties:
+        token:
+          type: string
+          description: Compact JWS.
+        spiffe_id:
+          type: string
+        audience:
+          type: array
+          items:
+            type: string
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        kid:
+          type: string
+          description: JWKS key id used to sign the token.
+
+    FederationBundlesResponse:
+      type: object
+      additionalProperties: false
+      required: [trust_domains]
+      properties:
+        trust_domains:
+          type: object
+          additionalProperties:
+            type: string
+            description: PEM-encoded trust anchor bundle for one trust domain.
+
+    JWKS:
+      type: object
+      description: |
+        JSON Web Key Set per RFC 7517. The Omega server returns the
+        active and any not-yet-rotated public signing keys.
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            description: A JSON Web Key. Standard RFC 7517 fields.
+
+    EvalEntity:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          description: AuthZEN entity type (Cedar entity type when using the default PDP).
+          examples: [Spiffe, HttpPath]
+        id:
+          type: string
+        properties:
+          type: object
+          additionalProperties: true
+          description: AuthZEN entity attributes (Cedar `properties`).
+
+    EvalAction:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          examples: [GET, "token.exchange"]
+
+    EvalRequest:
+      type: object
+      additionalProperties: false
+      required: [subject, action, resource]
+      properties:
+        subject:
+          $ref: "#/components/schemas/EvalEntity"
+        action:
+          $ref: "#/components/schemas/EvalAction"
+        resource:
+          $ref: "#/components/schemas/EvalEntity"
+        context:
+          type: object
+          additionalProperties: true
+
+    EvalResponse:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: boolean
+        reasons:
+          type: array
+          items:
+            type: string
+          description: |
+            Identifiers of the policies that produced the decision.
+            Order is not stable; use only for observability.
+
+    TokenExchangeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - grant_type
+        - subject_token
+        - subject_token_type
+        - actor_token
+        - actor_token_type
+        - requested_spiffe_id
+        - audience
+      properties:
+        grant_type:
+          type: string
+          const: "urn:ietf:params:oauth:grant-type:token-exchange"
+        subject_token:
+          type: string
+          description: JWT-SVID for the principal being delegated.
+        subject_token_type:
+          type: string
+          const: "urn:ietf:params:oauth:token-type:jwt"
+        actor_token:
+          type: string
+          description: JWT-SVID for the workload requesting the exchange.
+        actor_token_type:
+          type: string
+          const: "urn:ietf:params:oauth:token-type:jwt"
+        requested_spiffe_id:
+          type: string
+          description: |
+            SPIFFE ID for the issued token. Must equal `actor_token.sub`
+            (a workload can only request a delegated token for
+            itself).
+        audience:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        scope:
+          type: string
+        ttl_seconds:
+          type: integer
+          minimum: 0
+
+    TokenExchangeResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - access_token
+        - issued_token_type
+        - token_type
+        - expires_in
+        - spiffe_id
+        - audience
+        - delegation_chain
+        - kid
+      properties:
+        access_token:
+          type: string
+        issued_token_type:
+          type: string
+          const: "urn:ietf:params:oauth:token-type:jwt"
+        token_type:
+          type: string
+          const: Bearer
+        expires_in:
+          type: integer
+          minimum: 0
+        scope:
+          type: string
+        spiffe_id:
+          type: string
+        audience:
+          type: array
+          items:
+            type: string
+        delegation_chain:
+          type: array
+          items:
+            type: string
+          description: |
+            Flattened root → leaf list of subjects, derived from the
+            issued token's nested `act` claim. The last element equals
+            `requested_spiffe_id`.
+        kid:
+          type: string
+
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      required: [seq, ts, kind, prev_hash, hash]
+      properties:
+        seq:
+          type: integer
+          format: int64
+          description: Monotonically increasing sequence assigned by the store.
+        ts:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          examples: ["domain.create", "svid.issue.x509", "svid.issue.jwt", "access.evaluate", "token.exchange"]
+        actor:
+          type: string
+        subject:
+          type: string
+        decision:
+          type: string
+          examples: [ok, allow, deny]
+        payload:
+          description: Per-kind structured details. Always a JSON value, often an object.
+        prev_hash:
+          type: string
+          description: Hash of the previous row, or `GENESIS` for the first.
+        hash:
+          type: string
+          description: SHA-256 of (seq, ts, kind, actor, subject, decision, payload, prev_hash).
+
+    AuditListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+
+    AuditVerifyResponse:
+      type: object
+      additionalProperties: false
+      required: [valid, first_bad_seq]
+      properties:
+        valid:
+          type: boolean
+        first_bad_seq:
+          type: integer
+          format: int64
+          description: |
+            `0` when the chain is intact. Otherwise the lowest sequence
+            number at which the recomputed hash diverges from the
+            stored one.
+
+  responses:
+    BadRequest:
+      description: Validation failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Forbidden:
+      description: Authorization failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFound:
+      description: Resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Conflict:
+      description: Resource already exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InternalError:
+      description: Server-side error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotLeader:
+      description: |
+        This replica is not the Postgres advisory-lock leader. Retry
+        against the leader (`GET /v1/leader`) or, on transient
+        failover, after the `Retry-After` window.
+      headers:
+        Retry-After:
+          schema:
+            type: string
+            const: "1"
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
