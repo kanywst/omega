@@ -40,9 +40,24 @@ and reviewable.
 ## Decision
 
 Run leader election with `pg_try_advisory_lock` at a fixed
-key (`0x0e6a3a0001`). The current leader holds the lock until
-disconnect. `IsLeader()` is the cheap predicate every write path
-checks; `ErrNotLeader` bubbles up to the HTTP layer as
+key (`0x0e6a3a0001` by default; overridable per cluster). Mechanics
+implemented in `internal/server/storage/leader.go`:
+
+- Every replica runs the same election goroutine. On each tick of
+  a ticker (`PollInterval`, default 1 second) a non-leader replica
+  takes a fresh dedicated `*sql.Conn` from the pool and calls
+  `pg_try_advisory_lock`. On `true`, it pins the conn (the lock is
+  session-scoped) and flips its in-memory `isLeader` bit.
+- The current leader holds the conn open and `Ping`s it every tick
+  to detect silent connection drops. On Ping failure (process
+  crash, Postgres restart, network partition) it explicitly calls
+  `pg_advisory_unlock` to release the lock cleanly, closes the
+  conn, and re-enters the contention loop.
+- Followers therefore acquire leadership at most one
+  `PollInterval` after the previous leader releases it.
+
+`IsLeader()` is the cheap predicate every write path checks;
+`ErrNotLeader` bubbles up to the HTTP layer as
 `503 Service Unavailable` with `Retry-After: 1`. Clients are
 expected to honour `Retry-After` and retry against
 `GET /v1/leader`.

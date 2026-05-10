@@ -22,18 +22,24 @@ project is *and* is not in the business of solving.
 | (kubectl / curl)   |                      | (control plane)   |
 +--------------------+                      | - SQLite/Postgres |
                                             | - CA + SVID issue |
-+--------------------+   2. SPIFFE Workload | - AuthZEN PDP     |
-| Workload (process) | <------------------- | - audit log       |
-| on a node          |    API gRPC over UDS | - federation peer |
++--------------------+                      | - AuthZEN PDP     |
+| Workload (process) |                      | - audit log       |
+| on a node          |                      | - federation peer |
 +--------------------+                      +-------------------+
-        ^                                         ^
-        | 3. UID peercred attestation             | 4. SPIFFE federation
-        v                                         v  bundle exchange
-+--------------------+                      +-------------------+
-| omega agent        |                      | omega server      |
-| (per node)         |                      | (peer trust       |
-+--------------------+                      |  domain)          |
-                                            +-------------------+
+        |                                         ^
+        | 2. SPIFFE Workload API                  | 3. HTTP/JSON
+        |    gRPC over UDS                        |    (agent → server)
+        |    (SO_PEERCRED auth)                   |
+        v                                         |
++--------------------+   ----------------->-------+
+| omega agent        |
+| (per node)         |
++--------------------+
+
++-------------------+   4. SPIFFE federation     +-------------------+
+| omega server      | <------------------------> | omega server      |
+| (this domain)     |    bundle exchange         | (peer domain)     |
++-------------------+                            +-------------------+
 ```
 
 Boundaries enforced today:
@@ -48,7 +54,7 @@ Boundaries enforced today:
    socket. Authentication is `SO_PEERCRED`-based (the agent reads
    the connecting process's UID and looks up the matching SPIFFE
    ID).
-3. Agent → server: HTTP/JSON, same socket as the operator API.
+3. Agent → server: HTTP/JSON, same listener as the operator API.
 4. Server → peer server: SPIFFE federation. Bundle exchange is a
    one-way `GET /v1/bundle` against the peer.
 
@@ -71,7 +77,7 @@ What lives outside the trust boundary:
 | A3 | Cedar policy set | DB + `--policy-dir` | Determines every authorization decision |
 | A4 | Audit log | DB table `audit_log` | Tamper-evident record of every decision and issuance |
 | A5 | Federation peer bundles | DB table `federated_bundles` | Trust anchors for cross-trust-domain identity |
-| A6 | Workload API UDS socket | `/tmp/omega-agent.sock` (default) | Path through which workloads request SVIDs |
+| A6 | Workload API UDS socket | `/tmp/omega-agent.sock` (default; see S1) | Path through which workloads request SVIDs |
 | A7 | Postgres advisory lock state | Postgres lock table | Determines which replica accepts writes |
 
 ## Threats
@@ -94,6 +100,18 @@ and asks for an SVID belonging to a different workload.
   `setuid` after compromising a privileged binary) defeats the
   attestor. Attestation is only as strong as Linux UID isolation;
   containers or VMs sharing UIDs across workloads weaken this.
+- Default socket path is `/tmp/omega-agent.sock`. The agent removes
+  any pre-existing file before binding, but `/tmp` is still a shared
+  filesystem - a hostile non-root user with write access to `/tmp`
+  cannot impersonate the agent (the sticky bit prevents removing
+  the existing socket and `bind` then fails) but *can* deny service
+  by creating the file before the agent starts.
+- Recommended hardening: pass `--socket /run/omega/agent.sock` (or
+  `/var/run/omega/agent.sock` on systems without `/run`) and create
+  the parent directory mode `0755` owned by the agent's UID at
+  install time. The Helm chart in `charts/omega/` and the example
+  systemd units should follow this pattern; revisit once we change
+  the in-binary default (separate PR).
 - Out-of-tree mitigation: deploy with one workload per UID and per
   network namespace, or use a stronger attestor (Kubernetes
   ServiceAccount projected token, EC2 IMDSv2 hash, etc., tracked in

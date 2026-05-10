@@ -77,10 +77,12 @@ Harder:
 - Subcommand naming has to remain stable across releases. The
   pre-1.0 phase allows breaking changes, but post-1.0 the
   subcommand surface joins the public API.
-- Cross-compilation and release size: the binary today is
-  ~25 MB stripped and includes Cedar, Kubernetes
-  controller-runtime, and the SPIFFE Go libraries. Splitting
-  by role would cut size for the agent.
+- Cross-compilation and release size: the binary links Cedar, the
+  Kubernetes controller-runtime, and the SPIFFE Go libraries even
+  for the agent role. Splitting by role would meaningfully cut the
+  agent's footprint; we accept the size for the operational
+  simplicity. The current size on each platform is visible in the
+  `cross` CI job output.
 
 New obligations:
 
