@@ -220,6 +220,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # The two below are only consumed on tag pushes (cosign keyless
+      # OIDC signing + GitHub native build attestation). Granted
+      # unconditionally because GitHub computes the workflow's effective
+      # permissions at job start; restricting to a step-level scope is
+      # not supported.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v4
@@ -247,6 +254,7 @@ jobs:
       # the image - the build is verification-only - so build amd64
       # alone. Multi-arch is rebuilt and pushed at tag time.
       - name: build (and push on tag)
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -256,6 +264,54 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Supply-chain steps below run only on tag push (release).
+
+      - name: install cosign
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: sigstore/cosign-installer@v3
+
+      # Bind the keyless signature to the immutable digest, not the
+      # mutable tag, so a later overwrite of the tag does not silently
+      # invalidate the signature. metadata-action only ever emits tags
+      # under the single `ghcr.io/0-draft/omega` image, so one cosign
+      # invocation against the digest is enough.
+      - name: cosign sign image (keyless)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/0-draft/omega@${DIGEST}"
+
+      - name: generate SPDX SBOM
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/0-draft/omega@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          artifact-name: omega-sbom.spdx.json
+          output-file: ./omega-sbom.spdx.json
+
+      - name: attach SBOM as cosign attestation
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign attest --yes \
+            --predicate ./omega-sbom.spdx.json \
+            --type spdxjson \
+            "ghcr.io/0-draft/omega@${DIGEST}"
+
+      # GitHub-native build provenance (in-toto v1, sigstore-bundled).
+      # `gh attestation verify` and `cosign verify-attestation` both
+      # accept this format. Pushed to the registry next to the image.
+      - name: build provenance attestation
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/0-draft/omega
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   chart-release:
     runs-on: ubuntu-latest

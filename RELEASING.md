@@ -67,9 +67,32 @@ the bootstrap orphan commit.
   docker pull --platform linux/arm64 ghcr.io/0-draft/omega:X.Y.Z
   ```
 
-- (Once cosign signing lands; tracked in [ROADMAP.md](ROADMAP.md))
-  `cosign verify --certificate-identity-regexp ...` succeeds for the
-  pushed image.
+- The image's keyless cosign signature verifies against the
+  workflow that produced it:
+
+  ```text
+  cosign verify ghcr.io/0-draft/omega:X.Y.Z \
+    --certificate-identity-regexp '^https://github.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ```
+
+- The SPDX SBOM is attached to the image as a cosign attestation:
+
+  ```text
+  cosign verify-attestation ghcr.io/0-draft/omega:X.Y.Z \
+    --type spdxjson \
+    --certificate-identity-regexp '^https://github.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ```
+
+- The SLSA Build Level 3 provenance attestation is reachable through
+  `gh`:
+
+  ```text
+  gh attestation verify oci://ghcr.io/0-draft/omega:X.Y.Z \
+    --owner 0-draft
+  ```
+
 - A draft GitHub Release with the relevant `CHANGELOG.md` excerpt is
   prepared and reviewed by another maintainer before publishing.
 

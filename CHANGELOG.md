@@ -35,6 +35,15 @@ changes (see [SECURITY.md](SECURITY.md)).
   retroactive 0001-0004 covering Cedar as the default PDP, Postgres
   advisory-lock HA over in-process Raft, short-lived SVIDs over
   CRL/OCSP, and the single-binary three-roles packaging.
+- Release supply-chain steps in the `image` job, gated to tag pushes:
+  - cosign keyless signing of the multi-arch image at digest;
+  - SPDX SBOM generation via `anchore/sbom-action`, attached to the
+    image as a cosign attestation;
+  - GitHub-native SLSA Build Level 3 provenance attestation
+    pushed to the registry alongside the image.
+
+  Verification commands (`cosign verify`, `cosign verify-attestation`,
+  `gh attestation verify`) are documented in `RELEASING.md`.
 
 ## [0.0.1] - 2026-05-01
 
