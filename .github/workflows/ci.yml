@@ -182,10 +182,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: gosec
-        uses: securego/gosec@master
+      - uses: actions/setup-go@v6
         with:
-          args: -exclude-dir=examples ./...
+          go-version-file: go.mod
+          cache: true
+      # securego/gosec@master ships its own Go toolchain in the action
+      # container; when go.mod requires a newer minor than that image
+      # has, package loading fails and gosec reports zero files. Build
+      # gosec from source against the project's go-version instead so
+      # the scan stays in step with go.mod.
+      - name: install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - name: run gosec
+        run: gosec -exclude-dir=examples ./...
 
   markdownlint:
     runs-on: ubuntu-latest
