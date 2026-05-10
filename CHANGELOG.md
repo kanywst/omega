@@ -37,8 +37,11 @@ changes (see [SECURITY.md](SECURITY.md)).
   CRL/OCSP, and the single-binary three-roles packaging.
 - Release supply-chain steps in the `image` job, gated to tag pushes:
   - cosign keyless signing of the multi-arch image at digest;
-  - SPDX SBOM generation via `anchore/sbom-action`, attached to the
-    image as a cosign attestation;
+  - per-platform SPDX SBOM generation via `anchore/sbom-action`,
+    each attached to its own per-arch manifest as a cosign
+    attestation (Syft resolves a manifest-list reference to one
+    platform, so an index-level attestation would describe only
+    amd64 and silently mis-cover arm64 consumers);
   - GitHub-native SLSA Build Level 3 provenance attestation
     pushed to the registry alongside the image.
 

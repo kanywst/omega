@@ -76,14 +76,28 @@ the bootstrap orphan commit.
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
 
-- The SPDX SBOM is attached to the image as a cosign attestation:
+- A per-platform SPDX SBOM is attached to each architecture's
+  manifest as a cosign attestation. `--platform` selects the
+  architecture; verify each:
 
   ```text
-  cosign verify-attestation ghcr.io/0-draft/omega:X.Y.Z \
+  cosign verify-attestation \
+    --platform linux/amd64 \
     --type spdxjson \
     --certificate-identity-regexp '^https://github\.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    ghcr.io/0-draft/omega:X.Y.Z
+
+  cosign verify-attestation \
+    --platform linux/arm64 \
+    --type spdxjson \
+    --certificate-identity-regexp '^https://github\.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    ghcr.io/0-draft/omega:X.Y.Z
   ```
+
+  The amd64 SBOM is also published as a build artefact named
+  `omega-sbom-linux-amd64.spdx.json`; arm64 likewise.
 
 - The SLSA Build Level 3 provenance attestation is reachable through
   `gh`:
