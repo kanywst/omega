@@ -101,15 +101,16 @@ Components are independently runnable (`omega server identity`, `omega server po
 
 ## Endpoints
 
-| Method | Path                    | Purpose                                             |
-| ------ | ----------------------- | --------------------------------------------------- |
-| GET    | `/healthz`              | Liveness                                            |
-| POST   | `/v1/domains`           | Create a SPIFFE namespace (`{name, description}`)   |
-| GET    | `/v1/domains`           | List domains                                        |
-| GET    | `/v1/domains/{name}`    | Fetch a domain                                      |
-| POST   | `/v1/svid`              | Issue an X.509-SVID from a CSR (`{spiffe_id, csr}`) |
-| GET    | `/v1/bundle`            | Trust bundle PEM (CA cert)                          |
-| POST   | `/access/v1/evaluation` | OpenID AuthZEN 1.0 PDP evaluation                   |
+| Method | Path                              | Purpose                                                                |
+| ------ | --------------------------------- | ---------------------------------------------------------------------- |
+| GET    | `/healthz`                        | Liveness                                                               |
+| POST   | `/v1/domains`                     | Create a SPIFFE namespace (`{name, description}`)                      |
+| GET    | `/v1/domains`                     | List domains                                                           |
+| GET    | `/v1/domains/{name}`              | Fetch a domain                                                         |
+| POST   | `/v1/svid`                        | Issue an X.509-SVID from a CSR (`{spiffe_id, csr}`)                    |
+| GET    | `/v1/bundle`                      | Trust bundle PEM (CA cert)                                             |
+| POST   | `/access/v1/evaluation`           | OpenID AuthZEN 1.0 PDP evaluation                                      |
+| GET    | `/.well-known/openid-configuration` | OIDC discovery (when `--issuer-url` is set; for AWS IAM, GCP WIF, K8s) |
 
 The full HTTP surface (request/response shapes, status codes, leader-only endpoints, federation and audit routes) is described in the OpenAPI 3.1 specification at [`api/openapi.yaml`](api/openapi.yaml).
 
@@ -123,6 +124,7 @@ Workload API gRPC (SPIFFE) is served by `omega agent` over a Unix socket and spe
 | Authorization         | OpenID AuthZEN 1.0                                             | implemented |
 | Federation            | SPIFFE federation (trust bundle exchange)                      | implemented |
 | Token binding         | RFC 8705 (mTLS-bound)                                          | implemented |
+| OIDC discovery        | OpenID Connect Discovery 1.0 (for JWT-SVID consumers)          | implemented |
 | Token exchange        | RFC 8693 (nested `act`)                                        | example     |
 | AI agent identity     | MCP (Anthropic), A2A (Google)                                  | example     |
 | Multi-domain identity | IETF WIMSE                                                     | tracked     |

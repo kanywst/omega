@@ -47,6 +47,15 @@ changes (see [SECURITY.md](SECURITY.md)).
 
   Verification commands (`cosign verify`, `cosign verify-attestation`,
   `gh attestation verify`) are documented in `RELEASING.md`.
+- `omega server --issuer-url <url>` flag and a new
+  `GET /.well-known/openid-configuration` endpoint. When the flag
+  is set, JWT-SVIDs carry `iss: <url>` and the discovery document
+  advertises `<url>/v1/jwt/bundle` as `jwks_uri`, so external OIDC
+  relying parties (AWS IAM OIDC trust, GCP Workload Identity
+  Federation, Kubernetes ServiceAccount issuer trust) can verify
+  Omega-issued tokens without a custom adapter. With the flag
+  unset, JWT-SVID behaviour is unchanged (no `iss` claim, no
+  discovery document - the endpoint returns 404).
 
 ## [0.0.1] - 2026-05-01
 

@@ -56,6 +56,16 @@ const (
 type Config struct {
 	Kind        Kind
 	TrustDomain string
+	// Issuer is the public OIDC issuer URL embedded as the `iss` claim
+	// of every JWT-SVID. Empty (the default) keeps the SPIFFE-only
+	// behaviour where issued tokens carry no `iss` claim. Set this
+	// when external OIDC relying parties (AWS IAM OIDC trust, GCP
+	// Workload Identity Federation, Kubernetes ServiceAccount issuer
+	// trust) need to verify Omega-issued tokens; the same value is
+	// returned by the `/.well-known/openid-configuration` discovery
+	// endpoint and must point at the publicly reachable URL of this
+	// server.
+	Issuer string
 	// KindDisk
 	Dir string
 }
@@ -74,6 +84,9 @@ type Authority interface {
 	IssueJWTSVID(id spiffeid.ID, audience []string, ttl time.Duration, extraClaims map[string]any) (*JWTSVID, error)
 	JWTKeyID() (string, error)
 	JWTBundle() ([]byte, error)
+	// IssuerURL returns the OIDC issuer URL configured for this
+	// authority, or "" when JWT-SVIDs do not carry an `iss` claim.
+	IssuerURL() string
 	ValidateJWTSVID(token, audience string) (spiffeid.ID, error)
 	ValidatePresentedCertBinding(token, audience string, presented *x509.Certificate) (spiffeid.ID, error)
 	// ParseJWTSVIDClaims verifies signature + standard time claims and
@@ -95,7 +108,12 @@ func New(cfg Config) (Authority, error) {
 		if cfg.Dir == "" {
 			return nil, errors.New("identity: disk authority requires Dir")
 		}
-		return loadOrCreateDisk(cfg.Dir, cfg.TrustDomain)
+		a, err := loadOrCreateDisk(cfg.Dir, cfg.TrustDomain)
+		if err != nil {
+			return nil, err
+		}
+		a.issuerURL = cfg.Issuer
+		return a, nil
 	default:
 		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q)", cfg.Kind, KindDisk)
 	}
@@ -116,6 +134,7 @@ type localAuthority struct {
 	cert        *x509.Certificate
 	key         crypto.Signer
 	bundlePEM   []byte
+	issuerURL   string
 }
 
 var _ Authority = (*localAuthority)(nil)
@@ -214,6 +233,8 @@ func loadAuthority(td spiffeid.TrustDomain, keyPath, crtPath string) (*localAuth
 }
 
 func (a *localAuthority) TrustDomain() spiffeid.TrustDomain { return a.trustDomain }
+
+func (a *localAuthority) IssuerURL() string { return a.issuerURL }
 func (a *localAuthority) BundlePEM() []byte                 { return a.bundlePEM }
 
 type SVID struct {

@@ -77,6 +77,14 @@ func (a *localAuthority) IssueJWTSVID(id spiffeid.ID, audience []string, ttl tim
 		Expiry:   jwt.NewNumericDate(exp),
 		ID:       fmt.Sprintf("%d", now.UnixNano()),
 	}
+	// Setting `iss` is opt-in: SPIFFE JWT-SVID does not mandate it,
+	// and external OIDC RPs (AWS IAM OIDC trust, GCP WIF, K8s SA
+	// issuer trust) require an `iss` whose value matches the configured
+	// OIDC issuer URL. Operators set Issuer in identity.Config when
+	// they want OIDC-compatible tokens.
+	if iss := a.issuerURL; iss != "" {
+		claims.Issuer = iss
+	}
 
 	builder := jwt.Signed(signer).Claims(claims)
 	if len(extraClaims) > 0 {

@@ -32,6 +32,7 @@ func newServerCommand() *cobra.Command {
 		dbDSN                   string
 		httpAddr                string
 		trustDomain             string
+		issuerURL               string
 		policyDir               string
 		otlpEndpoint            string
 		otlpInsecure            bool
@@ -62,7 +63,12 @@ func newServerCommand() *cobra.Command {
 			}
 			defer store.Close()
 
-			ca, err := identity.LoadOrCreate(filepath.Join(dataDir, "ca"), trustDomain)
+			ca, err := identity.New(identity.Config{
+				Kind:        identity.KindDisk,
+				TrustDomain: trustDomain,
+				Issuer:      strings.TrimSpace(issuerURL),
+				Dir:         filepath.Join(dataDir, "ca"),
+			})
 			if err != nil {
 				return fmt.Errorf("ca: %w", err)
 			}
@@ -168,6 +174,8 @@ func newServerCommand() *cobra.Command {
 			"Use 'postgres://user:pass@host:port/dbname?sslmode=disable' to run against Postgres.")
 	cmd.Flags().StringVar(&httpAddr, "http-addr", "127.0.0.1:8080", "HTTP listen address (admin API + AuthZEN endpoint)")
 	cmd.Flags().StringVar(&trustDomain, "trust-domain", "omega.local", "SPIFFE trust domain")
+	cmd.Flags().StringVar(&issuerURL, "issuer-url", "",
+		"public OIDC issuer URL (e.g. https://omega.example.com). When set, JWT-SVIDs carry this as the `iss` claim and /.well-known/openid-configuration returns a discovery document. Required for AWS IAM OIDC trust, GCP WIF, and K8s ServiceAccount issuer trust. Omit to keep SPIFFE-only behaviour.")
 	cmd.Flags().StringVar(&policyDir, "policy-dir", "", "directory of *.cedar policy files (and optional entities.json) to load at startup")
 	cmd.Flags().StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP/HTTP traces endpoint, host:port (overrides OTEL_EXPORTER_OTLP_ENDPOINT). Empty disables tracing.")
 	cmd.Flags().BoolVar(&otlpInsecure, "otlp-insecure", false, "send OTLP traces over plaintext HTTP (no TLS)")

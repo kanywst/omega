@@ -108,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /v1/token/exchange", leaderOnly(s.tokenExchange))
 	handle("GET /v1/jwt/bundle", s.getJWTBundle)
 	handle("GET /v1/federation/bundles", s.getFederationBundles)
+	handle("GET /.well-known/openid-configuration", s.getOIDCDiscovery)
 	mux.Handle("GET /metrics", metrics.Handler())
 	return mux
 }
@@ -227,6 +228,37 @@ func (s *Server) issueJWTSVID(w http.ResponseWriter, r *http.Request) {
 		IssuedAt:  svid.IssuedAt,
 		ExpiresAt: svid.ExpiresAt,
 		KeyID:     svid.KeyID,
+	})
+}
+
+// OIDCDiscoveryResponse is the minimal OIDC 1.0 discovery document
+// Omega exposes at /.well-known/openid-configuration when the
+// authority was constructed with a non-empty Issuer. The fields are
+// the subset required by relying parties that only verify
+// JWT-SVIDs (AWS IAM OIDC trust, GCP Workload Identity Federation,
+// Kubernetes ServiceAccount issuer trust). Omega is not an
+// interactive OIDC IdP, so authorization_endpoint / token_endpoint
+// / userinfo_endpoint are intentionally omitted.
+type OIDCDiscoveryResponse struct {
+	Issuer                           string   `json:"issuer"`
+	JWKSURI                          string   `json:"jwks_uri"`
+	ResponseTypesSupported           []string `json:"response_types_supported"`
+	SubjectTypesSupported            []string `json:"subject_types_supported"`
+	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
+}
+
+func (s *Server) getOIDCDiscovery(w http.ResponseWriter, _ *http.Request) {
+	iss := s.ca.IssuerURL()
+	if iss == "" {
+		writeErr(w, http.StatusNotFound, errors.New("OIDC discovery is disabled (start omega server with --issuer-url)"))
+		return
+	}
+	writeJSON(w, http.StatusOK, OIDCDiscoveryResponse{
+		Issuer:                           iss,
+		JWKSURI:                          iss + "/v1/jwt/bundle",
+		ResponseTypesSupported:           []string{"id_token"},
+		SubjectTypesSupported:            []string{"public"},
+		IDTokenSigningAlgValuesSupported: []string{"ES256"},
 	})
 }
 

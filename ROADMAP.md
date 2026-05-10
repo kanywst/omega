@@ -26,10 +26,6 @@ release as features are ready rather than on a fixed cadence; see
   (`POST /access/v1/evaluations`) and Search APIs (subject / resource
   / action). Required for full spec conformance and for the admin
   UI's "what can this subject do" inventory view.
-- OIDC discovery document (`/.well-known/openid-configuration`) so
-  external relying parties (AWS IAM OIDC trust, GCP Workload Identity
-  Federation, Kubernetes ServiceAccount issuer trust) can verify
-  JWT-SVIDs without code changes.
 - Kubernetes workload attestor (projected ServiceAccount token) so
   pods can be attested without relying on the per-node Unix socket
   peercred path.

@@ -497,3 +497,61 @@ func TestHTTPLeaderGate(t *testing.T) {
 		t.Errorf("after promotion: got %d want 201", resp.StatusCode)
 	}
 }
+
+func TestOIDCDiscoveryReturns404WhenIssuerNotConfigured(t *testing.T) {
+	srv := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status: got %d want 404", resp.StatusCode)
+	}
+}
+
+func TestOIDCDiscoveryReturnsDocumentWhenIssuerConfigured(t *testing.T) {
+	const wantIss = "https://omega.example.com"
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.New(identity.Config{
+		Kind:        identity.KindDisk,
+		TrustDomain: "omega.local",
+		Issuer:      wantIss,
+		Dir:         filepath.Join(dir, "ca"),
+	})
+	if err != nil {
+		t.Fatalf("ca: %v", err)
+	}
+	srv := httptest.NewServer(api.NewServer(store, ca, policy.New()).Handler())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("content-type: got %q want application/json", got)
+	}
+	var doc api.OIDCDiscoveryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if doc.Issuer != wantIss {
+		t.Errorf("issuer: got %q want %q", doc.Issuer, wantIss)
+	}
+	if doc.JWKSURI != wantIss+"/v1/jwt/bundle" {
+		t.Errorf("jwks_uri: got %q want %q", doc.JWKSURI, wantIss+"/v1/jwt/bundle")
+	}
+	if got := strings.Join(doc.IDTokenSigningAlgValuesSupported, ","); got != "ES256" {
+		t.Errorf("alg: got %q want ES256", got)
+	}
+}

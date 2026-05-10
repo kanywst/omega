@@ -49,6 +49,8 @@ tags:
     description: RFC 8693 token exchange with nested `act` claims.
   - name: audit
     description: Tamper-evident audit log readout and verification.
+  - name: oidc
+    description: OIDC discovery for external relying parties (AWS IAM OIDC, GCP WIF, Kubernetes ServiceAccount issuer trust).
   - name: leader-only
     description: |
       Endpoints that require the current process to hold the Postgres
@@ -233,6 +235,31 @@ paths:
             application/x-pem-file:
               schema:
                 type: string
+
+  /.well-known/openid-configuration:
+    get:
+      tags: [oidc]
+      operationId: getOIDCDiscovery
+      summary: OIDC 1.0 discovery document.
+      description: |
+        Returns the minimal OIDC 1.0 discovery document so external
+        relying parties (AWS IAM OIDC trust, GCP Workload Identity
+        Federation, Kubernetes ServiceAccount issuer trust) can verify
+        Omega-issued JWT-SVIDs without a custom adapter. Returns
+        `404 Not Found` when `omega server` was started without
+        `--issuer-url`, in which case JWT-SVIDs also do not carry an
+        `iss` claim. Omega is not an interactive OIDC IdP, so
+        `authorization_endpoint`, `token_endpoint`, and
+        `userinfo_endpoint` are intentionally absent.
+      responses:
+        "200":
+          description: Discovery document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OIDCDiscoveryResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /v1/jwt/bundle:
     get:
@@ -535,6 +562,42 @@ components:
           items:
             type: object
             description: A JSON Web Key. Standard RFC 7517 fields.
+
+    OIDCDiscoveryResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - issuer
+        - jwks_uri
+        - response_types_supported
+        - subject_types_supported
+        - id_token_signing_alg_values_supported
+      properties:
+        issuer:
+          type: string
+          format: uri
+          description: Public issuer URL configured via `--issuer-url`.
+        jwks_uri:
+          type: string
+          format: uri
+          description: |
+            Always `<issuer>/v1/jwt/bundle`. The JWKS itself is at
+            `GET /v1/jwt/bundle`.
+        response_types_supported:
+          type: array
+          items:
+            type: string
+          examples: [[id_token]]
+        subject_types_supported:
+          type: array
+          items:
+            type: string
+          examples: [[public]]
+        id_token_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
+          examples: [[ES256]]
 
     EvalEntity:
       type: object

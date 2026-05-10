@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"path/filepath"
@@ -202,4 +203,65 @@ func TestJWTSVIDExtraClaims(t *testing.T) {
 	if !strings.Contains(svid.Token, ".") {
 		t.Fatal("token shape")
 	}
+}
+
+func TestJWTSVIDIssClaimAbsentByDefault(t *testing.T) {
+	a := newTestAuthority(t)
+	id := spiffeid.RequireFromString("spiffe://omega.local/x")
+	svid, err := a.IssueJWTSVID(id, []string{"aud"}, time.Minute, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if a.IssuerURL() != "" {
+		t.Fatalf("default authority must have empty IssuerURL, got %q", a.IssuerURL())
+	}
+	claims := decodeJWTPayload(t, svid.Token)
+	if v, ok := claims["iss"]; ok {
+		t.Fatalf("default authority must not emit iss claim, got %v", v)
+	}
+}
+
+func TestJWTSVIDIssClaimSetWhenIssuerConfigured(t *testing.T) {
+	const wantIss = "https://omega.example.com"
+	a, err := identity.New(identity.Config{
+		Kind:        identity.KindDisk,
+		TrustDomain: "omega.local",
+		Issuer:      wantIss,
+		Dir:         filepath.Join(t.TempDir(), "ca"),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if got := a.IssuerURL(); got != wantIss {
+		t.Fatalf("IssuerURL: got %q want %q", got, wantIss)
+	}
+	id := spiffeid.RequireFromString("spiffe://omega.local/x")
+	svid, err := a.IssueJWTSVID(id, []string{"aud"}, time.Minute, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	claims := decodeJWTPayload(t, svid.Token)
+	if got := claims["iss"]; got != wantIss {
+		t.Fatalf("iss claim: got %v want %q", got, wantIss)
+	}
+}
+
+// decodeJWTPayload base64url-decodes the second segment of a compact JWS
+// without verifying the signature. Tests use it to assert claim shape;
+// signature checks live in TestJWTSVIDIssueAndValidate.
+func decodeJWTPayload(t *testing.T, token string) map[string]any {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3-part JWT, got %d parts", len(parts))
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("base64 payload: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("json payload: %v", err)
+	}
+	return out
 }
