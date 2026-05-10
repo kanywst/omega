@@ -59,8 +59,14 @@ the bootstrap orphan commit.
 ## Post-release verification
 
 - `helm repo update && helm search repo omega` shows the new version.
-- `docker pull ghcr.io/0-draft/omega:X.Y.Z` succeeds for both
-  architectures.
+- Both architectures pull cleanly. `docker pull` defaults to the
+  host's platform, so verify each explicitly:
+
+  ```text
+  docker pull --platform linux/amd64 ghcr.io/0-draft/omega:X.Y.Z
+  docker pull --platform linux/arm64 ghcr.io/0-draft/omega:X.Y.Z
+  ```
+
 - (Once cosign signing lands; tracked in [ROADMAP.md](ROADMAP.md))
   `cosign verify --certificate-identity-regexp ...` succeeds for the
   pushed image.
@@ -81,5 +87,5 @@ For a security or critical-bug fix on the latest minor:
 
 Releases are not deleted from GHCR or the Helm index. To yank a broken
 release, publish a `vX.Y.(Z+1)` immediately and update the affected
-versions list in `SECURITY.md`, plus a "yanked" note in
-`CHANGELOG.md`.
+versions list in [`SECURITY.md`](SECURITY.md), plus a "yanked" note
+in [`CHANGELOG.md`](CHANGELOG.md).

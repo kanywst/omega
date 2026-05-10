@@ -10,14 +10,18 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ### Added
 
-- `ROADMAP.md` enumerating the public roadmap by horizon.
-- `ADOPTERS.md` template for production and evaluating users.
-- `CHANGELOG.md` (this file) in Keep a Changelog 1.1.0 format.
-- `RELEASING.md` documenting the tag-to-release flow.
-- `.github/CODEOWNERS` for review routing.
-- `.github/PULL_REQUEST_TEMPLATE.md` with the design-philosophy layer
-  check.
-- `.github/ISSUE_TEMPLATE/` forms for bug, feature, and RFC.
+- [`ROADMAP.md`](ROADMAP.md) enumerating the public roadmap by
+  horizon.
+- [`ADOPTERS.md`](ADOPTERS.md) template for production and evaluating
+  users.
+- [`CHANGELOG.md`](CHANGELOG.md) (this file) in Keep a Changelog
+  1.1.0 format.
+- [`RELEASING.md`](RELEASING.md) documenting the tag-to-release flow.
+- [`.github/CODEOWNERS`](.github/CODEOWNERS) for review routing.
+- [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)
+  with the design-philosophy layer check.
+- [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) forms for bug,
+  feature, and RFC.
 
 ## [0.0.1] - 2026-05-01
 
@@ -29,7 +33,7 @@ and the Kubernetes operator.
 
 - `omega` single binary with `server`, `agent`, `operator`, `domain`,
   `policy`, `svid` subcommands.
-- Self-signed CA with X.509-SVID (30 minute) and JWT-SVID (5 minute)
+- Self-signed CA with X.509-SVID (30-minute) and JWT-SVID (5-minute)
   issuance.
 - SPIFFE Workload API over a Unix socket with peercred (UID)
   attestation. `FetchX509SVID`, `FetchX509Bundles`, `FetchJWTSVID`,

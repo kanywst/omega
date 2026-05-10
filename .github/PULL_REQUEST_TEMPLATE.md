@@ -20,8 +20,8 @@ This change is:
 - [ ] Documentation, CI, or chore (no scope impact)
 
 If Core or Plugin, which of the four "when in doubt" rules in
-[`docs/design-philosophy.md`](../docs/design-philosophy.md) applies,
-and why?
+[`docs/design-philosophy.md`](docs/design-philosophy.md) applies, and
+why?
 
 <!-- e.g. "Rule 1 fires: AuthZEN 1.0 batch evaluation is a wire format
 Omega exposes." -->

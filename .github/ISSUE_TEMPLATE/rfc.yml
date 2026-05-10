@@ -38,7 +38,7 @@ body:
     id: layer
     attributes:
       label: Affected layer
-      description: See docs/design-philosophy.md.
+      description: "See [docs/design-philosophy.md](https://github.com/0-draft/omega/blob/main/docs/design-philosophy.md)."
       options:
         - Core
         - Plugin
