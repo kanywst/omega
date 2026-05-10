@@ -90,7 +90,7 @@ the bootstrap orphan commit.
 
   ```text
   gh attestation verify oci://ghcr.io/0-draft/omega:X.Y.Z \
-    --owner 0-draft
+    --repo 0-draft/omega
   ```
 
 - A draft GitHub Release with the relevant `CHANGELOG.md` excerpt is
