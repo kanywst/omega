@@ -84,8 +84,12 @@ docs/                 design notes and project scope
 scripts/              demo and release helpers
 ```
 
-`api/` is reserved for OpenAPI specifications. Generated code, if any,
-lives under `internal/`.
+`api/openapi.yaml` is the OpenAPI 3.1 specification of every HTTP
+endpoint the control plane serves. New endpoints, request/response
+shape changes, and status-code changes must update it in the same
+pull request that changes the handler. CI runs `redocly lint` against
+the spec on every push. Generated code, if any, lives under
+`internal/`.
 
 ## Pull request guidelines
 
