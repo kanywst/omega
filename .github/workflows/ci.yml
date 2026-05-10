@@ -282,25 +282,61 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "ghcr.io/0-draft/omega@${DIGEST}"
 
-      - name: generate SPDX SBOM
+      # SBOM has to be per-platform: anchore/sbom-action wraps Syft,
+      # which when given an OCI manifest-list reference resolves to a
+      # single platform (linux/amd64 on this runner). Attesting that
+      # amd64-only SBOM against the multi-arch index digest would bind
+      # a valid signature over an SBOM that does not describe the
+      # arm64 image consumers pull. Resolve per-arch digests from the
+      # index and run sbom + cosign attest once per platform.
+      - name: resolve per-arch digests from index
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: archs
+        env:
+          INDEX_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          raw=$(docker buildx imagetools inspect --raw "ghcr.io/0-draft/omega@${INDEX_DIGEST}")
+          amd64=$(echo "$raw" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
+          arm64=$(echo "$raw" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="arm64") | .digest')
+          [ -n "$amd64" ] || { echo "no linux/amd64 manifest in index" >&2; exit 1; }
+          [ -n "$arm64" ] || { echo "no linux/arm64 manifest in index" >&2; exit 1; }
+          echo "amd64=${amd64}" >> "$GITHUB_OUTPUT"
+          echo "arm64=${arm64}" >> "$GITHUB_OUTPUT"
+
+      - name: generate SPDX SBOM (linux/amd64)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: anchore/sbom-action@v0
         with:
-          image: ghcr.io/0-draft/omega@${{ steps.build.outputs.digest }}
+          image: ghcr.io/0-draft/omega@${{ steps.archs.outputs.amd64 }}
           format: spdx-json
-          artifact-name: omega-sbom.spdx.json
-          output-file: ./omega-sbom.spdx.json
+          artifact-name: omega-sbom-linux-amd64.spdx.json
+          output-file: ./omega-sbom-linux-amd64.spdx.json
 
-      - name: attach SBOM as cosign attestation
+      - name: generate SPDX SBOM (linux/arm64)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/0-draft/omega@${{ steps.archs.outputs.arm64 }}
+          format: spdx-json
+          artifact-name: omega-sbom-linux-arm64.spdx.json
+          output-file: ./omega-sbom-linux-arm64.spdx.json
+
+      - name: attach SBOMs as per-arch cosign attestations
         if: startsWith(github.ref, 'refs/tags/v')
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          AMD64: ${{ steps.archs.outputs.amd64 }}
+          ARM64: ${{ steps.archs.outputs.arm64 }}
         run: |
           set -euo pipefail
           cosign attest --yes \
-            --predicate ./omega-sbom.spdx.json \
+            --predicate ./omega-sbom-linux-amd64.spdx.json \
             --type spdxjson \
-            "ghcr.io/0-draft/omega@${DIGEST}"
+            "ghcr.io/0-draft/omega@${AMD64}"
+          cosign attest --yes \
+            --predicate ./omega-sbom-linux-arm64.spdx.json \
+            --type spdxjson \
+            "ghcr.io/0-draft/omega@${ARM64}"
 
       # GitHub-native build provenance (in-toto v1, sigstore-bundled).
       # `gh attestation verify` and `cosign verify-attestation` both
