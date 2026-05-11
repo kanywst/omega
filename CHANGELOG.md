@@ -47,6 +47,13 @@ changes (see [SECURITY.md](SECURITY.md)).
 
   Verification commands (`cosign verify`, `cosign verify-attestation`,
   `gh attestation verify`) are documented in `RELEASING.md`.
+- Helm chart cosign keyless signing in the `chart-release` job. After
+  `helm/chart-releaser-action` packages `omega-X.Y.Z.tgz` and creates
+  the matching GitHub Release, the tarball is signed with
+  `cosign sign-blob` and the resulting sigstore bundle is uploaded
+  to the same release. Downstream consumers can `gh release download`
+  the bundle and `cosign verify-blob` against the chart after
+  `helm pull` (verification command in `RELEASING.md`).
 - `omega server --issuer-url <url>` flag and a new
   `GET /.well-known/openid-configuration` endpoint. When the flag
   is set, JWT-SVIDs carry `iss: <url>` and the discovery document

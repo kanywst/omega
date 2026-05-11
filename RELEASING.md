@@ -59,6 +59,21 @@ the bootstrap orphan commit.
 ## Post-release verification
 
 - `helm repo update && helm search repo omega` shows the new version.
+- The Helm chart `.tgz` was cosign-signed and its sigstore bundle is
+  attached to the `omega-X.Y.Z` GitHub Release. Verify with:
+
+  ```text
+  helm pull omega/omega --version X.Y.Z
+  gh release download omega-X.Y.Z \
+    --repo 0-draft/omega \
+    --pattern 'omega-X.Y.Z.tgz.sigstore.json'
+  cosign verify-blob \
+    --bundle omega-X.Y.Z.tgz.sigstore.json \
+    --certificate-identity-regexp '^https://github\.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    omega-X.Y.Z.tgz
+  ```
+
 - Both architectures pull cleanly. `docker pull` defaults to the
   host's platform, so verify each explicitly:
 

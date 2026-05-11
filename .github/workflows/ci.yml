@@ -355,6 +355,10 @@ jobs:
     needs: [test, helm]
     permissions:
       contents: write
+      # cosign keyless signing of the packaged chart needs an OIDC
+      # token to authenticate against Fulcio. Granted unconditionally
+      # because GitHub computes effective permissions per job.
+      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -371,3 +375,32 @@ jobs:
           charts_dir: charts
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # chart-releaser-action packaged the chart into
+      # .cr-release-packages/omega-<chart-version>.tgz and pushed a
+      # GH Release named "omega-<chart-version>" (separate from the
+      # vX.Y.Z release that owns the binary). cosign-sign the tarball
+      # and upload the sigstore bundle as a release asset so
+      # downstream verifiers can `cosign verify-blob` after
+      # `helm pull`.
+      - name: install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: sign chart and upload bundle to GH release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          chart_version=$(awk '/^version:/{print $2; exit}' charts/omega/Chart.yaml)
+          pkg=".cr-release-packages/omega-${chart_version}.tgz"
+          if [[ ! -f "$pkg" ]]; then
+            echo "no chart package at $pkg" >&2
+            ls -la .cr-release-packages/ || true
+            exit 1
+          fi
+          bundle="${pkg}.sigstore.json"
+          cosign sign-blob --yes --bundle "$bundle" "$pkg"
+          gh release upload "omega-${chart_version}" \
+            "$bundle" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
