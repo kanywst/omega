@@ -500,6 +500,17 @@ type BatchEvalResponse struct {
 	Evaluations []policy.EvalResponse `json:"evaluations"`
 }
 
+// MaxBatchEvaluations caps the number of sub-requests one batch may
+// carry. AuthZEN 1.0 §5.2 does not mandate a value, but every batch
+// evaluation request holds the audit-log mutex for the duration of
+// its processing (see evaluateAccessBatch and audit.AppendAudit), so
+// an unbounded batch is a DoS surface against the hash-chain writer.
+// 100 is in line with peer implementations (AVP: 30, Aserto: 50,
+// Topaz: 100); operators who need more should fan out batches on
+// the client. Exposing a flag is on the roadmap if the limit
+// becomes a real friction point.
+const MaxBatchEvaluations = 100
+
 // evaluateAccessBatch implements the AuthZEN 1.0 batch endpoint.
 // Each sub-request inherits defaults from the top-level fields, is
 // validated as a complete EvalRequest, evaluated through the same
@@ -512,13 +523,28 @@ func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
 		return
 	}
-	_, batchSpan := tracer.Start(r.Context(), "policy.EvaluateBatch",
+	if n := len(req.Evaluations); n > MaxBatchEvaluations {
+		writeErr(w, http.StatusBadRequest,
+			fmt.Errorf("batch too large: %d evaluations (max %d); fan out on the client", n, MaxBatchEvaluations))
+		return
+	}
+	// Capture the context returned by tracer.Start so per-evaluation
+	// spans (policy.Evaluate, audit.append) nest under this batch
+	// span instead of becoming siblings of it.
+	ctx, batchSpan := tracer.Start(r.Context(), "policy.EvaluateBatch",
 		trace.WithAttributes(
 			attribute.Int("authzen.batch.size", len(req.Evaluations)),
 		),
 	)
 	defer batchSpan.End()
 
+	// NOTE on serial processing: each sub-request appends one audit
+	// row, and AppendAudit serialises on a process-wide mutex so the
+	// hash-chain prev_hash lookup and INSERT are atomic. Batch latency
+	// therefore grows linearly with N (the response is held until the
+	// last audit row commits). The MaxBatchEvaluations cap bounds the
+	// worst case; a true throughput optimisation would be a bulk
+	// AppendAudit at the storage layer, tracked as a follow-up.
 	out := BatchEvalResponse{Evaluations: make([]policy.EvalResponse, 0, len(req.Evaluations))}
 	for i, sub := range req.Evaluations {
 		merged, err := mergeBatchEval(req, sub)
@@ -542,7 +568,7 @@ func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
 			decision = "allow"
 		}
 		metrics.Decisions.WithLabelValues(decision).Inc()
-		s.audit(r.Context(), storage.AuditEvent{
+		s.audit(ctx, storage.AuditEvent{
 			Kind:     "access.evaluate",
 			Subject:  merged.Subject.ID,
 			Decision: decision,

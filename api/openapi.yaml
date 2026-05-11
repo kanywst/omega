@@ -724,6 +724,11 @@ components:
           additionalProperties: true
         evaluations:
           type: array
+          maxItems: 100
+          description: |
+            Capped at 100 entries to bound the audit-mutex hold time
+            of one batch. Larger batches should be fanned out on the
+            client.
           items:
             $ref: "#/components/schemas/BatchEvalSubrequest"
 

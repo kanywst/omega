@@ -303,6 +303,30 @@ func TestHTTPAccessEvaluationsEmptyArrayReturnsEmptyResponse(t *testing.T) {
 	}
 }
 
+func TestHTTPAccessEvaluationsRejectsOversizedBatch(t *testing.T) {
+	srv := newTestServer(t)
+	// One more than the cap. Each sub-request is a complete EvalRequest
+	// so this is the cap path specifically, not the validation path.
+	n := api.MaxBatchEvaluations + 1
+	subs := make([]string, n)
+	for i := range subs {
+		subs[i] = `{"resource":{"type":"HttpPath","id":"/"}}`
+	}
+	body := []byte(`{
+  "subject": {"type":"Spiffe","id":"spiffe://omega.local/x"},
+  "action":  {"name":"GET"},
+  "evaluations": [` + strings.Join(subs, ",") + `]
+}`)
+	resp, err := http.Post(srv.URL+"/access/v1/evaluations", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", resp.StatusCode)
+	}
+}
+
 func TestHTTPAccessEvaluationsRejectsIncompleteSubrequest(t *testing.T) {
 	srv := newTestServer(t)
 	// No top-level resource and the sole sub-request omits it too -
