@@ -91,8 +91,13 @@ func main() {
 			http.Error(w, "parse csr: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+		if err != nil {
+			http.Error(w, "serial: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		leafTpl := &x509.Certificate{
-			SerialNumber: big.NewInt(time.Now().UnixNano()),
+			SerialNumber: serial,
 			Subject:      pkix.Name{CommonName: req.CommonName},
 			NotBefore:    time.Now().Add(-time.Minute),
 			NotAfter:     time.Now().Add(30 * time.Minute),
@@ -100,10 +105,13 @@ func main() {
 			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		}
 		if req.URISans != "" {
-			for _, raw := range strings.Split(req.URISans, ",") {
-				if u, err := url.Parse(strings.TrimSpace(raw)); err == nil {
-					leafTpl.URIs = append(leafTpl.URIs, u)
+			for raw := range strings.SplitSeq(req.URISans, ",") {
+				u, err := url.Parse(strings.TrimSpace(raw))
+				if err != nil {
+					http.Error(w, "parse uri san "+raw+": "+err.Error(), http.StatusBadRequest)
+					return
 				}
+				leafTpl.URIs = append(leafTpl.URIs, u)
 			}
 		}
 		leafDER, err := x509.CreateCertificate(rand.Reader, leafTpl, caCert, parsed.PublicKey, caKey)
@@ -112,6 +120,7 @@ func main() {
 			return
 		}
 		leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"certificate": string(leafPEM),
@@ -129,8 +138,11 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	log.Printf("mock-vault: mount=%s role=%s token=%s listening on http://%s",
-		*mount, *role, *token, *addr)
+	// Token is intentionally absent from the log line - even in a
+	// demo it is the kind of value that should not show up in CI
+	// logs or terminal scrollback.
+	log.Printf("mock-vault: mount=%s role=%s listening on http://%s",
+		*mount, *role, *addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("mock-vault: listen: %v", err)
 	}
