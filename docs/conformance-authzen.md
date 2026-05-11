@@ -109,7 +109,7 @@ Spec version audited:
   may reference arbitrary `HttpPath`, `Resource`, etc. types
   whose value space is not known to the PDP. A `candidates`-list
   extension that takes operator-provided enumerations is on the
-  [roadmap](../ROADMAP.md). Implementing the Search endpoints to
+  [ROADMAP.md](../ROADMAP.md). Implementing the Search endpoints to
   always return empty would satisfy the wire format but mislead
   callers, so they stay 404 until there is a substantive answer.
 - **Response `context` field.** Today omega emits `reasons` (the
@@ -123,4 +123,4 @@ This page is updated whenever a change touches an AuthZEN-facing
 surface. Reviewers ask for an update in the same PR for any change
 that adds or modifies a `/access/v1/...` endpoint, or that flips a
 row from `partial` to `implemented`. The companion page for SPIFFE
-is at [docs/conformance-spiffe.md](conformance-spiffe.md).
+is at [conformance-spiffe.md](conformance-spiffe.md).

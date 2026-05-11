@@ -14,7 +14,7 @@ Status legend:
 - **partial** — omega ships some of the surface; gaps are listed in
   the notes column.
 - **deferred** — the spec section is out of scope for the current
-  charter; see [docs/non-goals.md](non-goals.md) when applicable.
+  charter; see [non-goals.md](non-goals.md) when applicable.
 
 Spec versions audited:
 
@@ -113,4 +113,4 @@ This page is updated whenever a change touches a spec-facing surface.
 Reviewers ask for an update in the same PR for any change that
 adds or modifies an endpoint listed above, or that flips a row
 from `partial` to `implemented`. The companion page for AuthZEN
-is at [docs/conformance-authzen.md](conformance-authzen.md).
+is at [conformance-authzen.md](conformance-authzen.md).
