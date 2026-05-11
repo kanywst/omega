@@ -35,7 +35,7 @@ Spec versions audited:
 | 4.1 | `FetchX509SVID` streaming RPC | implemented | `internal/agent/workloadapi/server.go` |
 | 4.2 | `FetchX509Bundles` streaming RPC | implemented | streams updates when the local trust bundle changes |
 | 4.3 | `FetchJWTSVID` unary RPC with audience | implemented | forwards to the control plane's `POST /v1/svid/jwt` |
-| 4.4 | `ValidateJWTSVID` unary RPC | partial | the underlying validation is in the Authority interface (`ValidateJWTSVID`); the agent RPC is not yet exposed (validation is currently done in-process via `omega svid validate`) |
+| 4.4 | `ValidateJWTSVID` unary RPC | implemented | `internal/agent/workloadapi/server.go` `ValidateJWTSVID`; the agent verifies the token locally against the JWKS it streams from the control plane (no extra round-trip per validation) |
 | 4.5 | `FetchJWTBundles` streaming RPC | implemented | exposes the trust domain's JWKS |
 | 5 | Security: agent authenticates the caller via OS-level metadata | implemented | `SO_PEERCRED` on Linux; documented residual risk in `docs/threat-model.md` §S1 |
 | 6 | Workload identity is asserted by an SVID | implemented | every fetch returns at least one SPIFFE ID |
@@ -99,10 +99,6 @@ Spec versions audited:
 
 - **CRL / OCSP / JTI deny list.** Per [ADR 0003](adr/0003-short-lived-svids-no-revocation.md),
   rotation replaces revocation. Same call SPIRE made.
-- **`ValidateJWTSVID` RPC on the Workload API socket.** Validation is
-  available through the Authority interface and the `omega svid
-  validate` CLI; exposing the gRPC RPC is on the roadmap but no
-  caller has needed it yet.
 - **Native SPIFFE Bundle Format with sequence + refresh hints.**
   Standard JWKS + PEM bundle is what every current consumer reads.
   A formal SPIFFE-bundle-JSON emitter is tracked in [ROADMAP.md](../ROADMAP.md).
