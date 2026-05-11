@@ -71,6 +71,25 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- `--ca-backend=vault-pki` — first non-disk CA backend. omega
+  forwards CSRs to a Vault PKI mount via `POST /v1/<mount>/sign/<role>`
+  and serves the trust anchors via `GET /v1/<mount>/ca_chain`, so
+  the X.509 root key never sits on the omega process's disk. JWT
+  signing stays local (the disk-style JWT key under `--data-dir`);
+  per-token Vault Transit signing would add a network hop to every
+  JWT validation and the 5-minute JWT-SVID TTL makes the trade-off
+  unattractive (ADR 0005). New flags: `--ca-backend`,
+  `--ca-vault-pki-addr`, `--ca-vault-pki-token`,
+  `--ca-vault-pki-mount`, `--ca-vault-pki-role`. A boot-time
+  `ca_chain` probe surfaces misconfiguration at startup; a stale
+  bundle is served if a later refresh fails, so a transient Vault
+  blip does not break workload mTLS.
+- `Authority.IssueSVID` signature changed from `(id, pub
+  crypto.PublicKey)` to `(id, csr *x509.CertificateRequest)`.
+  Pre-1.0 interface change, contained because no out-of-tree
+  backends exist yet (ADR 0005 documents this). Backends that
+  delegate to an upstream signer (Vault, AWS PCA) need the full
+  CSR; the disk backend continues to use `csr.PublicKey`.
 - `omega svid validate <jwt> --audience <aud>` subcommand. Reads the
   token from the positional argument (or `-` for stdin), dials the
   local agent's Workload API socket, calls `ValidateJWTSVID`, and

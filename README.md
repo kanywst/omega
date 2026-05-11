@@ -126,6 +126,7 @@ Section-by-section audits live at [docs/conformance-spiffe.md](docs/conformance-
 | Layer                 | Standard                                                       | Status      |
 | --------------------- | -------------------------------------------------------------- | ----------- |
 | Workload identity     | SPIFFE / SPIRE compatible (X.509-SVID, JWT-SVID, Workload API) | implemented |
+| CA backend (Plugin)   | disk default + Vault PKI; AWS PCA / GCP CAS / Azure KV / step-ca via the same `identity.Authority` seam | partial: disk + vault-pki shipped |
 | Authorization         | OpenID AuthZEN 1.0                                             | implemented |
 | Federation            | SPIFFE federation (trust bundle exchange)                      | implemented |
 | Token binding         | RFC 8705 (mTLS-bound)                                          | implemented |

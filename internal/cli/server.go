@@ -86,6 +86,11 @@ func newServerCommand() *cobra.Command {
 		auditOTLPInsecure       bool
 		auditOTLPHeaders        []string
 		oidcIdPs                []string
+		caBackend               string
+		caVaultPKIAddr          string
+		caVaultPKIToken         string
+		caVaultPKIMount         string
+		caVaultPKIRole          string
 	)
 
 	cmd := &cobra.Command{
@@ -105,12 +110,19 @@ func newServerCommand() *cobra.Command {
 			}
 			defer store.Close()
 
-			ca, err := identity.New(identity.Config{
-				Kind:        identity.KindDisk,
+			caCfg := identity.Config{
+				Kind:        identity.Kind(strings.TrimSpace(caBackend)),
 				TrustDomain: trustDomain,
 				Issuer:      strings.TrimSpace(issuerURL),
 				Dir:         filepath.Join(dataDir, "ca"),
-			})
+			}
+			if caCfg.Kind == identity.KindVaultPKI {
+				caCfg.VaultPKIAddr = strings.TrimSpace(caVaultPKIAddr)
+				caCfg.VaultPKIToken = strings.TrimSpace(caVaultPKIToken)
+				caCfg.VaultPKIMount = strings.TrimSpace(caVaultPKIMount)
+				caCfg.VaultPKIRole = strings.TrimSpace(caVaultPKIRole)
+			}
+			ca, err := identity.New(caCfg)
 			if err != nil {
 				return fmt.Errorf("ca: %w", err)
 			}
@@ -285,6 +297,17 @@ func newServerCommand() *cobra.Command {
 			"0 (default) uses Omega's reserved key; override if you run multiple Omega clusters on one Postgres.")
 	cmd.Flags().DurationVar(&haPollEvery, "ha-poll-interval", time.Second,
 		"how often a follower retries to acquire the advisory lock.")
+	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
+		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine, keeping the root key out of omega's process (JWT-SVID signing stays local; see ADR 0005).")
+	cmd.Flags().StringVar(&caVaultPKIAddr, "ca-vault-pki-addr", "",
+		"Vault address, e.g. https://vault.example:8200. Required when --ca-backend=vault-pki.")
+	cmd.Flags().StringVar(&caVaultPKIToken, "ca-vault-pki-token", "",
+		"Vault token sent as X-Vault-Token. Required when --ca-backend=vault-pki. Prefer scoped tokens with the minimal pki/sign/<role> capability.")
+	cmd.Flags().StringVar(&caVaultPKIMount, "ca-vault-pki-mount", "pki",
+		"Vault PKI engine mount path. Default 'pki' matches the canonical mount name.")
+	cmd.Flags().StringVar(&caVaultPKIRole, "ca-vault-pki-role", "",
+		"Vault PKI role used to sign incoming CSRs. Required when --ca-backend=vault-pki.")
+
 	cmd.Flags().StringArrayVar(&oidcIdPs, "oidc-idp", nil,
 		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key takes one or more values separated by ';'. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")
 

@@ -414,7 +414,7 @@ func (s *Server) issueSVID(w http.ResponseWriter, r *http.Request) {
 	_, issueSpan := tracer.Start(r.Context(), "ca.IssueSVID",
 		trace.WithAttributes(attribute.String("spiffe.id", id.String())),
 	)
-	svid, err := s.ca.IssueSVID(id, csr.PublicKey)
+	svid, err := s.ca.IssueSVID(id, csr)
 	if err != nil {
 		issueSpan.RecordError(err)
 		issueSpan.SetStatus(codes.Error, "issue x509 svid")
@@ -519,7 +519,7 @@ func (s *Server) attestK8s(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("csr: signature: %w", err))
 		return
 	}
-	svid, err := s.ca.IssueSVID(id, csr.PublicKey)
+	svid, err := s.ca.IssueSVID(id, csr)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return

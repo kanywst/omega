@@ -49,7 +49,7 @@ func TestIssueSVIDValidates(t *testing.T) {
 		t.Fatalf("gen workload key: %v", err)
 	}
 
-	svid, err := a.IssueSVID(id, &key.PublicKey)
+	svid, err := a.IssueSVID(id, csrFromKey(t, key))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -97,9 +97,25 @@ func TestIssueSVIDRejectsForeignTrustDomain(t *testing.T) {
 	}
 	other, _ := spiffeid.FromString("spiffe://other.example/foo")
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if _, err := a.IssueSVID(other, &key.PublicKey); err == nil {
+	if _, err := a.IssueSVID(other, csrFromKey(t, key)); err == nil {
 		t.Fatal("expected error for foreign trust domain")
 	}
+}
+
+// csrFromKey returns a parsed *x509.CertificateRequest carrying
+// only the public side of key, the minimum that the Authority
+// interface contract demands.
+func csrFromKey(t *testing.T, key *ecdsa.PrivateKey) *x509.CertificateRequest {
+	t.Helper()
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatalf("create csr: %v", err)
+	}
+	csr, err := x509.ParseCertificateRequest(der)
+	if err != nil {
+		t.Fatalf("parse csr: %v", err)
+	}
+	return csr
 }
 
 func TestNewConfigRouting(t *testing.T) {

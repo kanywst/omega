@@ -107,7 +107,15 @@ func issueTestCert(t *testing.T, a identity.Authority, sub string) *x509.Certifi
 	if err != nil {
 		t.Fatalf("gen key: %v", err)
 	}
-	svid, err := a.IssueSVID(id, &key.PublicKey)
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatalf("csr: %v", err)
+	}
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		t.Fatalf("parse csr: %v", err)
+	}
+	svid, err := a.IssueSVID(id, csr)
 	if err != nil {
 		t.Fatalf("issue svid: %v", err)
 	}

@@ -44,9 +44,14 @@ type Kind string
 
 const (
 	// KindDisk is the default self-signed CA persisted to data-dir/ca/.
-	// This is currently the only backing kind; HSM / KMS variants will
-	// register their own Kind values without changing this one.
 	KindDisk Kind = "disk"
+	// KindVaultPKI signs X.509-SVIDs via a Vault PKI engine; the
+	// root key never sits on disk next to omega. JWT-SVID signing
+	// stays local (the disk-style JWT key) because Vault Transit
+	// signing per token would add a network hop to every JWT
+	// validation. The trade-off is documented in
+	// `docs/adr/0005-ca-plugin-architecture.md`.
+	KindVaultPKI Kind = "vault-pki"
 )
 
 // Config is the disjoint-union-style argument to New. Fields are read
@@ -69,6 +74,12 @@ type Config struct {
 	Issuer string
 	// KindDisk
 	Dir string
+	// KindVaultPKI
+	VaultPKIAddr      string // e.g. https://vault.example:8200
+	VaultPKIToken     string // X-Vault-Token; secret material
+	VaultPKIMount     string // mount path, default "pki"
+	VaultPKIRole      string // role under the mount used to sign CSRs
+	VaultPKIBundleTTL time.Duration
 }
 
 // Authority is the signing + bundle interface every Omega CA backend
@@ -80,7 +91,13 @@ type Authority interface {
 	TrustDomain() spiffeid.TrustDomain
 	BundlePEM() []byte
 
-	IssueSVID(id spiffeid.ID, pub crypto.PublicKey) (*SVID, error)
+	// IssueSVID signs an X.509-SVID under id for the public key the
+	// caller carries in csr. The CSR is passed (not just the public
+	// key) so backends that delegate to an upstream signer - Vault
+	// PKI, AWS Private CA, step-ca - can forward it without
+	// rebuilding it. csr.CheckSignature() is the caller's
+	// responsibility; backends must not assume it has been done.
+	IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest) (*SVID, error)
 
 	IssueJWTSVID(id spiffeid.ID, audience []string, ttl time.Duration, extraClaims map[string]any) (*JWTSVID, error)
 	JWTKeyID() (string, error)
@@ -119,8 +136,30 @@ func New(cfg Config) (Authority, error) {
 		}
 		a.issuerURL = issuer
 		return a, nil
+	case KindVaultPKI:
+		if cfg.Dir == "" {
+			return nil, errors.New("identity: vault-pki backend still needs --data-dir for the local JWT signing key")
+		}
+		if cfg.VaultPKIAddr == "" {
+			return nil, errors.New("identity: vault-pki backend requires VaultPKIAddr")
+		}
+		if cfg.VaultPKIToken == "" {
+			return nil, errors.New("identity: vault-pki backend requires VaultPKIToken")
+		}
+		if cfg.VaultPKIRole == "" {
+			return nil, errors.New("identity: vault-pki backend requires VaultPKIRole")
+		}
+		// Embed a local disk authority for the JWT-SVID side. Vault PKI
+		// becomes the X.509 root; the JWT key is omega-side material as
+		// documented in ADR 0005.
+		local, err := loadOrCreateDisk(cfg.Dir, cfg.TrustDomain)
+		if err != nil {
+			return nil, err
+		}
+		local.issuerURL = issuer
+		return newVaultPKIAuthority(local, cfg)
 	default:
-		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q)", cfg.Kind, KindDisk)
+		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q)", cfg.Kind, KindDisk, KindVaultPKI)
 	}
 }
 
@@ -285,14 +324,19 @@ type SVID struct {
 	NotAfter  time.Time
 }
 
-// IssueSVID signs an X.509-SVID for id over the public key in pub.
-// The SPIFFE ID must be a member of this authority's trust domain.
-func (a *localAuthority) IssueSVID(id spiffeid.ID, pub crypto.PublicKey) (*SVID, error) {
+// IssueSVID signs an X.509-SVID for id over the public key the
+// caller carries in csr. The SPIFFE ID must be a member of this
+// authority's trust domain. CSR signature verification is the
+// caller's responsibility.
+func (a *localAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest) (*SVID, error) {
 	if id.IsZero() {
 		return nil, errors.New("spiffe id is empty")
 	}
 	if !id.MemberOf(a.trustDomain) {
 		return nil, fmt.Errorf("spiffe id %q is not in trust domain %q", id, a.trustDomain)
+	}
+	if csr == nil {
+		return nil, errors.New("csr is nil")
 	}
 	serial, err := randomSerial()
 	if err != nil {
@@ -310,7 +354,7 @@ func (a *localAuthority) IssueSVID(id spiffeid.ID, pub crypto.PublicKey) (*SVID,
 		IsCA:                  false,
 		URIs:                  []*url.URL{idAsURL(id)},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, a.cert, pub, a.key)
+	der, err := x509.CreateCertificate(rand.Reader, tpl, a.cert, csr.PublicKey, a.key)
 	if err != nil {
 		return nil, fmt.Errorf("sign svid: %w", err)
 	}
