@@ -108,6 +108,7 @@ Components are independently runnable (`omega server identity`, `omega server po
 | GET    | `/v1/domains`                     | List domains                                                           |
 | GET    | `/v1/domains/{name}`              | Fetch a domain                                                         |
 | POST   | `/v1/svid`                        | Issue an X.509-SVID from a CSR (`{spiffe_id, csr}`)                    |
+| POST   | `/v1/attest/k8s`                  | Attest a Kubernetes ServiceAccount projected token + CSR → X.509-SVID  |
 | GET    | `/v1/bundle`                      | Trust bundle PEM (CA cert)                                             |
 | POST   | `/access/v1/evaluation`           | OpenID AuthZEN 1.0 PDP evaluation (single decision)                    |
 | POST   | `/access/v1/evaluations`          | OpenID AuthZEN 1.0 PDP evaluation (batch, with top-level defaults)     |

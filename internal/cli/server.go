@@ -15,7 +15,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+
 	"github.com/0-draft/omega/internal/server/api"
+	"github.com/0-draft/omega/internal/server/attest"
 	"github.com/0-draft/omega/internal/server/audit"
 	"github.com/0-draft/omega/internal/server/federation"
 	"github.com/0-draft/omega/internal/server/identity"
@@ -25,6 +30,34 @@ import (
 	"github.com/0-draft/omega/internal/server/tracing"
 	"github.com/0-draft/omega/internal/version"
 )
+
+// buildK8sClient resolves a kube-apiserver client for --k8s-attest.
+// Resolution order:
+//   - explicit --kubeconfig path
+//   - in-cluster ServiceAccount config (when running as a Pod)
+//   - default kubeconfig discovery (KUBECONFIG env, ~/.kube/config)
+//
+// Any of those is acceptable for an operator; failing all three
+// returns an error so misconfiguration surfaces at startup rather
+// than at the first attest call.
+func buildK8sClient(kubeconfig string) (kubernetes.Interface, error) {
+	if kubeconfig != "" {
+		cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("load kubeconfig %q: %w", kubeconfig, err)
+		}
+		return kubernetes.NewForConfig(cfg)
+	}
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return kubernetes.NewForConfig(cfg)
+	}
+	loader := clientcmd.NewDefaultClientConfigLoadingRules()
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loader, &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("no kubeconfig and no in-cluster config: %w", err)
+	}
+	return kubernetes.NewForConfig(cfg)
+}
 
 func newServerCommand() *cobra.Command {
 	var (
@@ -44,6 +77,10 @@ func newServerCommand() *cobra.Command {
 		haLeaderKey             int64
 		haPollEvery             time.Duration
 		enforceTokenExchangePol bool
+		k8sAttestEnable         bool
+		k8sSVIDTemplate         string
+		k8sTokenAudiences       []string
+		k8sKubeconfig           string
 	)
 
 	cmd := &cobra.Command{
@@ -137,12 +174,24 @@ func newServerCommand() *cobra.Command {
 				_ = shutdownTracing(flushCtx)
 			}()
 
+			apiServer := api.NewServer(store, ca, pdp).
+				WithFederation(fed).
+				WithEnforceTokenExchangePolicy(enforceTokenExchangePol)
+
+			if k8sAttestEnable {
+				k8sClient, err := buildK8sClient(k8sKubeconfig)
+				if err != nil {
+					return fmt.Errorf("k8s-attest: %w", err)
+				}
+				attestor := attest.NewK8sAttestor(k8sClient, k8sTokenAudiences)
+				apiServer = apiServer.WithK8sAttestor(attestor, k8sSVIDTemplate)
+				fmt.Fprintf(os.Stderr, "omega server: k8s attestor enabled (template=%s, audiences=%v)\n",
+					k8sSVIDTemplate, k8sTokenAudiences)
+			}
+
 			srv := &http.Server{
-				Addr: httpAddr,
-				Handler: api.NewServer(store, ca, pdp).
-					WithFederation(fed).
-					WithEnforceTokenExchangePolicy(enforceTokenExchangePol).
-					Handler(),
+				Addr:              httpAddr,
+				Handler:           apiServer.Handler(),
 				ReadHeaderTimeout: 5 * time.Second,
 			}
 
@@ -195,6 +244,16 @@ func newServerCommand() *cobra.Command {
 			"0 (default) uses Omega's reserved key; override if you run multiple Omega clusters on one Postgres.")
 	cmd.Flags().DurationVar(&haPollEvery, "ha-poll-interval", time.Second,
 		"how often a follower retries to acquire the advisory lock.")
+	cmd.Flags().BoolVar(&k8sAttestEnable, "k8s-attest", false,
+		"enable the POST /v1/attest/k8s endpoint: workloads present a ServiceAccount projected token + CSR, omega validates the token via TokenReview, and issues an X.509-SVID derived from the (namespace, serviceaccount[, podname]) triple.")
+	cmd.Flags().StringVar(&k8sSVIDTemplate, "k8s-svid-template",
+		"spiffe://omega.local/k8s/{namespace}/{serviceaccount}",
+		"SPIFFE ID template for k8s-attested SVIDs. Placeholders: {namespace}, {serviceaccount}, {podname}. The rendered ID must lie in --trust-domain.")
+	cmd.Flags().StringSliceVar(&k8sTokenAudiences, "k8s-token-audience", nil,
+		"expected audience(s) on the projected token (repeat to allow more than one). Empty disables the audience check; set to the URL workloads use to reach omega (e.g. https://omega.example.com).")
+	cmd.Flags().StringVar(&k8sKubeconfig, "kubeconfig", "",
+		"path to a kubeconfig for out-of-cluster runs (used by --k8s-attest). Empty = use the in-cluster ServiceAccount config, falling back to the default kubeconfig discovery if that fails.")
+
 	cmd.Flags().BoolVar(&enforceTokenExchangePol, "enforce-token-exchange-policy", false,
 		"evaluate POST /v1/token/exchange through the loaded Cedar policy set "+
 			"(action=token.exchange, default-deny). When false, only the built-in "+

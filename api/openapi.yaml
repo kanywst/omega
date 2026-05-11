@@ -41,6 +41,8 @@ tags:
     description: SPIFFE namespace CRUD.
   - name: svid
     description: X.509-SVID and JWT-SVID issuance, trust bundles.
+  - name: attest
+    description: Server-side workload attestation endpoints.
   - name: federation
     description: SPIFFE trust-bundle exchange across trust domains.
   - name: authzen
@@ -171,6 +173,50 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /v1/attest/k8s:
+    post:
+      tags: [attest, leader-only]
+      operationId: attestK8s
+      summary: Attest a Kubernetes ServiceAccount projected token and issue an X.509-SVID.
+      description: |
+        The workload presents (1) a projected ServiceAccount token
+        whose audience matches `--k8s-token-audience` and (2) a PEM
+        CSR. The server calls back to kube-apiserver's `TokenReview`
+        to validate the token, derives the SPIFFE ID from
+        `--k8s-svid-template` against the validated
+        `(namespace, serviceaccount[, podname])` triple, then signs
+        the CSR like the regular `/v1/svid` path.
+
+        Returns `404 Not Found` when the server was started without
+        `--k8s-attest=true`. Returns `401 Unauthorized` when the
+        apiserver rejects the token (expired, wrong audience, not a
+        service-account token).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/K8sAttestRequest"
+      responses:
+        "200":
+          description: Issued SVID + derived SPIFFE ID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/K8sAttestResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: TokenReview rejected the projected token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotLeader"
 
   /v1/svid:
     post:
@@ -515,6 +561,42 @@ components:
       additionalProperties: false
       required: [svid, bundle, expires_at]
       properties:
+        svid:
+          type: string
+          description: PEM-encoded leaf certificate.
+        bundle:
+          type: string
+          description: PEM-encoded trust anchor bundle.
+        expires_at:
+          type: string
+          format: date-time
+
+    K8sAttestRequest:
+      type: object
+      additionalProperties: false
+      required: [token, csr]
+      properties:
+        token:
+          type: string
+          description: |
+            Kubernetes ServiceAccount projected token. The token's
+            audience must match the server's `--k8s-token-audience`
+            when that flag is set.
+        csr:
+          type: string
+          description: PEM-encoded x509 `CERTIFICATE REQUEST`.
+
+    K8sAttestResponse:
+      type: object
+      additionalProperties: false
+      required: [spiffe_id, svid, bundle, expires_at]
+      properties:
+        spiffe_id:
+          type: string
+          description: |
+            SPIFFE ID rendered from the server's
+            `--k8s-svid-template` against the validated
+            `(namespace, serviceaccount[, podname])` triple.
         svid:
           type: string
           description: PEM-encoded leaf certificate.

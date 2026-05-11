@@ -26,9 +26,11 @@ release as features are ready rather than on a fixed cadence; see
   (`POST /access/v1/evaluations`) and Search APIs (subject / resource
   / action). Required for full spec conformance and for the admin
   UI's "what can this subject do" inventory view.
-- Kubernetes workload attestor (projected ServiceAccount token) so
-  pods can be attested without relying on the per-node Unix socket
-  peercred path.
+- Agent-side Kubernetes workload attestor (cgroup-based pod
+  introspection): the server-side `POST /v1/attest/k8s` endpoint
+  has shipped; the SPIRE-style "agent attests workloads by
+  inspecting `/proc/<pid>/cgroup` then calling kube-apiserver" path
+  is the remaining bit.
 
 ## Later (6-12 months)
 

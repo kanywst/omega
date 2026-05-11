@@ -64,6 +64,17 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- `POST /v1/attest/k8s` - Kubernetes ServiceAccount projected token
+  attestation. Workload presents the projected token plus a CSR;
+  the server validates the token through kube-apiserver's
+  `TokenReview` API, renders a SPIFFE ID from a configurable
+  template (`{namespace}`, `{serviceaccount}`, `{podname}`), and
+  signs the CSR. Wired through three new flags on `omega server`:
+  `--k8s-attest=true` to enable, `--k8s-svid-template=...` to
+  shape the SPIFFE ID, `--k8s-token-audience=...` to constrain
+  the accepted audience, plus the existing `--kubeconfig` for
+  out-of-cluster runs. Default is disabled; the endpoint returns
+  404 in that case.
 
 ## [0.0.1] - 2026-05-01
 

@@ -17,7 +17,13 @@ import (
 	"strings"
 	"testing"
 
+	authnv1 "k8s.io/api/authentication/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
 	"github.com/0-draft/omega/internal/server/api"
+	"github.com/0-draft/omega/internal/server/attest"
 	"github.com/0-draft/omega/internal/server/identity"
 	"github.com/0-draft/omega/internal/server/policy"
 	"github.com/0-draft/omega/internal/server/storage"
@@ -560,6 +566,7 @@ func TestHTTPLeaderGate(t *testing.T) {
 		{"POST", "/access/v1/evaluation", `{"subject":{"type":"Spiffe","id":"spiffe://omega.local/x"},"action":{"name":"GET"},"resource":{"type":"HttpPath","id":"/"}}`},
 		{"POST", "/access/v1/evaluations", `{"subject":{"type":"Spiffe","id":"spiffe://omega.local/x"},"action":{"name":"GET"},"evaluations":[{"resource":{"type":"HttpPath","id":"/a"}}]}`},
 		{"POST", "/v1/svid/jwt", `{"spiffe_id":"spiffe://omega.local/x","audience":["a"]}`},
+		{"POST", "/v1/attest/k8s", `{"token":"x","csr":""}`},
 	}
 	for _, tc := range cases {
 		req, _ := http.NewRequest(tc.method, srv.URL+tc.path, strings.NewReader(tc.body))
@@ -612,6 +619,126 @@ func TestHTTPLeaderGate(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Errorf("after promotion: got %d want 201", resp.StatusCode)
+	}
+}
+
+// newK8sAttestServer builds an httptest.Server whose `/v1/attest/k8s`
+// endpoint is wired to a fake K8s clientset that returns the supplied
+// TokenReview status. Returns the test server and the same store the
+// handler writes audit rows into.
+func newK8sAttestServer(t *testing.T, trStatus authnv1.TokenReviewStatus, template string) (*httptest.Server, *storage.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatalf("ca: %v", err)
+	}
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		tr := action.(k8stesting.CreateAction).GetObject().(*authnv1.TokenReview)
+		tr.Status = trStatus
+		return true, tr, nil
+	})
+	attestor := attest.NewK8sAttestor(client, nil)
+	srv := httptest.NewServer(
+		api.NewServer(store, ca, policy.New()).
+			WithK8sAttestor(attestor, template).
+			Handler(),
+	)
+	t.Cleanup(srv.Close)
+	return srv, store
+}
+
+func TestAttestK8sIssuesSVIDFromValidToken(t *testing.T) {
+	srv, _ := newK8sAttestServer(t, authnv1.TokenReviewStatus{
+		Authenticated: true,
+		User:          authnv1.UserInfo{Username: "system:serviceaccount:apps:web"},
+	}, "spiffe://omega.local/k8s/{namespace}/{serviceaccount}")
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatalf("csr: %v", err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+
+	body, _ := json.Marshal(api.K8sAttestRequest{Token: "fake.jwt.token", CSR: string(csrPEM)})
+	resp, err := http.Post(srv.URL+"/v1/attest/k8s", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200 (body=%s)", resp.StatusCode, raw)
+	}
+	var out api.K8sAttestResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.SPIFFEID != "spiffe://omega.local/k8s/apps/web" {
+		t.Errorf("spiffe_id: got %q", out.SPIFFEID)
+	}
+	if !strings.Contains(out.SVID, "BEGIN CERTIFICATE") {
+		t.Errorf("svid not PEM: %s", out.SVID)
+	}
+}
+
+func TestAttestK8sReturns401OnUnauthenticatedToken(t *testing.T) {
+	srv, _ := newK8sAttestServer(t, authnv1.TokenReviewStatus{
+		Authenticated: false,
+		Error:         "token expired",
+	}, "spiffe://omega.local/k8s/{namespace}/{serviceaccount}")
+	body, _ := json.Marshal(api.K8sAttestRequest{Token: "expired", CSR: "irrelevant"})
+	resp, err := http.Post(srv.URL+"/v1/attest/k8s", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status: got %d want 401", resp.StatusCode)
+	}
+}
+
+func TestAttestK8sRejectsTemplateOutOfTrustDomain(t *testing.T) {
+	srv, _ := newK8sAttestServer(t, authnv1.TokenReviewStatus{
+		Authenticated: true,
+		User:          authnv1.UserInfo{Username: "system:serviceaccount:apps:web"},
+	}, "spiffe://other.example/k8s/{namespace}/{serviceaccount}")
+
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	csrDER, _ := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	body, _ := json.Marshal(api.K8sAttestRequest{Token: "ok", CSR: string(csrPEM)})
+
+	resp, err := http.Post(srv.URL+"/v1/attest/k8s", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", resp.StatusCode)
+	}
+}
+
+func TestAttestK8sReturns404WhenNotConfigured(t *testing.T) {
+	srv := newTestServer(t)
+	body, _ := json.Marshal(api.K8sAttestRequest{Token: "x", CSR: ""})
+	resp, err := http.Post(srv.URL+"/v1/attest/k8s", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status: got %d want 404", resp.StatusCode)
 	}
 }
 

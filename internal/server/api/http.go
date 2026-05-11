@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/0-draft/omega/internal/server/attest"
 	"github.com/0-draft/omega/internal/server/federation"
 	"github.com/0-draft/omega/internal/server/identity"
 	"github.com/0-draft/omega/internal/server/metrics"
@@ -39,6 +40,8 @@ type Server struct {
 	policy                *policy.Engine
 	federation            *federation.Registry
 	enforceExchangePolicy bool
+	k8sAttestor           *attest.K8sAttestor
+	k8sSVIDTemplate       string
 }
 
 func NewServer(store *storage.Store, ca identity.Authority, pdp *policy.Engine) *Server {
@@ -63,6 +66,17 @@ func (s *Server) WithFederation(reg *federation.Registry) *Server {
 // policies.
 func (s *Server) WithEnforceTokenExchangePolicy(v bool) *Server {
 	s.enforceExchangePolicy = v
+	return s
+}
+
+// WithK8sAttestor wires a TokenReview-backed attestor and the SPIFFE
+// ID template used to derive the issued SPIFFE ID from the validated
+// `(namespace, serviceaccount[, podname])` triple. Passing a nil
+// attestor (or an empty template) leaves `POST /v1/attest/k8s`
+// disabled - it returns 404.
+func (s *Server) WithK8sAttestor(a *attest.K8sAttestor, template string) *Server {
+	s.k8sAttestor = a
+	s.k8sSVIDTemplate = template
 	return s
 }
 
@@ -100,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	handle("GET /v1/domains", s.listDomains)
 	handle("GET /v1/domains/{name}", s.getDomain)
 	handle("POST /v1/svid", leaderOnly(s.issueSVID))
+	handle("POST /v1/attest/k8s", leaderOnly(s.attestK8s))
 	handle("GET /v1/bundle", s.getBundle)
 	handle("POST /access/v1/evaluation", leaderOnly(s.evaluateAccess))
 	handle("POST /access/v1/evaluations", leaderOnly(s.evaluateAccessBatch))
@@ -417,6 +432,105 @@ func (s *Server) issueSVID(w http.ResponseWriter, r *http.Request) {
 		}),
 	})
 	writeJSON(w, http.StatusOK, IssueSVIDResponse{
+		SVID:      string(svid.CertPEM),
+		Bundle:    string(svid.BundlePEM),
+		ExpiresAt: svid.NotAfter,
+	})
+}
+
+// K8sAttestRequest is the request body for POST /v1/attest/k8s. The
+// token is a Kubernetes ServiceAccount projected token (issued with an
+// `audience` matching what omega was started with); the CSR is the
+// usual PEM-encoded x509 CertificateRequest used by every other SVID
+// issuance path.
+type K8sAttestRequest struct {
+	Token string `json:"token"`
+	CSR   string `json:"csr"`
+}
+
+// K8sAttestResponse mirrors IssueSVIDResponse and additionally
+// surfaces the SPIFFE ID derived from the token claims, so the
+// workload does not have to parse the certificate to learn its own
+// identity.
+type K8sAttestResponse struct {
+	SPIFFEID  string    `json:"spiffe_id"`
+	SVID      string    `json:"svid"`
+	Bundle    string    `json:"bundle"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (s *Server) attestK8s(w http.ResponseWriter, r *http.Request) {
+	if s.k8sAttestor == nil || s.k8sSVIDTemplate == "" {
+		writeErr(w, http.StatusNotFound, errors.New("k8s attestation is not configured on this server (start omega server with --k8s-attest=true and --k8s-svid-template=...)"))
+		return
+	}
+	var req K8sAttestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+		return
+	}
+	claims, err := s.k8sAttestor.Attest(r.Context(), req.Token)
+	if err != nil {
+		// Audit the rejection so denial-of-service bursts and bad
+		// tokens are observable. Subject is the namespace/sa pair if
+		// we got that far, otherwise the empty string.
+		s.audit(r.Context(), storage.AuditEvent{
+			Kind:     "attest.k8s",
+			Decision: "deny",
+			Payload:  mustJSON(map[string]string{"error": err.Error()}),
+		})
+		writeErr(w, http.StatusUnauthorized, err)
+		return
+	}
+	idStr, err := attest.RenderSPIFFEID(s.k8sSVIDTemplate, claims)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	id, err := spiffeid.FromString(idStr)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("rendered spiffe id %q invalid: %w", idStr, err))
+		return
+	}
+	if !id.MemberOf(s.ca.TrustDomain()) {
+		writeErr(w, http.StatusBadRequest,
+			fmt.Errorf("rendered spiffe id %q is not in trust domain %q (check --k8s-svid-template)", id, s.ca.TrustDomain()))
+		return
+	}
+	block, _ := pem.Decode([]byte(req.CSR))
+	if block == nil {
+		writeErr(w, http.StatusBadRequest, errors.New("csr: invalid PEM"))
+		return
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("csr: parse: %w", err))
+		return
+	}
+	if err := csr.CheckSignature(); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("csr: signature: %w", err))
+		return
+	}
+	svid, err := s.ca.IssueSVID(id, csr.PublicKey)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	metrics.SVIDIssued.WithLabelValues("x509").Inc()
+	s.audit(r.Context(), storage.AuditEvent{
+		Kind:     "attest.k8s",
+		Subject:  id.String(),
+		Decision: "ok",
+		Payload: mustJSON(map[string]any{
+			"namespace":       claims.Namespace,
+			"service_account": claims.ServiceAccount,
+			"pod_name":        claims.PodName,
+			"audiences":       claims.Audiences,
+			"not_after":       svid.NotAfter,
+		}),
+	})
+	writeJSON(w, http.StatusOK, K8sAttestResponse{
+		SPIFFEID:  id.String(),
 		SVID:      string(svid.CertPEM),
 		Bundle:    string(svid.BundlePEM),
 		ExpiresAt: svid.NotAfter,
