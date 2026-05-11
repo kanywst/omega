@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -125,10 +126,10 @@ func New(cfg Config) (Authority, error) {
 
 // normalizeIssuerURL enforces the OIDC Discovery 1.0 §3 rules on the
 // issuer URL: https scheme, a non-empty host, no query, no fragment.
-// A trailing slash is trimmed so jwks_uri concatenation always yields a
-// canonical URL. Empty input is allowed and means "no OIDC issuer
-// configured" - JWT-SVIDs then carry no `iss` claim and the discovery
-// endpoint returns 404.
+// All trailing slashes are stripped so jwks_uri concatenation
+// ("issuer" + "/v1/jwt/bundle") always yields a canonical URL. Empty
+// input is allowed and means "no OIDC issuer configured" - JWT-SVIDs
+// then carry no `iss` claim and the discovery endpoint returns 404.
 func normalizeIssuerURL(raw string) (string, error) {
 	if raw == "" {
 		return "", nil
@@ -138,7 +139,12 @@ func normalizeIssuerURL(raw string) (string, error) {
 		return "", fmt.Errorf("identity: issuer-url: %w", err)
 	}
 	if u.Scheme != "https" {
-		return "", fmt.Errorf("identity: issuer-url must use https scheme (got %q)", u.Scheme)
+		got := u.Scheme
+		hint := ""
+		if got == "" {
+			hint = `: did you omit "https://"?`
+		}
+		return "", fmt.Errorf("identity: issuer-url must use https scheme (got %q%s)", got, hint)
 	}
 	if u.Host == "" {
 		return "", errors.New("identity: issuer-url must include a host")
@@ -146,16 +152,10 @@ func normalizeIssuerURL(raw string) (string, error) {
 	if u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("identity: issuer-url must not contain a query or fragment (OIDC Discovery 1.0 §3)")
 	}
-	// Trim a single trailing slash from the path so the canonical issuer
-	// is "https://host[/path]" and concat with "/v1/jwt/bundle" never
-	// double-slashes. Multiple trailing slashes ("//") would already be
-	// rejected by url.Parse semantics; one trailing "/" is benign and
-	// commonly typed by operators.
-	if u.Path == "/" {
-		u.Path = ""
-	} else if len(u.Path) > 1 && u.Path[len(u.Path)-1] == '/' {
-		u.Path = u.Path[:len(u.Path)-1]
-	}
+	// url.Parse accepts any number of trailing slashes (it preserves
+	// the path verbatim), so a TrimRight covers both the operator
+	// typo "https://x/" and the pathological "https://x//".
+	u.Path = strings.TrimRight(u.Path, "/")
 	return u.String(), nil
 }
 

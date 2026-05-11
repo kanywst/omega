@@ -273,17 +273,27 @@ func TestNewRejectsInvalidIssuerURL(t *testing.T) {
 }
 
 func TestNewNormalizesTrailingSlashOnIssuerURL(t *testing.T) {
-	a, err := identity.New(identity.Config{
-		Kind:        identity.KindDisk,
-		TrustDomain: "omega.local",
-		Issuer:      "https://omega.example.com/",
-		Dir:         filepath.Join(t.TempDir(), "ca"),
-	})
-	if err != nil {
-		t.Fatalf("new: %v", err)
+	cases := []struct{ name, issuer, want string }{
+		{"single trailing slash", "https://omega.example.com/", "https://omega.example.com"},
+		{"double trailing slash", "https://omega.example.com//", "https://omega.example.com"},
+		{"path with trailing slash", "https://omega.example.com/oidc/", "https://omega.example.com/oidc"},
+		{"no trailing slash unchanged", "https://omega.example.com", "https://omega.example.com"},
 	}
-	if got := a.IssuerURL(); got != "https://omega.example.com" {
-		t.Fatalf("IssuerURL: got %q want %q", got, "https://omega.example.com")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, err := identity.New(identity.Config{
+				Kind:        identity.KindDisk,
+				TrustDomain: "omega.local",
+				Issuer:      tc.issuer,
+				Dir:         filepath.Join(t.TempDir(), "ca"),
+			})
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+			if got := a.IssuerURL(); got != tc.want {
+				t.Fatalf("IssuerURL: got %q want %q", got, tc.want)
+			}
+		})
 	}
 }
 

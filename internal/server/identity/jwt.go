@@ -155,6 +155,13 @@ func (a *localAuthority) JWTBundle() ([]byte, error) {
 
 // ValidateJWTSVID checks the signature, expiry, and audience of a token.
 // Returns the SPIFFE ID claim on success.
+//
+// The `iss` claim is intentionally NOT validated here even when the
+// authority is configured with an Issuer URL: SPIFFE JWT-SVIDs do not
+// mandate iss, so SPIFFE-only consumers must keep working. External
+// OIDC relying parties (AWS IAM, GCP WIF, K8s SA issuer trust) check
+// iss themselves against the discovery document's issuer field, which
+// is the layer where the enforcement belongs.
 func (a *localAuthority) ValidateJWTSVID(token string, audience string) (spiffeid.ID, error) {
 	parsed, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
