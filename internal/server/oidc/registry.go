@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -102,13 +103,15 @@ func NewRegistry(configs []IdPConfig) (*Registry, error) {
 	return &Registry{idps: idps}, nil
 }
 
-// Names returns the registered IdP names in stable order. Useful for
-// the discovery/log endpoint and for tests.
+// Names returns the registered IdP names in stable (lexicographic)
+// order. Map iteration in Go is non-deterministic, so callers that
+// log or render the names get a consistent listing across runs.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.idps))
 	for n := range r.idps {
 		out = append(out, n)
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -283,13 +286,15 @@ func (c *idpClient) validate(ctx context.Context, idToken string) (*Claims, erro
 		}
 		jwks = c.jwksSnapshot()
 	}
-	var raw map[string]any
-	if err := parsed.Claims(jwks, &raw); err != nil {
+	// One Claims call, two destinations: go-jose verifies the
+	// signature once and unmarshals into every dest. Calling twice
+	// would re-verify the signature against the JWKS for no benefit.
+	var (
+		raw map[string]any
+		std jwt.Claims
+	)
+	if err := parsed.Claims(jwks, &raw, &std); err != nil {
 		return nil, fmt.Errorf("oidc: idp %q: verify id_token: %w", c.cfg.Name, err)
-	}
-	var std jwt.Claims
-	if err := parsed.Claims(jwks, &std); err != nil {
-		return nil, fmt.Errorf("oidc: idp %q: read standard claims: %w", c.cfg.Name, err)
 	}
 	if std.Issuer != c.cfg.Issuer {
 		return nil, fmt.Errorf("oidc: idp %q: iss mismatch (token=%q config=%q)", c.cfg.Name, std.Issuer, c.cfg.Issuer)

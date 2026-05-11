@@ -227,14 +227,24 @@ func TestRegistryRejectsDuplicateIdPName(t *testing.T) {
 	}
 }
 
-func TestRegistryNamesIsStable(t *testing.T) {
+func TestRegistryNamesIsLexicographicallySorted(t *testing.T) {
+	// Register in non-alphabetical order; Names() must still come
+	// back sorted so loggers and tests see a stable listing across
+	// runs (Go map iteration is non-deterministic).
 	reg, _ := oidc.NewRegistry([]oidc.IdPConfig{
-		{Name: "a", Issuer: "https://a.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
-		{Name: "b", Issuer: "https://b.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
+		{Name: "okta", Issuer: "https://okta.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
+		{Name: "corp", Issuer: "https://corp.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
+		{Name: "google", Issuer: "https://google.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
 	})
-	names := reg.Names()
-	if len(names) != 2 {
-		t.Fatalf("len: got %d want 2", len(names))
+	got := reg.Names()
+	want := []string{"corp", "google", "okta"}
+	if len(got) != len(want) {
+		t.Fatalf("len: got %d want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Names()[%d]: got %q want %q", i, got[i], want[i])
+		}
 	}
 }
 
@@ -259,6 +269,26 @@ func TestRenderSPIFFEIDRejectsEmptyClaimReferencedByTemplate(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected error for missing email claim")
+	}
+}
+
+// A claim value that happens to look like a placeholder must NOT
+// trigger a second round of substitution. Single-pass replacement
+// via strings.NewReplacer is the property gemini-code-assist flagged.
+func TestRenderSPIFFEIDDoesNotRecursivelyExpandPlaceholdersInValues(t *testing.T) {
+	got, err := oidc.RenderSPIFFEID(
+		"spiffe://omega.local/humans/{idp}/{email}",
+		&oidc.Claims{IdPName: "corp", Email: "alice+{sub}@example.com"},
+	)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	// `{sub}` inside Email must stay as the literal substring, not
+	// be re-replaced with the (empty) Subject and cause an error or
+	// an unintended path collapse.
+	want := "spiffe://omega.local/humans/corp/alice+{sub}@example.com"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
 	}
 }
 

@@ -53,8 +53,11 @@ func (s *Server) exchangeOIDC(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("OIDC IdP federation is not configured on this server (start omega server with at least one --oidc-idp)"))
 		return
 	}
+	// 1 MiB is two orders of magnitude above the largest realistic
+	// OIDC ID token (a few KiB even for a 50-group user) and bounds
+	// the memory cost of an abusive caller.
 	var req OIDCExchangeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
 		return
 	}

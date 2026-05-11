@@ -12,6 +12,11 @@ import (
 // misconfigured template fails fast instead of producing a SPIFFE ID
 // with an empty path segment.
 //
+// Substitution is single-pass via strings.NewReplacer, so a claim
+// value that happens to contain another placeholder literal (e.g.
+// an email "alice+{sub}@example.com") cannot trigger a second
+// round of replacement.
+//
 // Result is intentionally NOT URL-escaped: the caller (api package)
 // passes the rendered string into spiffeid.FromString, which is the
 // canonical validator. Operators are responsible for choosing
@@ -22,22 +27,26 @@ func RenderSPIFFEID(template string, c *Claims) (string, error) {
 	if c == nil {
 		return "", errors.New("oidc: claims are nil")
 	}
-	subs := map[string]string{
-		"{sub}":                c.Subject,
-		"{idp}":                c.IdPName,
-		"{email}":              c.Email,
-		"{preferred_username}": c.PreferredUN,
-		"{name}":               c.Name,
+	// Pre-flight: reject empty claim values for placeholders that
+	// appear in the template. The order here is the canonical order
+	// of the Replacer pairs below; keep them in sync.
+	checks := []struct{ placeholder, value string }{
+		{"{sub}", c.Subject},
+		{"{idp}", c.IdPName},
+		{"{email}", c.Email},
+		{"{preferred_username}", c.PreferredUN},
+		{"{name}", c.Name},
 	}
-	out := template
-	for k, v := range subs {
-		if !strings.Contains(out, k) {
-			continue
+	for _, ck := range checks {
+		if ck.value == "" && strings.Contains(template, ck.placeholder) {
+			return "", fmt.Errorf("oidc: template uses %s but the claim is empty", ck.placeholder)
 		}
-		if v == "" {
-			return "", fmt.Errorf("oidc: template uses %s but the claim is empty", k)
-		}
-		out = strings.ReplaceAll(out, k, v)
 	}
-	return out, nil
+	return strings.NewReplacer(
+		"{sub}", c.Subject,
+		"{idp}", c.IdPName,
+		"{email}", c.Email,
+		"{preferred_username}", c.PreferredUN,
+		"{name}", c.Name,
+	).Replace(template), nil
 }

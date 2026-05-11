@@ -325,6 +325,13 @@ func isPostgresDSN(spec string) bool {
 // and `template`. Missing required keys are a hard error so a
 // misconfiguration surfaces at startup instead of failing the first
 // /v1/oidc/exchange call.
+//
+// Limitation: values must not themselves contain a comma, because
+// the outer split uses ',' as the key-value separator. SPIFFE ID
+// templates and OIDC URLs do not contain commas in practice; pass
+// the flag multiple times rather than smuggling commas inside one
+// invocation. A shlex-style escape grammar is on the roadmap if a
+// real use case turns up.
 func parseOIDCIdPFlags(specs []string) ([]oidcpkg.IdPConfig, error) {
 	out := make([]oidcpkg.IdPConfig, 0, len(specs))
 	for _, s := range specs {
