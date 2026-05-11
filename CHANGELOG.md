@@ -71,6 +71,14 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- `examples/ca-vault-pki/` — runnable demo of the vault-pki
+  backend. `mock-vault` Go binary stands up its own ECDSA Root CA
+  and exposes the two endpoints omega calls; `run-demo.sh` boots
+  omega with `--ca-backend=vault-pki`, fetches a bundle (must
+  equal the mock CA), submits a workload CSR through
+  `POST /v1/svid`, and asserts the issued leaf both chains to the
+  bundle and carries the requested SPIFFE ID URI SAN. Added to
+  the CI examples matrix.
 - `--ca-backend=vault-pki` — first non-disk CA backend. omega
   forwards CSRs to a Vault PKI mount via `POST /v1/<mount>/sign/<role>`
   and serves the trust anchors via `GET /v1/<mount>/ca_chain`, so
