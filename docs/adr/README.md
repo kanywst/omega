@@ -62,3 +62,4 @@ index to avoid collisions.
 | [0002](0002-postgres-advisory-lock-ha.md) | Postgres advisory-lock leader election over in-process Raft | Accepted |
 | [0003](0003-short-lived-svids-no-revocation.md) | Short-lived SVIDs instead of CRL / OCSP | Accepted |
 | [0004](0004-single-binary-three-roles.md) | Single binary with three runtime roles | Accepted |
+| [0005](0005-ca-plugin-architecture.md) | Authority interface as the CA backend plugin seam | Accepted |

@@ -39,8 +39,13 @@ release as features are ready rather than on a fixed cadence; see
   ID / Google Workspace ID tokens against per-IdP audience and
   template - has shipped; provisioning the user catalog ahead of
   first login is the remaining piece).
-- HSM / KMS-backed CA upstream plugin (Vault PKI, step-ca,
-  AWS Private CA, GCP CAS, Azure Key Vault).
+- HSM / KMS-backed CA upstream plugins (Vault PKI, step-ca,
+  AWS Private CA, GCP CAS, Azure Key Vault). The interface seam
+  is in place ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)
+  with the per-backend how-to in
+  [docs/ca-plugin-guide.md](docs/ca-plugin-guide.md)); individual
+  backend PRs land here as upstream vendors are picked off the
+  list.
 
 ## Tracking (research / spec watch)
 

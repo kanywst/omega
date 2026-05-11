@@ -71,6 +71,17 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- [`docs/adr/0005-ca-plugin-architecture.md`](docs/adr/0005-ca-plugin-architecture.md)
+  records the `identity.Authority` interface as the Plugin-layer
+  seam for CA backends (HSM / KMS / external CAs). Codifies what
+  was implicit in the existing code: new backends are one `Kind`
+  constant + one struct that satisfies the interface + one
+  `switch` case in `identity.New`. Disk backend stays as the
+  zero-config default.
+- [`docs/ca-plugin-guide.md`](docs/ca-plugin-guide.md) is the
+  step-by-step companion - seven steps from picking a Kind name
+  to README updates - including the env-var test-gating pattern
+  for backends that require a real upstream (Vault, KMS, etc.).
 - `examples/audit-otlp/` - end-to-end demo of the OTLP/HTTP-protobuf
   audit forwarder. `cmd/otlp-sink` decodes
   `ExportLogsServiceRequest` bodies into JSONL; `run-demo.sh`
