@@ -71,6 +71,13 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- Agent-side JWKS cache. `internal/agent/workloadapi/server.go`
+  now serves `/v1/jwt/bundle` from a 1-minute TTL'd cache shared
+  between `FetchJWTBundles` (the streaming RPC) and
+  `ValidateJWTSVID` (the unary RPC). Refresh is single-flight via
+  an RWMutex double-check, so 100 concurrent validations after a
+  workload restart cost one control-plane fetch, not 100.
+  Conformance §4.4 entry tightened to match.
 - [`docs/conformance-spiffe.md`](docs/conformance-spiffe.md) and
   [`docs/conformance-authzen.md`](docs/conformance-authzen.md) -
   section-by-section conformance matrices against the SPIFFE

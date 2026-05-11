@@ -73,6 +73,15 @@ func (e *svidEntry) stale(now time.Time) bool {
 	return !now.Before(e.refreshAt())
 }
 
+// jwksCacheTTL bounds how long the agent serves a stale JWKS to
+// `ValidateJWTSVID` and `FetchJWTBundles` callers before re-fetching
+// `/v1/jwt/bundle` from the control plane. One minute is a balance
+// between picking up CA key rotations promptly (the control plane
+// rotates rarely; one-minute lag on rotation is invisible to
+// running workloads) and coalescing the burst of validations that
+// happens after a workload restart.
+const jwksCacheTTL = time.Minute
+
 type Server struct {
 	workloadpb.UnimplementedSpiffeWorkloadAPIServer
 	serverURL  string
@@ -82,6 +91,15 @@ type Server struct {
 
 	mu    sync.Mutex
 	cache map[uint32]*svidEntry
+
+	// jwksMu guards the JWKS cache. Held for read on cache hits;
+	// upgraded to write only across a cache miss + refresh, so
+	// concurrent callers that arrive during a refresh serialise
+	// behind a single control-plane fetch (no thundering herd).
+	jwksMu          sync.RWMutex
+	jwksBytes       []byte
+	jwksTrustDomain string
+	jwksExpiry      time.Time
 }
 
 func NewServer(serverURL string, mapping Mapping) *Server {
@@ -217,7 +235,7 @@ func (s *Server) FetchJWTSVID(ctx context.Context, req *workloadpb.JWTSVIDReques
 // and closes; long-polling for rotation is a planned follow-up.
 func (s *Server) FetchJWTBundles(_ *workloadpb.JWTBundlesRequest, stream workloadpb.SpiffeWorkloadAPI_FetchJWTBundlesServer) error {
 	ctx := stream.Context()
-	jwks, td, err := s.fetchJWTBundle(ctx)
+	jwks, td, err := s.cachedFetchJWTBundle(ctx)
 	if err != nil {
 		return err
 	}
@@ -421,6 +439,38 @@ func credsFromContext(ctx context.Context) (attestor.Creds, error) {
 	return creds, nil
 }
 
+// cachedFetchJWTBundle returns the trust domain's JWKS and trust
+// domain name, serving from an in-memory cache when the previous
+// fetch is still within jwksCacheTTL. On a miss it serialises
+// concurrent callers behind a single control-plane fetch so
+// 100-workload-restarts don't trigger 100 round trips.
+func (s *Server) cachedFetchJWTBundle(ctx context.Context) ([]byte, string, error) {
+	now := s.now()
+	s.jwksMu.RLock()
+	if len(s.jwksBytes) > 0 && now.Before(s.jwksExpiry) {
+		b, td := s.jwksBytes, s.jwksTrustDomain
+		s.jwksMu.RUnlock()
+		return b, td, nil
+	}
+	s.jwksMu.RUnlock()
+
+	s.jwksMu.Lock()
+	defer s.jwksMu.Unlock()
+	// Double-check: another goroutine may have populated the cache
+	// while we were waiting on the write lock.
+	if len(s.jwksBytes) > 0 && s.now().Before(s.jwksExpiry) {
+		return s.jwksBytes, s.jwksTrustDomain, nil
+	}
+	body, td, err := s.fetchJWTBundle(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	s.jwksBytes = body
+	s.jwksTrustDomain = td
+	s.jwksExpiry = s.now().Add(jwksCacheTTL)
+	return body, td, nil
+}
+
 func (s *Server) fetchJWTBundle(ctx context.Context) ([]byte, string, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, s.serverURL+"/v1/jwt/bundle", nil)
 	if err != nil {
@@ -443,7 +493,7 @@ func (s *Server) fetchJWTBundle(ctx context.Context) ([]byte, string, error) {
 }
 
 func validateAgainstJWKS(ctx context.Context, s *Server, token, audience string) (string, map[string]any, error) {
-	jwks, _, err := s.fetchJWTBundle(ctx)
+	jwks, _, err := s.cachedFetchJWTBundle(ctx)
 	if err != nil {
 		return "", nil, err
 	}
