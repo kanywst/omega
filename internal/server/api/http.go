@@ -36,14 +36,15 @@ import (
 var tracer = tracing.Tracer("github.com/0-draft/omega/internal/server/api")
 
 type Server struct {
-	store                 *storage.Store
-	ca                    identity.Authority
-	policy                *policy.Engine
-	federation            *federation.Registry
-	enforceExchangePolicy bool
-	k8sAttestor           *attest.K8sAttestor
-	k8sSVIDTemplate       string
-	oidc                  *oidc.Registry
+	store                   *storage.Store
+	ca                      identity.Authority
+	policy                  *policy.Engine
+	federation              *federation.Registry
+	enforceExchangePolicy   bool
+	k8sAttestor             *attest.K8sAttestor
+	k8sSVIDTemplate         string
+	oidc                    *oidc.Registry
+	spiffeBundleRefreshHint time.Duration
 }
 
 func NewServer(store *storage.Store, ca identity.Authority, pdp *policy.Engine) *Server {
@@ -79,6 +80,18 @@ func (s *Server) WithEnforceTokenExchangePolicy(v bool) *Server {
 func (s *Server) WithK8sAttestor(a *attest.K8sAttestor, template string) *Server {
 	s.k8sAttestor = a
 	s.k8sSVIDTemplate = template
+	return s
+}
+
+// WithSPIFFEBundleRefreshHint sets the `spiffe_refresh_hint` field of
+// the SPIFFE Trust Domain Format document served at
+// `GET /v1/spiffe-bundle`. The value is the recommended minimum
+// interval before peers should re-fetch the bundle. A non-positive
+// duration falls back to the default (300s) so callers that wire
+// `WithSPIFFEBundleRefreshHint(0)` get the default rather than a doc
+// that tells peers to poll continuously.
+func (s *Server) WithSPIFFEBundleRefreshHint(d time.Duration) *Server {
+	s.spiffeBundleRefreshHint = d
 	return s
 }
 
@@ -118,6 +131,7 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /v1/svid", leaderOnly(s.issueSVID))
 	handle("POST /v1/attest/k8s", leaderOnly(s.attestK8s))
 	handle("GET /v1/bundle", s.getBundle)
+	handle("GET /v1/spiffe-bundle", s.getSPIFFEBundle)
 	handle("POST /access/v1/evaluation", leaderOnly(s.evaluateAccess))
 	handle("POST /access/v1/evaluations", leaderOnly(s.evaluateAccessBatch))
 	handle("GET /v1/audit", s.listAudit)
@@ -811,6 +825,42 @@ func (s *Server) getBundle(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(s.ca.BundlePEM())
+}
+
+// defaultSPIFFEBundleRefreshHint mirrors the SPIRE default. The spec
+// itself says nothing about a default value and lets peers fall back
+// to their own polling cadence, but a stated value helps callers that
+// honour the hint converge faster than the conservative defaults they
+// would otherwise pick.
+const defaultSPIFFEBundleRefreshHint = 5 * time.Minute
+
+// getSPIFFEBundle serves the SPIFFE Trust Domain Format JSON document
+// (SPIFFE Trust Domain and Bundle 1.0 §4). The document carries both
+// the X.509-SVID trust anchors and the JWT-SVID public keys in one
+// JWK set, each tagged with `use` so a single endpoint replaces the
+// pair of `/v1/bundle` (PEM) + `/v1/jwt/bundle` (JWKS) for SPIFFE-
+// native consumers.
+//
+// `spiffe_sequence` is fixed to 1 today; omega does not yet rotate the
+// X.509 root or the JWT signing key at runtime, so the bundle is in
+// fact monotonic-at-one for the lifetime of a server process. A real
+// counter lands with key rotation.
+func (s *Server) getSPIFFEBundle(w http.ResponseWriter, _ *http.Request) {
+	hint := s.spiffeBundleRefreshHint
+	if hint <= 0 {
+		hint = defaultSPIFFEBundleRefreshHint
+	}
+	raw, err := identity.BuildSPIFFEBundle(s.ca, identity.SPIFFEBundleOptions{
+		Sequence:    1,
+		RefreshHint: hint,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

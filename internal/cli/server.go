@@ -78,6 +78,7 @@ func newServerCommand() *cobra.Command {
 		haLeaderKey             int64
 		haPollEvery             time.Duration
 		enforceTokenExchangePol bool
+		spiffeBundleRefreshHint time.Duration
 		k8sAttestEnable         bool
 		k8sSVIDTemplate         string
 		k8sTokenAudiences       []string
@@ -222,7 +223,8 @@ func newServerCommand() *cobra.Command {
 
 			apiServer := api.NewServer(store, ca, pdp).
 				WithFederation(fed).
-				WithEnforceTokenExchangePolicy(enforceTokenExchangePol)
+				WithEnforceTokenExchangePolicy(enforceTokenExchangePol).
+				WithSPIFFEBundleRefreshHint(spiffeBundleRefreshHint)
 
 			if len(oidcIdPs) > 0 {
 				cfgs, err := parseOIDCIdPFlags(oidcIdPs)
@@ -343,6 +345,11 @@ func newServerCommand() *cobra.Command {
 		"evaluate POST /v1/token/exchange through the loaded Cedar policy set "+
 			"(action=token.exchange, default-deny). When false, only the built-in "+
 			"impersonation guard is enforced.")
+
+	cmd.Flags().DurationVar(&spiffeBundleRefreshHint, "spiffe-bundle-refresh-hint", 5*time.Minute,
+		"value advertised as `spiffe_refresh_hint` in the SPIFFE Trust Domain Format "+
+			"document served at GET /v1/spiffe-bundle. The recommended minimum "+
+			"interval between peer re-fetches.")
 
 	return cmd
 }

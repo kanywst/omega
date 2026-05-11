@@ -284,6 +284,29 @@ paths:
               schema:
                 type: string
 
+  /v1/spiffe-bundle:
+    get:
+      tags: [svid]
+      operationId: getSPIFFEBundle
+      summary: SPIFFE Trust Domain Format bundle (JSON).
+      description: |
+        Returns the [SPIFFE Trust Domain and Bundle 1.0 §4](https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE_Trust_Domain_and_Bundle.md)
+        Trust Domain Format document. The JWK set in `keys` mixes
+        X.509-SVID trust anchors (`use: x509-svid`, full DER in
+        `x5c`) and JWT-SVID signing keys (`use: jwt-svid`). Peers
+        consuming this endpoint replace the pair of `/v1/bundle`
+        (PEM) + `/v1/jwt/bundle` (JWKS) with one document.
+        `spiffe_sequence` is fixed at 1 until runtime key rotation
+        lands; `spiffe_refresh_hint` is configurable via
+        `--spiffe-bundle-refresh-hint` (default 300s).
+      responses:
+        "200":
+          description: SPIFFE Trust Domain Format document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SPIFFEBundleResponse"
+
   /.well-known/openid-configuration:
     get:
       tags: [oidc]
@@ -796,6 +819,34 @@ components:
           additionalProperties:
             type: string
             description: PEM-encoded trust anchor bundle for one trust domain.
+
+    SPIFFEBundleResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - spiffe_sequence
+        - spiffe_refresh_hint
+        - keys
+      properties:
+        spiffe_sequence:
+          type: integer
+          format: int64
+          description: |
+            Monotonically increasing version of this trust bundle.
+            Omega returns `1` until runtime key rotation is wired up.
+        spiffe_refresh_hint:
+          type: integer
+          description: |
+            Recommended minimum number of seconds peers should wait
+            before re-fetching the bundle.
+        keys:
+          type: array
+          items:
+            type: object
+            description: |
+              JWK per RFC 7517 with an extra `use` parameter set to
+              either `x509-svid` (root certificate; full DER in `x5c`)
+              or `jwt-svid` (JWT signing public key).
 
     JWKS:
       type: object

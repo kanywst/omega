@@ -895,6 +895,38 @@ func TestAuthzenDiscoveryUsesIssuerURLWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestSPIFFEBundleReturnsTDFDocument(t *testing.T) {
+	srv := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/v1/spiffe-bundle")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("content-type: got %q want application/json", got)
+	}
+	var doc struct {
+		Sequence    int64            `json:"spiffe_sequence"`
+		RefreshHint int              `json:"spiffe_refresh_hint"`
+		Keys        []map[string]any `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if doc.Sequence < 1 {
+		t.Errorf("sequence: got %d want >=1", doc.Sequence)
+	}
+	if doc.RefreshHint != 300 {
+		t.Errorf("refresh_hint default: got %d want 300", doc.RefreshHint)
+	}
+	if len(doc.Keys) < 2 {
+		t.Fatalf("keys: got %d entries, want at least one x509-svid and one jwt-svid", len(doc.Keys))
+	}
+}
+
 func TestAuthzenDiscoveryReturns404WhenIssuerNotConfigured(t *testing.T) {
 	srv := newTestServer(t)
 	resp, err := http.Get(srv.URL + "/.well-known/authzen-configuration")

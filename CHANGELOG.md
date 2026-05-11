@@ -71,6 +71,20 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- `GET /v1/spiffe-bundle` — SPIFFE Trust Domain Format (TDF)
+  endpoint. Returns the [SPIFFE Trust Domain and Bundle 1.0 §4](https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE_Trust_Domain_and_Bundle.md)
+  JSON document: X.509-SVID trust anchors (`use: x509-svid`, full
+  DER in `x5c`) and JWT-SVID signing keys (`use: jwt-svid`) in one
+  JWK set, with `spiffe_sequence` and `spiffe_refresh_hint` in the
+  envelope. Peers consuming this endpoint replace the pair of
+  `/v1/bundle` (PEM) + `/v1/jwt/bundle` (JWKS) with one fetch.
+  `spiffe_refresh_hint` is configurable via the new
+  `--spiffe-bundle-refresh-hint` flag (default `5m`).
+  `spiffe_sequence` is fixed at `1` until runtime key rotation
+  lands - omega does not rotate roots without a restart today, so
+  the bundle is monotonic-at-one for the life of a server process.
+  Closes `docs/conformance-spiffe.md` §4.1 (partial → implemented)
+  and moves §6 from deferred → partial.
 - `GET /.well-known/authzen-configuration` — OpenID AuthZEN 1.0 §8
   discovery document advertising the single-decision and batch
   evaluation endpoints. The PDP base URL is `--issuer-url`
