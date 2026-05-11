@@ -359,6 +359,7 @@ func isPostgresDSN(spec string) bool {
 // "token required" error instead of an opaque 403 from Vault.
 func resolveVaultToken(literal, tokenFile string) (string, error) {
 	if tokenFile != "" {
+		// #nosec G304 -- tokenFile is operator-supplied via --ca-vault-pki-token-file, not user input.
 		raw, err := os.ReadFile(tokenFile)
 		if err != nil {
 			return "", fmt.Errorf("read token file %s: %w", tokenFile, err)

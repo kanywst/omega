@@ -77,6 +77,7 @@ func newVaultPKIAuthority(local *localAuthority, cfg Config) (*vaultPKIAuthority
 		// it explicitly rather than asking operators to manage the
 		// system trust store on the omega host. Empty path means "use
 		// the system store".
+		// #nosec G304 -- VaultPKICACertFile is operator-supplied via --ca-vault-pki-ca-cert, not user input.
 		caPEM, err := os.ReadFile(cfg.VaultPKICACertFile)
 		if err != nil {
 			return nil, fmt.Errorf("identity: vault-pki: read ca cert %s: %w", cfg.VaultPKICACertFile, err)
