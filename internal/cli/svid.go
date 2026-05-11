@@ -244,7 +244,10 @@ piping into jq.`,
 			}
 			token := args[0]
 			if token == "-" {
-				raw, err := io.ReadAll(c.InOrStdin())
+				// 1 MiB is two orders of magnitude above the largest
+				// realistic JWT-SVID; bounds memory if something
+				// unexpected ends up on stdin.
+				raw, err := io.ReadAll(io.LimitReader(c.InOrStdin(), 1<<20))
 				if err != nil {
 					return fmt.Errorf("read token from stdin: %w", err)
 				}
