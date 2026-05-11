@@ -35,7 +35,7 @@ Spec versions audited:
 | 4.1 | `FetchX509SVID` streaming RPC | implemented | `internal/agent/workloadapi/server.go` |
 | 4.2 | `FetchX509Bundles` streaming RPC | implemented | streams updates when the local trust bundle changes |
 | 4.3 | `FetchJWTSVID` unary RPC with audience | implemented | forwards to the control plane's `POST /v1/svid/jwt` |
-| 4.4 | `ValidateJWTSVID` unary RPC | implemented | `internal/agent/workloadapi/server.go` `ValidateJWTSVID`; the agent verifies the token locally against the JWKS cached from the control plane (1-minute TTL, single-flight refresh — so a burst of validations costs one `GET /v1/jwt/bundle` per minute, not one per call) |
+| 4.4 | `ValidateJWTSVID` unary RPC | implemented | `internal/agent/workloadapi/server.go` `ValidateJWTSVID`; the agent verifies the token locally against the JWKS cached from the control plane (1-minute TTL; both the raw bytes and the parsed `map[kid]*ecdsa.PublicKey` are kept, so a hot validation path avoids both the `GET /v1/jwt/bundle` and the JSON+curve-point re-parse) |
 | 4.5 | `FetchJWTBundles` streaming RPC | implemented | exposes the trust domain's JWKS |
 | 5 | Security: agent authenticates the caller via OS-level metadata | implemented | `SO_PEERCRED` on Linux; documented residual risk in `docs/threat-model.md` §S1 |
 | 6 | Workload identity is asserted by an SVID | implemented | every fetch returns at least one SPIFFE ID |
