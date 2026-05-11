@@ -98,9 +98,21 @@ KMS-backed one.
 
 ## Step 4 — register in identity.New
 
-Extend the `switch` in `identity.New`:
+Extend the `switch` in `identity.New`. The trust domain is parsed
+once at the top of `New` and the OIDC issuer URL is normalised by
+`normalizeIssuerURL`; both are threaded into every backend
+constructor so the backend struct never sees raw config strings.
 
 ```go
+td, err := spiffeid.TrustDomainFromString(cfg.TrustDomain)
+if err != nil {
+    return nil, fmt.Errorf("identity: trust domain: %w", err)
+}
+issuer, err := normalizeIssuerURL(cfg.Issuer)
+if err != nil {
+    return nil, err
+}
+
 switch cfg.Kind {
 case "", KindDisk:
     // ...existing case...
@@ -108,12 +120,12 @@ case KindVaultPKI:
     if cfg.VaultPKIAddr == "" {
         return nil, errors.New("identity: vault-pki backend requires VaultPKIAddr")
     }
-    a, err := newVaultPKIAuthority(td, cfg.VaultPKIAddr, cfg.VaultPKIToken, cfg.VaultPKIRole)
-    if err != nil {
-        return nil, err
-    }
-    a.issuerURL = issuer // the shared, validated issuer URL
-    return a, nil
+    // Pass issuer + td into the constructor so the returned
+    // *vaultPKIAuthority is fully built. The caller of New sees an
+    // Authority interface, not the concrete type, so post-construction
+    // field assignment is not possible (and not desirable - keeping
+    // construction one-shot makes the backend easier to test).
+    return newVaultPKIAuthority(td, issuer, cfg.VaultPKIAddr, cfg.VaultPKIToken, cfg.VaultPKIRole)
 default:
     return nil, fmt.Errorf("identity: unknown kind %q", cfg.Kind)
 }
@@ -193,20 +205,33 @@ Three places need updating in the same PR:
 3. `ROADMAP.md` "Later" - cross off this backend or move others
    to "Now"/"Next" depending on what is next.
 
-## Out-of-tree plugins
+## Out-of-tree plugins (today: not supported)
 
-Out-of-tree backends are supported through the same mechanism:
+Today, true out-of-tree backends are NOT supported. The
+`Authority` interface lives under
+`internal/server/identity/`, and Go's `internal/` rule blocks
+imports from any module other than `github.com/0-draft/omega`
+itself. Vendoring does not bypass the check - the rule is
+enforced at compile time against the importing module's path,
+not against the source tree.
 
-1. The third-party module imports
-   `github.com/0-draft/omega/internal/server/identity` (this
-   forces vendoring since it is `internal/`).
-2. The third-party `main` constructs an `identity.Authority`
-   directly and passes it into a forked `cmd/omega` entry point.
+If you want to ship a backend out-of-tree, your only options
+today are:
 
-If you maintain a long-lived out-of-tree backend and want it
-upstreamed, open a Discussion first. The bar is: real users, a
-maintainer who can stay on top of interface drift, and a working
-test harness.
+- maintain a hard fork of `github.com/0-draft/omega` with your
+  backend added; or
+- run a separate process that exposes a remote-signing surface
+  (e.g. KMS itself, or a thin sidecar that wraps your backend
+  with a network protocol), and contribute a thin in-tree
+  backend that talks to it over that protocol.
+
+Pulling `Authority` out of `internal/` and into a public package
+like `pkg/identity` is a possible future move that would unlock
+real out-of-tree plugins. It is a one-way decision (the public
+surface becomes part of the API contract), so it should land via
+a future ADR rather than this guide. If you have a concrete
+out-of-tree backend you want upstream support for, open a
+Discussion first - real-user demand drives that ADR.
 
 ## What this guide does not cover
 
