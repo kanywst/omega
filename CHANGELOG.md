@@ -71,6 +71,13 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- `examples/oidc-federation/` - end-to-end demo of
+  `POST /v1/oidc/exchange` driven by a tiny in-process mock OIDC
+  IdP (`mock-idp`). `make demo` exchanges an ID token for an omega
+  JWT-SVID and verifies the rendered SPIFFE ID plus the RFC 8693
+  `act` claim recording the upstream IdP. Added to the CI examples
+  matrix so a regression in the OIDC path fails the same way every
+  other example demo would.
 - OIDC IdP federation for the Human principal. `omega server` gains
   a repeatable `--oidc-idp 'name=...,issuer=...,audience=...,
   template=...'` flag and a new `POST /v1/oidc/exchange` endpoint:
