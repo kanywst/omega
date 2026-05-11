@@ -92,14 +92,26 @@ type Server struct {
 	mu    sync.Mutex
 	cache map[uint32]*svidEntry
 
-	// jwksMu guards the JWKS cache. Held for read on cache hits;
-	// upgraded to write only across a cache miss + refresh, so
-	// concurrent callers that arrive during a refresh serialise
-	// behind a single control-plane fetch (no thundering herd).
-	jwksMu          sync.RWMutex
-	jwksBytes       []byte
-	jwksTrustDomain string
-	jwksExpiry      time.Time
+	// jwksMu guards `jwks`. Released across the control-plane fetch
+	// in cachedJWKS, mirroring the getOrRefresh pattern below: the
+	// trade-off is that two cold-start callers may both fetch, which
+	// is fine for a per-node agent. The win is that a slow or
+	// unresponsive control plane does NOT block cache-hit callers
+	// for the duration of one in-flight refresh.
+	jwksMu sync.Mutex
+	jwks   *jwksSnapshot
+}
+
+// jwksSnapshot is the cached projection of `/v1/jwt/bundle`. raw is
+// what FetchJWTBundles streams back; keys is the parsed map used by
+// validateAgainstJWKS. Both are computed at fetch time so a hot
+// validation path does not re-parse JSON or rebuild big.Int curve
+// points on every RPC.
+type jwksSnapshot struct {
+	raw         []byte
+	keys        map[string]*ecdsa.PublicKey
+	trustDomain string
+	expiry      time.Time
 }
 
 func NewServer(serverURL string, mapping Mapping) *Server {
@@ -439,36 +451,52 @@ func credsFromContext(ctx context.Context) (attestor.Creds, error) {
 	return creds, nil
 }
 
-// cachedFetchJWTBundle returns the trust domain's JWKS and trust
-// domain name, serving from an in-memory cache when the previous
-// fetch is still within jwksCacheTTL. On a miss it serialises
-// concurrent callers behind a single control-plane fetch so
-// 100-workload-restarts don't trigger 100 round trips.
-func (s *Server) cachedFetchJWTBundle(ctx context.Context) ([]byte, string, error) {
-	now := s.now()
-	s.jwksMu.RLock()
-	if len(s.jwksBytes) > 0 && now.Before(s.jwksExpiry) {
-		b, td := s.jwksBytes, s.jwksTrustDomain
-		s.jwksMu.RUnlock()
-		return b, td, nil
-	}
-	s.jwksMu.RUnlock()
-
+// cachedJWKS returns the JWKS snapshot, serving the in-memory cache
+// when it is fresh. On a miss the lock is released across the
+// control-plane fetch (same pattern as getOrRefresh) so cache-hit
+// callers are never blocked by a slow upstream; concurrent
+// refreshes may both fetch, the last write wins, both observers
+// end up with valid snapshots.
+//
+// The parsed `keys` field is populated alongside the raw bytes so
+// validateAgainstJWKS never re-parses on a hot path.
+func (s *Server) cachedJWKS(ctx context.Context) (*jwksSnapshot, error) {
 	s.jwksMu.Lock()
-	defer s.jwksMu.Unlock()
-	// Double-check: another goroutine may have populated the cache
-	// while we were waiting on the write lock.
-	if len(s.jwksBytes) > 0 && s.now().Before(s.jwksExpiry) {
-		return s.jwksBytes, s.jwksTrustDomain, nil
+	if s.jwks != nil && s.now().Before(s.jwks.expiry) {
+		snap := s.jwks
+		s.jwksMu.Unlock()
+		return snap, nil
 	}
+	s.jwksMu.Unlock()
+
 	body, td, err := s.fetchJWTBundle(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := parseJWKS(body)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "parse jwks: %v", err)
+	}
+	snap := &jwksSnapshot{
+		raw:         body,
+		keys:        keys,
+		trustDomain: td,
+		expiry:      s.now().Add(jwksCacheTTL),
+	}
+	s.jwksMu.Lock()
+	s.jwks = snap
+	s.jwksMu.Unlock()
+	return snap, nil
+}
+
+// cachedFetchJWTBundle keeps the public-facing shape (`[]byte, td,
+// error`) for FetchJWTBundles streaming.
+func (s *Server) cachedFetchJWTBundle(ctx context.Context) ([]byte, string, error) {
+	snap, err := s.cachedJWKS(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-	s.jwksBytes = body
-	s.jwksTrustDomain = td
-	s.jwksExpiry = s.now().Add(jwksCacheTTL)
-	return body, td, nil
+	return snap.raw, snap.trustDomain, nil
 }
 
 func (s *Server) fetchJWTBundle(ctx context.Context) ([]byte, string, error) {
@@ -493,14 +521,11 @@ func (s *Server) fetchJWTBundle(ctx context.Context) ([]byte, string, error) {
 }
 
 func validateAgainstJWKS(ctx context.Context, s *Server, token, audience string) (string, map[string]any, error) {
-	jwks, _, err := s.cachedFetchJWTBundle(ctx)
+	snap, err := s.cachedJWKS(ctx)
 	if err != nil {
 		return "", nil, err
 	}
-	keySet, err := parseJWKS(jwks)
-	if err != nil {
-		return "", nil, status.Errorf(codes.Internal, "parse jwks: %v", err)
-	}
+	keySet := snap.keys
 	parsed, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
 		return "", nil, status.Errorf(codes.InvalidArgument, "parse jwt: %v", err)
