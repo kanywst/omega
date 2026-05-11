@@ -71,6 +71,12 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- `examples/audit-otlp/` - end-to-end demo of the OTLP/HTTP-protobuf
+  audit forwarder. `cmd/otlp-sink` decodes
+  `ExportLogsServiceRequest` bodies into JSONL; `run-demo.sh`
+  drives a domain create + an AuthZEN evaluation and asserts both
+  rows arrived at the sink with their hash-chain attributes
+  populated. Added to the CI examples matrix.
 - `examples/oidc-federation/` - end-to-end demo of
   `POST /v1/oidc/exchange` driven by a tiny in-process mock OIDC
   IdP (`mock-idp`). `make demo` exchanges an ID token for an omega

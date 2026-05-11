@@ -65,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [federation, postgres, postgres-ha, mcp-a2a-delegation, audit-siem, oidc-federation]
+        example: [federation, postgres, postgres-ha, mcp-a2a-delegation, audit-siem, oidc-federation, audit-otlp]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
