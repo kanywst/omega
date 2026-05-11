@@ -81,6 +81,9 @@ func newServerCommand() *cobra.Command {
 		k8sSVIDTemplate         string
 		k8sTokenAudiences       []string
 		k8sKubeconfig           string
+		auditOTLPEndpoint       string
+		auditOTLPInsecure       bool
+		auditOTLPHeaders        []string
 	)
 
 	cmd := &cobra.Command{
@@ -157,6 +160,28 @@ func newServerCommand() *cobra.Command {
 				})
 				go pump.Run(ctx)
 				fmt.Fprintf(os.Stderr, "omega server: audit forwarder=webhook url=%s\n", webhookURL)
+			}
+
+			if strings.TrimSpace(auditOTLPEndpoint) != "" {
+				headers, err := parseHeaderFlags(auditOTLPHeaders)
+				if err != nil {
+					return fmt.Errorf("audit otlp: %w", err)
+				}
+				fwd, err := audit.NewOTLPForwarder(audit.OTLPConfig{
+					Endpoint:    auditOTLPEndpoint,
+					Insecure:    auditOTLPInsecure,
+					Headers:     headers,
+					ServiceName: "omega-server",
+				})
+				if err != nil {
+					return fmt.Errorf("audit otlp: %w", err)
+				}
+				pump := audit.NewPump(store, fwd, audit.PumpConfig{
+					BatchSize:    auditBatch,
+					PollInterval: auditPoll,
+				})
+				go pump.Run(ctx)
+				fmt.Fprintf(os.Stderr, "omega server: audit forwarder=otlp endpoint=%s\n", auditOTLPEndpoint)
 			}
 
 			shutdownTracing, err := tracing.Setup(ctx, tracing.Config{
@@ -254,6 +279,13 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&k8sKubeconfig, "kubeconfig", "",
 		"path to a kubeconfig for out-of-cluster runs (used by --k8s-attest). Empty = use the in-cluster ServiceAccount config, falling back to the default kubeconfig discovery if that fails.")
 
+	cmd.Flags().StringVar(&auditOTLPEndpoint, "audit-otlp-endpoint", "",
+		"OTLP/HTTP-protobuf logs endpoint (e.g. otel-collector:4318 or https://otel.example.com). Empty disables OTLP audit forwarding. /v1/logs is appended automatically.")
+	cmd.Flags().BoolVar(&auditOTLPInsecure, "audit-otlp-insecure", false,
+		"use the http scheme when --audit-otlp-endpoint omits one. Ignored when the endpoint already specifies http:// or https://.")
+	cmd.Flags().StringArrayVar(&auditOTLPHeaders, "audit-otlp-header", nil,
+		"extra HTTP header on each OTLP export, format 'Key: value'. Repeatable; use to inject auth tokens (e.g. 'Authorization: Bearer ...').")
+
 	cmd.Flags().BoolVar(&enforceTokenExchangePol, "enforce-token-exchange-policy", false,
 		"evaluate POST /v1/token/exchange through the loaded Cedar policy set "+
 			"(action=token.exchange, default-deny). When false, only the built-in "+
@@ -266,6 +298,30 @@ func newServerCommand() *cobra.Command {
 // whether to start leader election without exporting it from storage.
 func isPostgresDSN(spec string) bool {
 	return strings.HasPrefix(spec, "postgres://") || strings.HasPrefix(spec, "postgresql://")
+}
+
+// parseHeaderFlags turns repeated "Key: value" flag values into a
+// header map. Whitespace around the key and value is trimmed; an
+// empty key or a missing colon is a hard error so misconfigured
+// flags surface at startup instead of silently dropping auth.
+func parseHeaderFlags(specs []string) (map[string]string, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(specs))
+	for _, s := range specs {
+		k, v, ok := strings.Cut(s, ":")
+		if !ok {
+			return nil, fmt.Errorf("invalid header %q (expected 'Key: value')", s)
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" {
+			return nil, fmt.Errorf("invalid header %q (empty key)", s)
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 // parseFederatePeers parses --federate-with values like
