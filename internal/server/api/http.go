@@ -102,6 +102,7 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /v1/svid", leaderOnly(s.issueSVID))
 	handle("GET /v1/bundle", s.getBundle)
 	handle("POST /access/v1/evaluation", leaderOnly(s.evaluateAccess))
+	handle("POST /access/v1/evaluations", leaderOnly(s.evaluateAccessBatch))
 	handle("GET /v1/audit", s.listAudit)
 	handle("GET /v1/audit/verify", s.verifyAudit)
 	handle("POST /v1/svid/jwt", leaderOnly(s.issueJWTSVID))
@@ -467,6 +468,134 @@ func (s *Server) evaluateAccess(w http.ResponseWriter, r *http.Request) {
 		}),
 	})
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// BatchEvalSubrequest is one entry in a POST /access/v1/evaluations
+// request body. Each field is optional: when omitted, the request
+// inherits the top-level default from BatchEvalRequest.
+type BatchEvalSubrequest struct {
+	Subject  *policy.Entity `json:"subject,omitempty"`
+	Action   *policy.Action `json:"action,omitempty"`
+	Resource *policy.Entity `json:"resource,omitempty"`
+	Context  map[string]any `json:"context,omitempty"`
+}
+
+// BatchEvalRequest is the request body for POST /access/v1/evaluations
+// (AuthZEN 1.0 §5.2). Top-level subject/action/resource/context act as
+// defaults that every entry in `evaluations` inherits unless the entry
+// overrides them. The most common use is "one subject, many resources"
+// or "one subject, many actions" - the caller fills in the constant
+// fields at the top and varies only the differing one per sub-request.
+type BatchEvalRequest struct {
+	Subject     *policy.Entity        `json:"subject,omitempty"`
+	Action      *policy.Action        `json:"action,omitempty"`
+	Resource    *policy.Entity        `json:"resource,omitempty"`
+	Context     map[string]any        `json:"context,omitempty"`
+	Evaluations []BatchEvalSubrequest `json:"evaluations"`
+}
+
+// BatchEvalResponse mirrors AuthZEN 1.0 §5.2: a parallel array of
+// per-evaluation decisions in the same order as the request.
+type BatchEvalResponse struct {
+	Evaluations []policy.EvalResponse `json:"evaluations"`
+}
+
+// evaluateAccessBatch implements the AuthZEN 1.0 batch endpoint.
+// Each sub-request inherits defaults from the top-level fields, is
+// validated as a complete EvalRequest, evaluated through the same
+// PDP path as single evaluation, and audited per-decision so the
+// hash chain records one row per decision (matching what callers
+// already see when they fan out single calls themselves).
+func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
+	var req BatchEvalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+		return
+	}
+	_, batchSpan := tracer.Start(r.Context(), "policy.EvaluateBatch",
+		trace.WithAttributes(
+			attribute.Int("authzen.batch.size", len(req.Evaluations)),
+		),
+	)
+	defer batchSpan.End()
+
+	out := BatchEvalResponse{Evaluations: make([]policy.EvalResponse, 0, len(req.Evaluations))}
+	for i, sub := range req.Evaluations {
+		merged, err := mergeBatchEval(req, sub)
+		if err != nil {
+			batchSpan.RecordError(err)
+			batchSpan.SetStatus(codes.Error, "merge")
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("evaluations[%d]: %w", i, err))
+			return
+		}
+		start := time.Now()
+		resp, err := s.policy.Evaluate(merged)
+		metrics.DecisionLatency.Observe(time.Since(start).Seconds())
+		if err != nil {
+			batchSpan.RecordError(err)
+			batchSpan.SetStatus(codes.Error, "evaluate")
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("evaluations[%d]: %w", i, err))
+			return
+		}
+		decision := "deny"
+		if resp.Decision {
+			decision = "allow"
+		}
+		metrics.Decisions.WithLabelValues(decision).Inc()
+		s.audit(r.Context(), storage.AuditEvent{
+			Kind:     "access.evaluate",
+			Subject:  merged.Subject.ID,
+			Decision: decision,
+			Payload: mustJSON(map[string]any{
+				"request":  merged,
+				"response": resp,
+				"batch":    map[string]any{"index": i, "size": len(req.Evaluations)},
+			}),
+		})
+		out.Evaluations = append(out.Evaluations, resp)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// mergeBatchEval applies per-evaluation overrides on top of the
+// batch-level defaults and returns a complete EvalRequest. Missing
+// required fields after merging are a validation error: the spec
+// expects every evaluation to resolve to a full request.
+func mergeBatchEval(top BatchEvalRequest, sub BatchEvalSubrequest) (policy.EvalRequest, error) {
+	pick := func(override, def *policy.Entity) *policy.Entity {
+		if override != nil {
+			return override
+		}
+		return def
+	}
+	pickAction := func(override, def *policy.Action) *policy.Action {
+		if override != nil {
+			return override
+		}
+		return def
+	}
+	subject := pick(sub.Subject, top.Subject)
+	action := pickAction(sub.Action, top.Action)
+	resource := pick(sub.Resource, top.Resource)
+	if subject == nil {
+		return policy.EvalRequest{}, errors.New("subject is required (no default at top level, no override on this evaluation)")
+	}
+	if action == nil {
+		return policy.EvalRequest{}, errors.New("action is required")
+	}
+	if resource == nil {
+		return policy.EvalRequest{}, errors.New("resource is required")
+	}
+	ctx := top.Context
+	if sub.Context != nil {
+		ctx = sub.Context
+	}
+	return policy.EvalRequest{
+		Subject:  *subject,
+		Action:   *action,
+		Resource: *resource,
+		Context:  ctx,
+	}, nil
 }
 
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {

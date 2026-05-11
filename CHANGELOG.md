@@ -56,6 +56,14 @@ changes (see [SECURITY.md](SECURITY.md)).
   Omega-issued tokens without a custom adapter. With the flag
   unset, JWT-SVID behaviour is unchanged (no `iss` claim, no
   discovery document - the endpoint returns 404).
+- `POST /access/v1/evaluations` - AuthZEN 1.0 batch evaluation. Top
+  level `subject` / `action` / `resource` / `context` act as
+  defaults that each entry in `evaluations` inherits unless
+  overridden. Returns decisions in input order. Audited per
+  decision so the hash chain records one row per decision, same
+  shape as the single-evaluation endpoint. Closes the spec-required
+  AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
+  remain on the roadmap).
 
 ## [0.0.1] - 2026-05-01
 

@@ -109,7 +109,8 @@ Components are independently runnable (`omega server identity`, `omega server po
 | GET    | `/v1/domains/{name}`              | Fetch a domain                                                         |
 | POST   | `/v1/svid`                        | Issue an X.509-SVID from a CSR (`{spiffe_id, csr}`)                    |
 | GET    | `/v1/bundle`                      | Trust bundle PEM (CA cert)                                             |
-| POST   | `/access/v1/evaluation`           | OpenID AuthZEN 1.0 PDP evaluation                                      |
+| POST   | `/access/v1/evaluation`           | OpenID AuthZEN 1.0 PDP evaluation (single decision)                    |
+| POST   | `/access/v1/evaluations`          | OpenID AuthZEN 1.0 PDP evaluation (batch, with top-level defaults)     |
 | GET    | `/.well-known/openid-configuration` | OIDC discovery (when `--issuer-url` is set; for AWS IAM, GCP WIF, K8s) |
 
 The full HTTP surface (request/response shapes, status codes, leader-only endpoints, federation and audit routes) is described in the OpenAPI 3.1 specification at [`api/openapi.yaml`](api/openapi.yaml).
