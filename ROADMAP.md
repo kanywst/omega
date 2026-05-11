@@ -40,9 +40,6 @@ release as features are ready rather than on a fixed cadence; see
   the README's "Three subjects" table from `tracked` to
   `implemented`.
 - SCIM 2.0 provisioning endpoint for the Human subject.
-- OTLP audit forwarder (`audit.Pump` sink) for Splunk / Loki / Sentry
-  / cloud logging integrations, complementing the existing webhook
-  forwarder.
 - HSM / KMS-backed CA upstream plugin (Vault PKI, step-ca,
   AWS Private CA, GCP CAS, Azure Key Vault).
 

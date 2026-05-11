@@ -64,6 +64,14 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- OTLP/HTTP-protobuf audit forwarder. `omega server` gains
+  `--audit-otlp-endpoint`, `--audit-otlp-insecure`, and a repeatable
+  `--audit-otlp-header 'Key: value'` flag; each audit row is shipped
+  to the configured collector as one `LogRecord` with hash-chain
+  fields surfaced as attributes (`omega.audit.{seq,kind,hash,
+  prev_hash,subject,decision,payload}`). Watermark is independent
+  from the existing webhook forwarder, so the two can run together.
+  Empty endpoint keeps OTLP forwarding off.
 - `POST /v1/attest/k8s` - Kubernetes ServiceAccount projected token
   attestation. Workload presents the projected token plus a CSR;
   the server validates the token through kube-apiserver's
