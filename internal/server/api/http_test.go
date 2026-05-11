@@ -230,6 +230,98 @@ func TestHTTPAccessEvaluationDenyByDefault(t *testing.T) {
 	}
 }
 
+func TestHTTPAccessEvaluationsBatch(t *testing.T) {
+	pdp := policy.New()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.cedar"), []byte(`permit (
+  principal == Spiffe::"spiffe://omega.local/example/web",
+  action == Action::"GET",
+  resource == HttpPath::"/api/foo"
+);
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if err := pdp.LoadDir(dir); err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+	srv := newTestServerWithPolicy(t, pdp)
+
+	body := []byte(`{
+  "subject": {"type":"Spiffe","id":"spiffe://omega.local/example/web"},
+  "action":  {"name":"GET"},
+  "evaluations": [
+    {"resource": {"type":"HttpPath","id":"/api/foo"}},
+    {"resource": {"type":"HttpPath","id":"/api/bar"}},
+    {"resource": {"type":"HttpPath","id":"/api/foo"}, "action": {"name":"DELETE"}}
+  ]
+}`)
+	resp, err := http.Post(srv.URL+"/access/v1/evaluations", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200 (body=%s)", resp.StatusCode, raw)
+	}
+	var out api.BatchEvalResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := len(out.Evaluations); got != 3 {
+		t.Fatalf("evaluations: got %d want 3", got)
+	}
+	// Order is preserved: foo (allow), bar (deny by default), foo+DELETE (deny).
+	if !out.Evaluations[0].Decision {
+		t.Errorf("eval[0]: expected allow on /api/foo + GET")
+	}
+	if out.Evaluations[1].Decision {
+		t.Errorf("eval[1]: expected deny on /api/bar (no policy)")
+	}
+	if out.Evaluations[2].Decision {
+		t.Errorf("eval[2]: expected deny on /api/foo + DELETE (action override)")
+	}
+}
+
+func TestHTTPAccessEvaluationsEmptyArrayReturnsEmptyResponse(t *testing.T) {
+	srv := newTestServer(t)
+	resp, err := http.Post(srv.URL+"/access/v1/evaluations", "application/json",
+		strings.NewReader(`{"evaluations": []}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+	var out api.BatchEvalResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Evaluations) != 0 {
+		t.Errorf("evaluations: got %d want 0", len(out.Evaluations))
+	}
+}
+
+func TestHTTPAccessEvaluationsRejectsIncompleteSubrequest(t *testing.T) {
+	srv := newTestServer(t)
+	// No top-level resource and the sole sub-request omits it too -
+	// merging cannot produce a complete EvalRequest.
+	body := []byte(`{
+  "subject": {"type":"Spiffe","id":"spiffe://omega.local/x"},
+  "action":  {"name":"GET"},
+  "evaluations": [{}]
+}`)
+	resp, err := http.Post(srv.URL+"/access/v1/evaluations", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", resp.StatusCode)
+	}
+}
+
 func TestHTTPAccessEvaluationBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	body := []byte(`{"subject":{"type":"","id":""},"action":{"name":""},"resource":{"type":"","id":""}}`)
@@ -442,6 +534,7 @@ func TestHTTPLeaderGate(t *testing.T) {
 		{"POST", "/v1/domains", `{"name":"x"}`},
 		{"POST", "/v1/svid", `{"spiffe_id":"spiffe://omega.local/x","csr":""}`},
 		{"POST", "/access/v1/evaluation", `{"subject":{"type":"Spiffe","id":"spiffe://omega.local/x"},"action":{"name":"GET"},"resource":{"type":"HttpPath","id":"/"}}`},
+		{"POST", "/access/v1/evaluations", `{"subject":{"type":"Spiffe","id":"spiffe://omega.local/x"},"action":{"name":"GET"},"evaluations":[{"resource":{"type":"HttpPath","id":"/a"}}]}`},
 		{"POST", "/v1/svid/jwt", `{"spiffe_id":"spiffe://omega.local/x","audience":["a"]}`},
 	}
 	for _, tc := range cases {

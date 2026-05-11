@@ -294,6 +294,37 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /access/v1/evaluations:
+    post:
+      tags: [authzen, leader-only]
+      operationId: evaluateAccessBatch
+      summary: AuthZEN 1.0 batch evaluation.
+      description: |
+        Implements the [AuthZEN 1.0 §5.2](https://openid.net/specs/authorization-api-1_0.html)
+        batch endpoint. Top-level `subject` / `action` / `resource`
+        / `context` act as defaults; each entry in `evaluations`
+        inherits them unless it provides its own override. Each
+        evaluation runs through the same policy path as the
+        single-decision endpoint and produces one audit-log row,
+        in the same order as the request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchEvalRequest"
+      responses:
+        "200":
+          description: Per-evaluation decisions in input order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchEvalResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
   /access/v1/evaluation:
     post:
       tags: [authzen, leader-only]
@@ -653,6 +684,58 @@ components:
           description: |
             Identifiers of the policies that produced the decision.
             Order is not stable; use only for observability.
+
+    BatchEvalSubrequest:
+      type: object
+      additionalProperties: false
+      description: |
+        One entry in a batch evaluation. Every field is optional;
+        omitted fields inherit the top-level default from
+        `BatchEvalRequest`.
+      properties:
+        subject:
+          $ref: "#/components/schemas/EvalEntity"
+        action:
+          $ref: "#/components/schemas/EvalAction"
+        resource:
+          $ref: "#/components/schemas/EvalEntity"
+        context:
+          type: object
+          additionalProperties: true
+
+    BatchEvalRequest:
+      type: object
+      additionalProperties: false
+      required: [evaluations]
+      description: |
+        AuthZEN 1.0 batch evaluation request. Top-level subject /
+        action / resource / context are defaults. After merging each
+        entry with the defaults the result must be a complete
+        evaluation; a missing required field is `400 Bad Request`.
+      properties:
+        subject:
+          $ref: "#/components/schemas/EvalEntity"
+        action:
+          $ref: "#/components/schemas/EvalAction"
+        resource:
+          $ref: "#/components/schemas/EvalEntity"
+        context:
+          type: object
+          additionalProperties: true
+        evaluations:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchEvalSubrequest"
+
+    BatchEvalResponse:
+      type: object
+      additionalProperties: false
+      required: [evaluations]
+      properties:
+        evaluations:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalResponse"
 
     TokenExchangeRequest:
       type: object
