@@ -135,15 +135,20 @@ func (r *Registry) Run(ctx context.Context) {
 			r.refreshAll(ctx)
 		}
 	}
-	// time.After (not Ticker) so the cadence can be re-derived after
-	// every round from the peer-supplied refresh hints. A Ticker would
-	// require Stop/recreate gymnastics every time the effective
-	// interval changes.
+	// Use NewTimer (not time.After) so a context cancellation while
+	// the timer is armed lets us Stop() it immediately. With
+	// EffectiveRefresh allowed up to 1h, time.After would otherwise
+	// keep the timer reachable for up to that hour after the loop
+	// exits. Also re-derives the cadence each iteration so the
+	// peer-supplied refresh hint takes effect without Ticker.Reset
+	// gymnastics.
 	for {
+		timer := time.NewTimer(r.EffectiveRefresh())
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(r.EffectiveRefresh()):
+		case <-timer.C:
 			r.refreshAll(ctx)
 		}
 	}
