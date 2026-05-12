@@ -4,7 +4,7 @@
 # Two-stage build using Next.js standalone output, served from a distroless
 # Node.js runtime so the final image has no shell and no package manager.
 
-FROM node:25-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
