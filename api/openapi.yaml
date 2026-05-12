@@ -1006,12 +1006,14 @@ components:
       properties:
         subjects:
           type: array
+          maxItems: 100
           description: |
             Caller-supplied candidate subjects to test. omega does not
             enumerate principals on its own; the spec's §5.3.2 allows
             the PDP to error when it cannot resolve the search space,
             and a candidate list refines that contract into something
-            useful.
+            useful. Capped at 100 (`MaxSearchCandidates`) for the
+            same hash-chain-mutex reason as the batch endpoint.
           items:
             $ref: "#/components/schemas/EvalEntity"
         action:
@@ -1043,6 +1045,7 @@ components:
       properties:
         resources:
           type: array
+          maxItems: 100
           items:
             $ref: "#/components/schemas/EvalEntity"
         subject:
@@ -1074,6 +1077,7 @@ components:
       properties:
         actions:
           type: array
+          maxItems: 100
           items:
             $ref: "#/components/schemas/EvalAction"
         subject:

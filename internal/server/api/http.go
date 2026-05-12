@@ -926,7 +926,7 @@ func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 	)
 	defer span.End()
 
-	var matched []policy.Entity
+	matched := make([]policy.Entity, 0, len(req.Subjects))
 	for i := range req.Subjects {
 		eval := policy.EvalRequest{
 			Subject:  req.Subjects[i],
@@ -972,7 +972,7 @@ func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
 	)
 	defer span.End()
 
-	var matched []policy.Entity
+	matched := make([]policy.Entity, 0, len(req.Resources))
 	for i := range req.Resources {
 		eval := policy.EvalRequest{
 			Subject:  req.Subject,
@@ -1035,7 +1035,7 @@ func (s *Server) searchAction(w http.ResponseWriter, r *http.Request) {
 			matched = append(matched, req.Actions[i])
 		}
 	}
-	results, page := paginateActions(matched, req.Page)
+	results, page := paginate(matched, req.Page)
 	writeJSON(w, http.StatusOK, ActionSearchResponse{Results: results, Page: page})
 }
 
@@ -1072,10 +1072,12 @@ func (s *Server) evaluateForSearch(ctx context.Context, eval policy.EvalRequest,
 	return resp.Decision, true
 }
 
-// paginate applies the request's offset/size to the matched-entity
+// paginate applies the request's offset/size to a matched-candidate
 // list and returns the slice plus the page envelope echoed back to
 // the caller (with a next_token marker when more results remain).
-func paginate(matched []policy.Entity, page *SearchPage) ([]policy.Entity, *SearchPage) {
+// Generic over the candidate element type so subject/resource/action
+// search all share one implementation.
+func paginate[T any](matched []T, page *SearchPage) ([]T, *SearchPage) {
 	offset, size := 0, len(matched)
 	if page != nil {
 		if page.Offset > 0 {
@@ -1088,35 +1090,7 @@ func paginate(matched []policy.Entity, page *SearchPage) ([]policy.Entity, *Sear
 		}
 	}
 	if offset >= len(matched) {
-		return []policy.Entity{}, &SearchPage{Size: 0, Offset: offset}
-	}
-	end := min(offset+size, len(matched))
-	out := SearchPage{Size: size, Offset: offset}
-	if end < len(matched) {
-		out.NextToken = fmt.Sprintf("offset:%d", end)
-	}
-	if matched[offset:end] == nil {
-		return []policy.Entity{}, &out
-	}
-	return matched[offset:end], &out
-}
-
-// paginateActions is the policy.Action variant. The trivial element
-// type difference does not justify generics here.
-func paginateActions(matched []policy.Action, page *SearchPage) ([]policy.Action, *SearchPage) {
-	offset, size := 0, len(matched)
-	if page != nil {
-		if page.Offset > 0 {
-			offset = page.Offset
-		}
-		if page.Size > 0 && page.Size < size-offset {
-			size = page.Size
-		} else {
-			size = max(0, len(matched)-offset)
-		}
-	}
-	if offset >= len(matched) {
-		return []policy.Action{}, &SearchPage{Size: 0, Offset: offset}
+		return []T{}, &SearchPage{Size: 0, Offset: offset}
 	}
 	end := min(offset+size, len(matched))
 	out := SearchPage{Size: size, Offset: offset}
