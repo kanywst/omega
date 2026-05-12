@@ -107,12 +107,21 @@ wait_for_url "http://127.0.0.1:$SERVER_PORT/healthz" "$DEMO_DIR/server.log"
 # demo, and seeing the openssl error is the fastest path to a fix.
 openssl ecparam -name prime256v1 -genkey -noout -out "$DEMO_DIR/wl.key"
 openssl req -new -key "$DEMO_DIR/wl.key" -subj "/CN=omega-k8s-attest-workload" -out "$DEMO_DIR/wl.csr"
-CSR_PEM_JSON=$(python3 -c "import json; print(json.dumps(open('$DEMO_DIR/wl.csr').read()))")
+
+# Build the request body entirely in Python with the shell values
+# delivered through argv (token + CSR path), so a value that happened
+# to contain a quote or backslash cannot break out of the JSON.
+build_attest_payload() {
+	python3 -c "
+import json, sys
+print(json.dumps({'token': sys.argv[1], 'csr': open(sys.argv[2]).read()}))
+" "$1" "$DEMO_DIR/wl.csr"
+}
 
 echo "[demo] attesting with a correct-audience token (expect 200)"
 SVID_JSON=$(curl -fsS -X POST "http://127.0.0.1:$SERVER_PORT/v1/attest/k8s" \
 	-H 'content-type: application/json' \
-	-d "{\"token\":\"$TOKEN\",\"csr\":$CSR_PEM_JSON}")
+	-d "$(build_attest_payload "$TOKEN")")
 
 GOT_SPIFFE_ID=$(echo "$SVID_JSON" | python3 -c "import sys,json; sys.stdout.write(json.load(sys.stdin)['spiffe_id'])")
 if [[ "$GOT_SPIFFE_ID" != "$EXPECTED_SPIFFE_ID" ]]; then
@@ -140,7 +149,7 @@ echo "[demo] attesting with a wrong-audience token (expect 401)"
 STATUS=$(curl -s -o "$DEMO_DIR/wrong.json" -w '%{http_code}' \
 	-X POST "http://127.0.0.1:$SERVER_PORT/v1/attest/k8s" \
 	-H 'content-type: application/json' \
-	-d "{\"token\":\"$WRONG_TOKEN\",\"csr\":$CSR_PEM_JSON}")
+	-d "$(build_attest_payload "$WRONG_TOKEN")")
 if [[ "$STATUS" != "401" ]]; then
 	echo "[demo] FAIL: wrong-audience token: got HTTP $STATUS, want 401"
 	cat "$DEMO_DIR/wrong.json" | sed 's/^/       /'
