@@ -354,6 +354,164 @@ func TestHTTPAccessEvaluationsRejectsIncompleteSubrequest(t *testing.T) {
 	}
 }
 
+func TestHTTPSearchSubjectFiltersCandidates(t *testing.T) {
+	pdp := policy.New()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.cedar"), []byte(`permit (
+  principal == Spiffe::"spiffe://omega.local/alice",
+  action == Action::"GET",
+  resource == HttpPath::"/api/foo"
+);
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if err := pdp.LoadDir(dir); err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+	srv := newTestServerWithPolicy(t, pdp)
+
+	body := []byte(`{
+  "subjects": [
+    {"type":"Spiffe","id":"spiffe://omega.local/alice"},
+    {"type":"Spiffe","id":"spiffe://omega.local/bob"}
+  ],
+  "action":   {"name":"GET"},
+  "resource": {"type":"HttpPath","id":"/api/foo"}
+}`)
+	resp, err := http.Post(srv.URL+"/access/v1/search/subject", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200 (body=%s)", resp.StatusCode, raw)
+	}
+	var out api.SubjectSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Results) != 1 || out.Results[0].ID != "spiffe://omega.local/alice" {
+		t.Errorf("results: got %v want [alice]", out.Results)
+	}
+}
+
+func TestHTTPSearchResourceFiltersCandidates(t *testing.T) {
+	pdp := policy.New()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.cedar"), []byte(`permit (
+  principal == Spiffe::"spiffe://omega.local/alice",
+  action == Action::"GET",
+  resource == HttpPath::"/api/foo"
+);
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if err := pdp.LoadDir(dir); err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+	srv := newTestServerWithPolicy(t, pdp)
+
+	body := []byte(`{
+  "resources": [
+    {"type":"HttpPath","id":"/api/foo"},
+    {"type":"HttpPath","id":"/api/bar"}
+  ],
+  "subject": {"type":"Spiffe","id":"spiffe://omega.local/alice"},
+  "action":  {"name":"GET"}
+}`)
+	resp, err := http.Post(srv.URL+"/access/v1/search/resource", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200 (body=%s)", resp.StatusCode, raw)
+	}
+	var out api.ResourceSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Results) != 1 || out.Results[0].ID != "/api/foo" {
+		t.Errorf("results: got %v want [/api/foo]", out.Results)
+	}
+}
+
+func TestHTTPSearchActionFiltersCandidates(t *testing.T) {
+	pdp := policy.New()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.cedar"), []byte(`permit (
+  principal == Spiffe::"spiffe://omega.local/alice",
+  action == Action::"GET",
+  resource == HttpPath::"/api/foo"
+);
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if err := pdp.LoadDir(dir); err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+	srv := newTestServerWithPolicy(t, pdp)
+
+	body := []byte(`{
+  "actions":  [{"name":"GET"}, {"name":"DELETE"}],
+  "subject":  {"type":"Spiffe","id":"spiffe://omega.local/alice"},
+  "resource": {"type":"HttpPath","id":"/api/foo"}
+}`)
+	resp, err := http.Post(srv.URL+"/access/v1/search/action", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200 (body=%s)", resp.StatusCode, raw)
+	}
+	var out api.ActionSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Results) != 1 || out.Results[0].Name != "GET" {
+		t.Errorf("results: got %v want [GET]", out.Results)
+	}
+}
+
+func TestHTTPSearchSubjectRejectsEmptyCandidateList(t *testing.T) {
+	srv := newTestServer(t)
+	body := []byte(`{"subjects":[],"action":{"name":"GET"},"resource":{"type":"HttpPath","id":"/"}}`)
+	resp, err := http.Post(srv.URL+"/access/v1/search/subject", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", resp.StatusCode)
+	}
+}
+
+func TestHTTPSearchSubjectRejectsOversizedCandidateList(t *testing.T) {
+	srv := newTestServer(t)
+	n := api.MaxSearchCandidates + 1
+	subs := make([]string, n)
+	for i := range subs {
+		subs[i] = `{"type":"Spiffe","id":"spiffe://omega.local/x"}`
+	}
+	body := []byte(`{
+  "subjects": [` + strings.Join(subs, ",") + `],
+  "action":   {"name":"GET"},
+  "resource": {"type":"HttpPath","id":"/"}
+}`)
+	resp, err := http.Post(srv.URL+"/access/v1/search/subject", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", resp.StatusCode)
+	}
+}
+
 func TestHTTPAccessEvaluationBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	body := []byte(`{"subject":{"type":"","id":""},"action":{"name":""},"resource":{"type":"","id":""}}`)

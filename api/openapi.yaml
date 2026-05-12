@@ -448,6 +448,93 @@ paths:
         "503":
           $ref: "#/components/responses/NotLeader"
 
+  /access/v1/search/subject:
+    post:
+      tags: [authzen, leader-only]
+      operationId: searchSubject
+      summary: AuthZEN 1.0 Subject Search (candidate-set variant).
+      description: |
+        Searches a caller-supplied list of subject candidates against
+        a fully specified `(action, resource)` pair and returns those
+        whose decision is `allow`. Omega does not maintain a global
+        principal directory, so the caller supplies the candidates
+        explicitly; the spec's §5.3.2 expressly allows the PDP to
+        error when it cannot resolve the search space, and a
+        candidate list is a strict refinement of that contract.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubjectSearchRequest"
+      responses:
+        "200":
+          description: Matched subjects.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectSearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /access/v1/search/resource:
+    post:
+      tags: [authzen, leader-only]
+      operationId: searchResource
+      summary: AuthZEN 1.0 Resource Search (candidate-set variant).
+      description: |
+        Searches a caller-supplied list of resource candidates against
+        a fully specified `(subject, action)` pair and returns those
+        whose decision is `allow`. Same candidate-set rationale as
+        Subject Search.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceSearchRequest"
+      responses:
+        "200":
+          description: Matched resources.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceSearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /access/v1/search/action:
+    post:
+      tags: [authzen, leader-only]
+      operationId: searchAction
+      summary: AuthZEN 1.0 Action Search (candidate-set variant).
+      description: |
+        Searches a caller-supplied list of action candidates against
+        a fully specified `(subject, resource)` pair and returns those
+        whose decision is `allow`. Same candidate-set rationale as
+        Subject Search.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActionSearchRequest"
+      responses:
+        "200":
+          description: Matched actions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionSearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
   /v1/oidc/exchange:
     post:
       tags: [oidc-federation, leader-only]
@@ -867,6 +954,9 @@ components:
         - policy_decision_point
         - access_evaluation_endpoint
         - access_evaluations_endpoint
+        - subject_search_endpoint
+        - resource_search_endpoint
+        - action_search_endpoint
       properties:
         policy_decision_point:
           type: string
@@ -880,6 +970,133 @@ components:
           type: string
           format: uri
           description: Absolute URL of the batch endpoint `POST /access/v1/evaluations`.
+        subject_search_endpoint:
+          type: string
+          format: uri
+          description: Absolute URL of `POST /access/v1/search/subject`.
+        resource_search_endpoint:
+          type: string
+          format: uri
+          description: Absolute URL of `POST /access/v1/search/resource`.
+        action_search_endpoint:
+          type: string
+          format: uri
+          description: Absolute URL of `POST /access/v1/search/action`.
+
+    SearchPage:
+      type: object
+      additionalProperties: false
+      properties:
+        size:
+          type: integer
+          description: Page size echoed back (or selected by omega when omitted).
+        offset:
+          type: integer
+          description: Offset into the matched-candidate list.
+        next_token:
+          type: string
+          description: |
+            Opaque continuation token (`offset:N` today). Present
+            only when more matches remain.
+
+    SubjectSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [subjects, action, resource]
+      properties:
+        subjects:
+          type: array
+          description: |
+            Caller-supplied candidate subjects to test. omega does not
+            enumerate principals on its own; the spec's §5.3.2 allows
+            the PDP to error when it cannot resolve the search space,
+            and a candidate list refines that contract into something
+            useful.
+          items:
+            $ref: "#/components/schemas/EvalEntity"
+        action:
+          $ref: "#/components/schemas/EvalAction"
+        resource:
+          $ref: "#/components/schemas/EvalEntity"
+        context:
+          type: object
+          additionalProperties: true
+        page:
+          $ref: "#/components/schemas/SearchPage"
+
+    SubjectSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalEntity"
+        page:
+          $ref: "#/components/schemas/SearchPage"
+
+    ResourceSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [resources, subject, action]
+      properties:
+        resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalEntity"
+        subject:
+          $ref: "#/components/schemas/EvalEntity"
+        action:
+          $ref: "#/components/schemas/EvalAction"
+        context:
+          type: object
+          additionalProperties: true
+        page:
+          $ref: "#/components/schemas/SearchPage"
+
+    ResourceSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalEntity"
+        page:
+          $ref: "#/components/schemas/SearchPage"
+
+    ActionSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [actions, subject, resource]
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalAction"
+        subject:
+          $ref: "#/components/schemas/EvalEntity"
+        resource:
+          $ref: "#/components/schemas/EvalEntity"
+        context:
+          type: object
+          additionalProperties: true
+        page:
+          $ref: "#/components/schemas/SearchPage"
+
+    ActionSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalAction"
+        page:
+          $ref: "#/components/schemas/SearchPage"
 
     OIDCDiscoveryResponse:
       type: object

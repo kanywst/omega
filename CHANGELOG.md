@@ -86,6 +86,24 @@ changes (see [SECURITY.md](SECURITY.md)).
   `--ca-step-ca-provisioner`, `--ca-step-ca-provisioner-key-file`,
   `--ca-step-ca-ca-cert`. Validates the Plugin pattern on a second
   upstream signer.
+- `POST /access/v1/search/{subject,resource,action}` — AuthZEN 1.0
+  §5.3 Search APIs in a candidate-set variant. Each endpoint takes
+  an explicit list of candidates for the dimension being searched
+  (`subjects` / `resources` / `actions`) plus the two other
+  fully-specified dimensions, runs every candidate through the same
+  Cedar PDP path as `POST /access/v1/evaluation`, and returns those
+  whose decision is `allow`. The spec's pattern shape
+  (`subject: {type: "user"}` with no id) is rejected because Cedar
+  has no global principal directory and §5.3.2 expressly tells PDPs
+  to error when they cannot resolve the search space - a
+  candidate-list refinement is the honest take on that contract.
+  Pagination via offset/size with an `offset:N` continuation token,
+  per-candidate cap of `MaxSearchCandidates = 100` (same rationale
+  as the batch endpoint), audit row per evaluation tagged with the
+  search dimension + index. The discovery document at
+  `/.well-known/authzen-configuration` now advertises all three
+  endpoints. Moves `docs/conformance-authzen.md` §4.3 from
+  `deferred` to `partial`.
 - Federation pump now consumes peers via `GET /v1/spiffe-bundle`
   (SPIFFE Trust Domain Format), falling back to `GET /v1/bundle`
   PEM when the peer returns 404 - so a freshly-built omega still

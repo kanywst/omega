@@ -39,7 +39,7 @@ Spec version audited:
 | --- | --- | --- | --- |
 | 4.1 | A request carries exactly one subject, one action, one resource | implemented | enforced by the JSON schema in `api/openapi.yaml` (single-decision endpoint) |
 | 4.2 | Batch requests use top-level defaults + per-entry overrides | implemented | merged in `mergeBatchEval`; missing required field after merge returns 400 |
-| 4.3 | Search requests partially specify the request | deferred | the Search APIs in §5.3 are not yet implemented |
+| 4.3 | Search requests partially specify the request | partial | `POST /access/v1/search/{subject,resource,action}` ship in a candidate-set variant: the dimension being searched arrives as an explicit list (`subjects`/`resources`/`actions`) and the other two are fully specified. The spec's `{type: "user"}` pattern shape with no id is rejected because omega's PDP (Cedar) has no global principal directory and §5.3.2 expressly tells PDPs to error when they cannot resolve the search space. A full enumeration mode would require an entity store on the omega side, tracked as a follow-up |
 
 ## §5 — Endpoints
 
@@ -91,7 +91,7 @@ Spec version audited:
 
 | Section | Requirement | Status | omega notes |
 | --- | --- | --- | --- |
-| 8 | Discovery document advertises supported endpoints | implemented | `GET /.well-known/authzen-configuration` returns `policy_decision_point` + `access_evaluation_endpoint` + `access_evaluations_endpoint`. The PDP base is `--issuer-url` (canonical, validated `https`); the handler returns `404` when `--issuer-url` is not set so the PDP base cannot be sourced from a spoofed `Host` header. The three Search API endpoints are intentionally omitted because omega does not implement them - per §8 an absent field signals "not implemented" |
+| 8 | Discovery document advertises supported endpoints | implemented | `GET /.well-known/authzen-configuration` returns the five endpoint fields: `policy_decision_point`, `access_evaluation_endpoint`, `access_evaluations_endpoint`, `subject_search_endpoint`, `resource_search_endpoint`, `action_search_endpoint`. The PDP base is `--issuer-url` (canonical, validated `https`); the handler returns `404` when `--issuer-url` is not set so the PDP base cannot be sourced from a spoofed `Host` header |
 
 ## §9 — Security considerations
 
