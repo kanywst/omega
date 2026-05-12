@@ -42,6 +42,11 @@ type PeerConfig struct {
 // The own bundle never expires (it lives as long as the CA). Peer
 // bundles are fetched in the background; a peer that has never been
 // reached is omitted from the map rather than served as an empty entry.
+//
+// Each peer runs in its own goroutine inside Run, with an independent
+// poll cadence derived from that peer's `spiffe_refresh_hint`. A
+// 10s-hint peer and a 1h-hint peer therefore sleep on their own
+// rhythms instead of being forced into a single global tick.
 type Registry struct {
 	ownTD     spiffeid.TrustDomain
 	ownBundle []byte
@@ -49,16 +54,15 @@ type Registry struct {
 	peers      []PeerConfig
 	httpClient *http.Client
 
-	// configuredRefresh is the operator-supplied default (CLI flag);
-	// effectiveRefresh is what Run actually sleeps for. The latter is
-	// driven down by the smallest peer refresh hint observed in the
-	// previous round, clamped to [minRefresh, maxRefresh].
+	// configuredRefresh is the operator-supplied default (CLI flag).
+	// A peer with no TDF refresh hint inherits this; per-peer
+	// effective refresh is `min(configuredRefresh, hint)` clamped to
+	// [minRefresh, maxRefresh].
 	configuredRefresh time.Duration
 
 	mu               sync.RWMutex
 	peerBundles      map[string][]byte // trust domain -> PEM
 	peerRefreshHints map[string]time.Duration
-	effectiveRefresh time.Duration
 }
 
 const (
@@ -80,7 +84,6 @@ func NewRegistry(ownTD spiffeid.TrustDomain, ownBundle []byte, peers []PeerConfi
 		peers:             peers,
 		httpClient:        &http.Client{Timeout: 10 * time.Second},
 		configuredRefresh: refresh,
-		effectiveRefresh:  refresh,
 		peerBundles:       map[string][]byte{},
 		peerRefreshHints:  map[string]time.Duration{},
 	}
@@ -107,91 +110,21 @@ func (r *Registry) Peers() []PeerConfig {
 	return out
 }
 
-// EffectiveRefresh returns the interval Run is currently sleeping
-// between refresh rounds, after any TDF refresh-hint clamping. Exposed
-// for tests and operator diagnostics; not surfaced through HTTP today.
-func (r *Registry) EffectiveRefresh() time.Duration {
+// PeerRefresh returns the effective poll interval for one peer
+// (trust-domain key), after the peer's TDF refresh hint is clamped
+// against the operator-configured default. Returns 0 if the named
+// peer is not configured. Exposed for tests and diagnostics; not
+// surfaced through HTTP today.
+func (r *Registry) PeerRefresh(trustDomain string) time.Duration {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.effectiveRefresh
-}
-
-// Run blocks until ctx is canceled, refreshing every peer bundle on
-// each tick. It performs an immediate fetch on entry so the first
-// /v1/federation/bundles caller does not race the timer. If any peer
-// is still missing after the initial fetch (typical when peers boot
-// concurrently), a short backoff sequence retries before falling back
-// to the regular refresh interval.
-func (r *Registry) Run(ctx context.Context) {
-	r.refreshAll(ctx)
-	for _, d := range []time.Duration{200 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 5 * time.Second} {
-		if r.allPeersFetched() {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(d):
-			r.refreshAll(ctx)
-		}
+	hint, ok := r.peerRefreshHints[trustDomain]
+	r.mu.RUnlock()
+	if !r.hasPeer(trustDomain) {
+		return 0
 	}
-	// Use NewTimer (not time.After) so a context cancellation while
-	// the timer is armed lets us Stop() it immediately. With
-	// EffectiveRefresh allowed up to 1h, time.After would otherwise
-	// keep the timer reachable for up to that hour after the loop
-	// exits. Also re-derives the cadence each iteration so the
-	// peer-supplied refresh hint takes effect without Ticker.Reset
-	// gymnastics.
-	for {
-		timer := time.NewTimer(r.EffectiveRefresh())
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-			r.refreshAll(ctx)
-		}
-	}
-}
-
-func (r *Registry) allPeersFetched() bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, p := range r.peers {
-		if _, ok := r.peerBundles[p.TrustDomain]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func (r *Registry) refreshAll(ctx context.Context) {
-	for _, p := range r.peers {
-		body, hint, err := r.fetchPeer(ctx, p)
-		if err != nil {
-			slog.Warn("federation: peer bundle fetch failed", "peer", p.TrustDomain, "url", p.URL, "err", err)
-			continue
-		}
-		r.mu.Lock()
-		r.peerBundles[p.TrustDomain] = body
-		if hint > 0 {
-			r.peerRefreshHints[p.TrustDomain] = hint
-		} else {
-			delete(r.peerRefreshHints, p.TrustDomain)
-		}
-		r.mu.Unlock()
-	}
-	r.recomputeEffectiveRefresh()
-}
-
-func (r *Registry) recomputeEffectiveRefresh() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	candidate := r.configuredRefresh
-	for _, h := range r.peerRefreshHints {
-		if h > 0 && h < candidate {
-			candidate = h
-		}
+	if ok && hint > 0 && hint < candidate {
+		candidate = hint
 	}
 	if candidate < minRefresh {
 		candidate = minRefresh
@@ -199,7 +132,91 @@ func (r *Registry) recomputeEffectiveRefresh() {
 	if candidate > maxRefresh {
 		candidate = maxRefresh
 	}
-	r.effectiveRefresh = candidate
+	return candidate
+}
+
+func (r *Registry) hasPeer(trustDomain string) bool {
+	for _, p := range r.peers {
+		if p.TrustDomain == trustDomain {
+			return true
+		}
+	}
+	return false
+}
+
+// Run spawns one goroutine per configured peer (each with its own
+// poll cadence) and blocks until ctx is canceled. The initial fetch
+// happens inside each goroutine, so a slow peer cannot delay the
+// first /v1/federation/bundles answer for the others.
+func (r *Registry) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	for _, p := range r.peers {
+		wg.Add(1)
+		go func(peer PeerConfig) {
+			defer wg.Done()
+			r.runPeer(ctx, peer)
+		}(p)
+	}
+	wg.Wait()
+}
+
+// runPeer is the per-peer loop. It fetches the peer's bundle on
+// entry, retries on a short backoff if the first attempt fails (so a
+// peer that booted a few hundred milliseconds after omega still
+// appears in the merged map promptly), and then sleeps for that
+// peer's effective refresh interval before each subsequent fetch.
+func (r *Registry) runPeer(ctx context.Context, peer PeerConfig) {
+	r.refreshOne(ctx, peer)
+	// Initial backoff sequence in case the peer was not ready yet. We
+	// only re-fetch when the previous attempt did not populate this
+	// peer's bundle.
+	for _, d := range []time.Duration{200 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 5 * time.Second} {
+		if r.peerHasBundle(peer.TrustDomain) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(d):
+			r.refreshOne(ctx, peer)
+		}
+	}
+	// Steady-state loop. NewTimer (not time.After) so a ctx
+	// cancellation reclaims the timer immediately instead of pinning
+	// it for up to PeerRefresh (1h max with current clamp).
+	for {
+		timer := time.NewTimer(r.PeerRefresh(peer.TrustDomain))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+			r.refreshOne(ctx, peer)
+		}
+	}
+}
+
+func (r *Registry) peerHasBundle(trustDomain string) bool {
+	r.mu.RLock()
+	_, ok := r.peerBundles[trustDomain]
+	r.mu.RUnlock()
+	return ok
+}
+
+func (r *Registry) refreshOne(ctx context.Context, p PeerConfig) {
+	body, hint, err := r.fetchPeer(ctx, p)
+	if err != nil {
+		slog.Warn("federation: peer bundle fetch failed", "peer", p.TrustDomain, "url", p.URL, "err", err)
+		return
+	}
+	r.mu.Lock()
+	r.peerBundles[p.TrustDomain] = body
+	if hint > 0 {
+		r.peerRefreshHints[p.TrustDomain] = hint
+	} else {
+		delete(r.peerRefreshHints, p.TrustDomain)
+	}
+	r.mu.Unlock()
 }
 
 // fetchPeer asks the peer for its trust bundle, preferring the SPIFFE
