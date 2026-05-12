@@ -126,7 +126,7 @@ func TestRegistryFetchesPeerViaTDF(t *testing.T) {
 	}
 	// 120s peer hint should drive effective refresh below the 1h
 	// operator config but stay above the 10s minimum clamp.
-	if got, want := r.EffectiveRefresh(), 120*time.Second; got != want {
+	if got, want := r.PeerRefresh("omega.beta"), 120*time.Second; got != want {
 		t.Errorf("effective refresh: got %s want %s", got, want)
 	}
 }
@@ -169,7 +169,7 @@ func TestRegistryFallsBackToPEMWhenTDFAbsent(t *testing.T) {
 	}
 	// No TDF, no refresh hint → effective refresh stays at the
 	// operator-configured value (1h, clamped to maxRefresh).
-	if got, want := r.EffectiveRefresh(), time.Hour; got != want {
+	if got, want := r.PeerRefresh("omega.beta"), time.Hour; got != want {
 		t.Errorf("effective refresh: got %s want %s", got, want)
 	}
 }
@@ -219,6 +219,62 @@ func TestRegistryRejectsMalformedPEM(t *testing.T) {
 
 	if _, ok := r.Bundles()["omega.bad"]; ok {
 		t.Fatal("malformed peer bundle should not be stored")
+	}
+}
+
+func TestRegistryPeersHaveIndependentCadences(t *testing.T) {
+	// Two peers, divergent TDF refresh hints. The fast peer's hint
+	// must clamp to the 10s minRefresh floor; the slow peer's hint
+	// must drive cadence down from the 1h operator default without
+	// being pulled toward the fast peer's value.
+	fastTD := spiffeid.RequireTrustDomainFromString("omega.fast")
+	slowTD := spiffeid.RequireTrustDomainFromString("omega.slow")
+	_, _, fastCert := newSelfSignedCA(t, "Omega Fast CA")
+	_, _, slowCert := newSelfSignedCA(t, "Omega Slow CA")
+	fastTDF := marshalTDF(t, fastTD, []*x509.Certificate{fastCert}, 5*time.Second, 1)   // below minRefresh → clamps to 10s
+	slowTDF := marshalTDF(t, slowTD, []*x509.Certificate{slowCert}, 300*time.Second, 1) // 5m, well below 1h op config
+
+	fastSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/spiffe-bundle" {
+			_, _ = w.Write(fastTDF)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer fastSrv.Close()
+	slowSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/spiffe-bundle" {
+			_, _ = w.Write(slowTDF)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer slowSrv.Close()
+
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
+	r := federation.NewRegistry(td, ownPEM, []federation.PeerConfig{
+		{TrustDomain: "omega.fast", URL: fastSrv.URL},
+		{TrustDomain: "omega.slow", URL: slowSrv.URL},
+	}, time.Hour)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go r.Run(ctx)
+
+	waitFor(t, 2*time.Second, func() bool {
+		return string(r.Bundles()["omega.fast"]) != "" && string(r.Bundles()["omega.slow"]) != ""
+	}, "both peers never appeared")
+
+	// fast peer: 5s hint → clamps up to 10s minRefresh.
+	if got, want := r.PeerRefresh("omega.fast"), 10*time.Second; got != want {
+		t.Errorf("fast peer refresh: got %s want %s (clamped from 5s)", got, want)
+	}
+	// slow peer: 5m hint → 5m (between minRefresh and operator
+	// config). Crucially, the fast peer's smaller hint must not
+	// have pulled this peer's cadence down.
+	if got, want := r.PeerRefresh("omega.slow"), 300*time.Second; got != want {
+		t.Errorf("slow peer refresh: got %s want %s", got, want)
 	}
 }
 

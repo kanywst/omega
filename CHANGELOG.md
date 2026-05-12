@@ -86,6 +86,15 @@ changes (see [SECURITY.md](SECURITY.md)).
   `--ca-step-ca-provisioner`, `--ca-step-ca-provisioner-key-file`,
   `--ca-step-ca-ca-cert`. Validates the Plugin pattern on a second
   upstream signer.
+- Federation pump runs each peer in its own goroutine, with an
+  independent poll cadence derived from that peer's TDF
+  `spiffe_refresh_hint`. A 10s-hint peer and a 1h-hint peer now
+  sleep on their own rhythms instead of being forced into a single
+  global tick driven by the smallest hint. Per-peer effective
+  refresh is `min(operator-configured-refresh, peer-hint)` clamped
+  to `[10s, 1h]`. The previously exported `EffectiveRefresh()`
+  diagnostic is replaced by `PeerRefresh(trustDomain)`; no external
+  callers in-tree.
 - `POST /access/v1/search/{subject,resource,action}` — AuthZEN 1.0
   §5.3 Search APIs in a candidate-set variant. Each endpoint takes
   an explicit list of candidates for the dimension being searched
