@@ -71,6 +71,16 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- `examples/k8s-attest/` — runnable kind-based demo of the K8s
+  attestor. Boots a one-node kind cluster, mints a ServiceAccount
+  projected token via `kubectl create token --audience=omega`,
+  starts `omega server` out-of-cluster against the kind kubeconfig
+  with `--k8s-attest`, and asserts that the correct-audience token
+  yields an SVID whose SPIFFE ID is derived from
+  `(namespace, serviceaccount)` and chains to `/v1/bundle`, while
+  a wrong-audience token is rejected with `HTTP 401`. A new
+  `kind-k8s-attest` CI job mirrors `kind-operator` so the demo
+  runs on every PR.
 - `GET /v1/spiffe-bundle` — SPIFFE Trust Domain Format (TDF)
   endpoint. Returns the [SPIFFE Trust Domain and Bundle 1.0 §4](https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE_Trust_Domain_and_Bundle.md)
   JSON document: X.509-SVID trust anchors (`use: x509-svid`, full
