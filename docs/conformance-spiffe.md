@@ -84,7 +84,7 @@ Spec versions audited:
 | 4.1 | JWK Set with extended keys | implemented | `GET /v1/spiffe-bundle` returns the SPIFFE Trust Domain Format document with X.509 anchors (`use: x509-svid`, full DER in `x5c`) and JWT keys (`use: jwt-svid`) in one `keys` array, alongside the `spiffe_sequence` and `spiffe_refresh_hint` envelope fields. The legacy `/v1/bundle` (PEM) and `/v1/jwt/bundle` (RFC 7517 JWKS) endpoints stay for backwards compatibility with the existing federation pump and `go-spiffe` consumers |
 | 5.1 | X.509 trust anchors | implemented | PEM at `/v1/bundle` |
 | 5.2 | JWT signer keys | implemented | JWKS at `/v1/jwt/bundle` |
-| 6 | Sequence / refresh hints | partial | `GET /v1/spiffe-bundle` emits both `spiffe_sequence` (fixed at `1` until runtime rotation ships) and `spiffe_refresh_hint` (configurable via `--spiffe-bundle-refresh-hint`, default 300s). A monotonically incrementing sequence lands with key rotation |
+| 6 | Sequence / refresh hints | partial | `GET /v1/spiffe-bundle` emits both `spiffe_sequence` (fixed at `1` until runtime rotation ships) and `spiffe_refresh_hint` (configurable via `--spiffe-bundle-refresh-hint`, default 300s). The federation pump in `internal/server/federation` consumes peer-supplied refresh hints to drive the effective per-round poll interval (`min(--ha-poll, min-peer-hint)`, clamped to `[10s, 1h]`); a monotonically incrementing sequence lands with key rotation |
 
 ## SPIFFE Federation
 
