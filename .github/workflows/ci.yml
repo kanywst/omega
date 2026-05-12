@@ -343,7 +343,7 @@ jobs:
       # accept this format. Pushed to the registry next to the image.
       - name: build provenance attestation
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/0-draft/omega
           subject-digest: ${{ steps.build.outputs.digest }}
