@@ -19,7 +19,13 @@ TRUST_DOMAIN="${TRUST_DOMAIN:-omega.demo}"
 NAMESPACE="${NAMESPACE:-omega-attest-demo}"
 SERVICE_ACCOUNT="${SERVICE_ACCOUNT:-workload}"
 TOKEN_AUDIENCE="${TOKEN_AUDIENCE:-omega}"
-SVID_TEMPLATE="${SVID_TEMPLATE:-spiffe://${TRUST_DOMAIN}/ns/{namespace}/sa/{serviceaccount}}"
+# Two-step assignment: a literal `{namespace}` inside the default
+# value of `${VAR:-default}` closes the outer parameter expansion
+# early because bash treats the first unescaped `}` as the
+# terminator. Assigning the default separately keeps the placeholder
+# braces intact for omega's template renderer.
+DEFAULT_SVID_TEMPLATE="spiffe://${TRUST_DOMAIN}/ns/{namespace}/sa/{serviceaccount}"
+SVID_TEMPLATE="${SVID_TEMPLATE:-$DEFAULT_SVID_TEMPLATE}"
 EXPECTED_SPIFFE_ID="spiffe://${TRUST_DOMAIN}/ns/${NAMESPACE}/sa/${SERVICE_ACCOUNT}"
 
 for cmd in kind kubectl omega openssl curl python3; do
@@ -68,10 +74,14 @@ KUBECONFIG="$KUBECONFIG_FILE" kubectl create namespace "$NAMESPACE" >/dev/null
 KUBECONFIG="$KUBECONFIG_FILE" kubectl -n "$NAMESPACE" create serviceaccount "$SERVICE_ACCOUNT" >/dev/null
 
 echo "[demo] minting projected SA token (audience=$TOKEN_AUDIENCE)"
+# `kubectl create token` enforces a 10-minute minimum lifetime (the
+# `--service-account-extend-token-expiration` apiserver flag's
+# floor); using anything shorter returns
+# `spec.expirationSeconds: Invalid value`.
 TOKEN=$(KUBECONFIG="$KUBECONFIG_FILE" kubectl -n "$NAMESPACE" create token "$SERVICE_ACCOUNT" \
-	--audience "$TOKEN_AUDIENCE" --duration 5m)
+	--audience "$TOKEN_AUDIENCE" --duration 15m)
 WRONG_TOKEN=$(KUBECONFIG="$KUBECONFIG_FILE" kubectl -n "$NAMESPACE" create token "$SERVICE_ACCOUNT" \
-	--audience "not-omega" --duration 5m)
+	--audience "not-omega" --duration 15m)
 
 echo "[demo] starting omega server on :$SERVER_PORT"
 omega server \
