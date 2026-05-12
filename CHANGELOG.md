@@ -86,6 +86,17 @@ changes (see [SECURITY.md](SECURITY.md)).
   `--ca-step-ca-provisioner`, `--ca-step-ca-provisioner-key-file`,
   `--ca-step-ca-ca-cert`. Validates the Plugin pattern on a second
   upstream signer.
+- `examples/ca-step-ca/` — runnable demo of the step-ca backend.
+  `mock-step-ca` Go binary stands up its own ECDSA Root CA and
+  exposes the two endpoints omega calls (`GET /roots.pem`,
+  `POST /1.0/sign`); a tiny inline `keygen.go` mints a fresh
+  provisioner JWK pair per run; `run-demo.sh` boots omega with
+  `--ca-backend=step-ca`, fetches the bundle (must equal the mock
+  step-ca CA), submits a workload CSR through `POST /v1/svid`, and
+  asserts the issued leaf chains to the bundle and carries the
+  requested SPIFFE ID URI SAN. The mock verifies the OTT signature
+  on every `/1.0/sign` so a regression that breaks omega's OTT
+  minting trips the demo. Added to the CI examples matrix.
 - `examples/k8s-attest/` — runnable kind-based demo of the K8s
   attestor. Boots a one-node kind cluster, mints a ServiceAccount
   projected token via `kubectl create token --audience=omega`,
