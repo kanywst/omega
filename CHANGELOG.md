@@ -71,6 +71,21 @@ changes (see [SECURITY.md](SECURITY.md)).
   shape as the single-evaluation endpoint. Closes the spec-required
   AuthZEN 1.0 §5.2 conformance gap (Search APIs are optional and
   remain on the roadmap).
+- `--ca-backend=step-ca` — second non-disk CA backend. omega
+  forwards CSRs to Smallstep step-ca's `POST /1.0/sign` endpoint,
+  authenticated with a one-time-token (OTT) signed by a JWK
+  provisioner whose matching public JWK is configured in step-ca's
+  `ca.json`. The OTT pins the SPIFFE ID via `sans`, the root via
+  `sha`, and a 5-minute `exp` so a leaked OTT cannot be replayed
+  long after the fact. Trust anchors come from `GET /roots.pem`
+  (cached with the same Lock/check/Unlock/fetch/Lock/store pattern
+  as the Vault backend) so a transient step-ca blip serves the
+  stale bundle instead of breaking every workload's handshake. JWT
+  signing stays local for the same ADR 0005 reason that Vault PKI
+  does it that way. New flags: `--ca-step-ca-url`,
+  `--ca-step-ca-provisioner`, `--ca-step-ca-provisioner-key-file`,
+  `--ca-step-ca-ca-cert`. Validates the Plugin pattern on a second
+  upstream signer.
 - `examples/k8s-attest/` — runnable kind-based demo of the K8s
   attestor. Boots a one-node kind cluster, mints a ServiceAccount
   projected token via `kubectl create token --audience=omega`,

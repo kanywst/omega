@@ -52,6 +52,12 @@ const (
 	// validation. The trade-off is documented in
 	// `docs/adr/0005-ca-plugin-architecture.md`.
 	KindVaultPKI Kind = "vault-pki"
+	// KindStepCA signs X.509-SVIDs via Smallstep step-ca's
+	// `/1.0/sign` endpoint, authenticated with a one-time-token
+	// (OTT) signed by a JWK provisioner. Like KindVaultPKI the
+	// X.509 root key never sits on omega's disk; JWT-SVID signing
+	// stays local for the same reasons.
+	KindStepCA Kind = "step-ca"
 )
 
 // Config is the disjoint-union-style argument to New. Fields are read
@@ -86,6 +92,15 @@ type Config struct {
 	// signed by a private CA must set this; production deployments
 	// almost always do.
 	VaultPKICACertFile string
+	// KindStepCA
+	StepCAURL               string // base URL of step-ca (e.g. https://ca.example:9000)
+	StepCAProvisionerName   string // JWK provisioner name configured in step-ca
+	StepCAProvisionerKeyPEM []byte // PEM-encoded private JWK signing the OTT
+	StepCABundleTTL         time.Duration
+	// StepCACACertFile is an optional path to a PEM file with one or
+	// more trust anchors used to verify step-ca's TLS certificate.
+	// Empty falls back to the system trust store.
+	StepCACACertFile string
 }
 
 // Authority is the signing + bundle interface every Omega CA backend
@@ -164,8 +179,27 @@ func New(cfg Config) (Authority, error) {
 		}
 		local.issuerURL = issuer
 		return newVaultPKIAuthority(local, cfg)
+	case KindStepCA:
+		if cfg.Dir == "" {
+			return nil, errors.New("identity: step-ca backend still needs --data-dir for the local JWT signing key")
+		}
+		if cfg.StepCAURL == "" {
+			return nil, errors.New("identity: step-ca backend requires StepCAURL")
+		}
+		if cfg.StepCAProvisionerName == "" {
+			return nil, errors.New("identity: step-ca backend requires StepCAProvisionerName")
+		}
+		if len(cfg.StepCAProvisionerKeyPEM) == 0 {
+			return nil, errors.New("identity: step-ca backend requires StepCAProvisionerKeyPEM")
+		}
+		local, err := loadOrCreateDisk(cfg.Dir, cfg.TrustDomain)
+		if err != nil {
+			return nil, err
+		}
+		local.issuerURL = issuer
+		return newStepCAAuthority(local, cfg)
 	default:
-		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q)", cfg.Kind, KindDisk, KindVaultPKI)
+		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA)
 	}
 }
 
@@ -320,7 +354,7 @@ func loadAuthority(td spiffeid.TrustDomain, keyPath, crtPath string) (*localAuth
 func (a *localAuthority) TrustDomain() spiffeid.TrustDomain { return a.trustDomain }
 
 func (a *localAuthority) IssuerURL() string { return a.issuerURL }
-func (a *localAuthority) BundlePEM() []byte                 { return a.bundlePEM }
+func (a *localAuthority) BundlePEM() []byte { return a.bundlePEM }
 
 type SVID struct {
 	SPIFFEID  spiffeid.ID

@@ -199,7 +199,7 @@ func TestVaultPKIIssueRoundTrip(t *testing.T) {
 Three places need updating in the same PR:
 
 1. `README.md` Standards-alignment table - mark the backend
-   row, e.g. `HSM / KMS upstream | Vault PKI / step-ca / AWS PCA / GCP CAS / Azure KV | partial (vault-pki implemented)`.
+   row, e.g. `HSM / KMS upstream | Vault PKI / step-ca / AWS PCA / GCP CAS / Azure KV | partial (vault-pki + step-ca implemented)`.
 2. `CHANGELOG.md` `[Unreleased]` - record the new flag set and
    the Kind constant.
 3. `ROADMAP.md` "Later" - cross off this backend or move others

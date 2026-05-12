@@ -94,6 +94,10 @@ func newServerCommand() *cobra.Command {
 		caVaultPKIMount         string
 		caVaultPKIRole          string
 		caVaultPKICACertFile    string
+		caStepCAURL             string
+		caStepCAProvisioner     string
+		caStepCAKeyFile         string
+		caStepCACACertFile      string
 	)
 
 	cmd := &cobra.Command{
@@ -129,6 +133,20 @@ func newServerCommand() *cobra.Command {
 				caCfg.VaultPKIMount = strings.TrimSpace(caVaultPKIMount)
 				caCfg.VaultPKIRole = strings.TrimSpace(caVaultPKIRole)
 				caCfg.VaultPKICACertFile = strings.TrimSpace(caVaultPKICACertFile)
+			}
+			if caCfg.Kind == identity.KindStepCA {
+				if caStepCAKeyFile == "" {
+					return errors.New("--ca-step-ca-provisioner-key-file is required when --ca-backend=step-ca")
+				}
+				// #nosec G304 -- caStepCAKeyFile is operator-supplied via --ca-step-ca-provisioner-key-file, not user input.
+				keyPEM, err := os.ReadFile(caStepCAKeyFile)
+				if err != nil {
+					return fmt.Errorf("ca-step-ca-provisioner-key-file: %w", err)
+				}
+				caCfg.StepCAURL = strings.TrimSpace(caStepCAURL)
+				caCfg.StepCAProvisionerName = strings.TrimSpace(caStepCAProvisioner)
+				caCfg.StepCAProvisionerKeyPEM = keyPEM
+				caCfg.StepCACACertFile = strings.TrimSpace(caStepCACACertFile)
 			}
 			ca, err := identity.New(caCfg)
 			if err != nil {
@@ -307,7 +325,7 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&haPollEvery, "ha-poll-interval", time.Second,
 		"how often a follower retries to acquire the advisory lock.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
-		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine, keeping the root key out of omega's process (JWT-SVID signing stays local; see ADR 0005).")
+		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT. For all non-disk backends the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005).")
 	cmd.Flags().StringVar(&caVaultPKIAddr, "ca-vault-pki-addr", "",
 		"Vault address, e.g. https://vault.example:8200. Required when --ca-backend=vault-pki.")
 	cmd.Flags().StringVar(&caVaultPKIToken, "ca-vault-pki-token", "",
@@ -320,6 +338,14 @@ func newServerCommand() *cobra.Command {
 		"Vault PKI engine mount path. Default 'pki' matches the canonical mount name.")
 	cmd.Flags().StringVar(&caVaultPKIRole, "ca-vault-pki-role", "",
 		"Vault PKI role used to sign incoming CSRs. Required when --ca-backend=vault-pki.")
+	cmd.Flags().StringVar(&caStepCAURL, "ca-step-ca-url", "",
+		"step-ca base URL, e.g. https://ca.example:9000. Required when --ca-backend=step-ca.")
+	cmd.Flags().StringVar(&caStepCAProvisioner, "ca-step-ca-provisioner", "",
+		"name of the JWK provisioner configured in step-ca's ca.json. Required when --ca-backend=step-ca.")
+	cmd.Flags().StringVar(&caStepCAKeyFile, "ca-step-ca-provisioner-key-file", "",
+		"path to the PEM- or JSON-encoded private JWK that signs the one-time-token presented to step-ca on each /1.0/sign call. Required when --ca-backend=step-ca.")
+	cmd.Flags().StringVar(&caStepCACACertFile, "ca-step-ca-ca-cert", "",
+		"path to a PEM file with the step-ca server's TLS trust anchor(s). Empty falls back to the system trust store; production step-ca is almost always behind a private CA and must set this.")
 
 	cmd.Flags().StringArrayVar(&oidcIdPs, "oidc-idp", nil,
 		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key takes one or more values separated by ';'. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")
