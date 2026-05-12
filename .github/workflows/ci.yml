@@ -144,6 +144,28 @@ jobs:
           tail -50 /tmp/omega-server.log || true
           exit 1
 
+  kind-k8s-attest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build omega and put on PATH
+        run: |
+          make build
+          echo "$PWD/bin" >> "$GITHUB_PATH"
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: omega-k8s-attest
+      - name: run k8s-attest demo
+        # The demo's `kind get clusters` short-circuit makes the
+        # `kind create` step a no-op against the cluster that
+        # helm/kind-action already brought up.
+        working-directory: examples/k8s-attest
+        run: KEEP_CLUSTER=1 make demo
+
   lint:
     runs-on: ubuntu-latest
     steps:
