@@ -65,6 +65,10 @@ type stepCAAuthority struct {
 	bundle    []byte
 	bundleExp time.Time
 	bundleTTL time.Duration
+	// refreshMu serialises concurrent refreshBundle callers so a TTL
+	// expiry under load triggers one HTTP round-trip to step-ca, not
+	// N. The full lock-and-recheck dance happens in BundlePEM.
+	refreshMu sync.Mutex
 }
 
 func newStepCAAuthority(local *localAuthority, cfg Config) (*stepCAAuthority, error) {
@@ -159,6 +163,20 @@ func (a *stepCAAuthority) BundlePEM() []byte {
 		return out
 	}
 	stale := append([]byte(nil), a.bundle...)
+	a.bundleMu.RUnlock()
+
+	// Serialise refreshes: when the TTL expires under load, N
+	// concurrent callers would otherwise each fetch /roots.pem.
+	// Hold refreshMu, recheck the cache (some other goroutine may
+	// have refreshed while we were queued), and only then fetch.
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	a.bundleMu.RLock()
+	if len(a.bundle) > 0 && time.Now().Before(a.bundleExp) {
+		out := append([]byte(nil), a.bundle...)
+		a.bundleMu.RUnlock()
+		return out
+	}
 	a.bundleMu.RUnlock()
 
 	// Best-effort refresh. A stale bundle is better than no bundle:

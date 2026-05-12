@@ -36,16 +36,20 @@ import (
 type vaultPKIAuthority struct {
 	*localAuthority // JWT-SVID + TrustDomain + IssuerURL delegate
 
-	addr        string
-	token       string
-	mount       string
-	role        string
-	httpClient  *http.Client
+	addr       string
+	token      string
+	mount      string
+	role       string
+	httpClient *http.Client
 
 	bundleMu  sync.RWMutex
 	bundle    []byte
 	bundleExp time.Time
 	bundleTTL time.Duration
+	// refreshMu serialises concurrent refreshBundle callers so a TTL
+	// expiry under load triggers one HTTP round-trip to Vault, not
+	// N. The full lock-and-recheck dance happens in BundlePEM.
+	refreshMu sync.Mutex
 }
 
 const (
@@ -119,6 +123,20 @@ func (a *vaultPKIAuthority) BundlePEM() []byte {
 	stale := append([]byte(nil), a.bundle...)
 	a.bundleMu.RUnlock()
 
+	// Serialise refreshes: when the TTL expires under load, N
+	// concurrent callers would otherwise each fetch ca_chain. Hold
+	// refreshMu, recheck the cache (another goroutine may have
+	// refreshed while we were queued), and only then fetch.
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	a.bundleMu.RLock()
+	if len(a.bundle) > 0 && time.Now().Before(a.bundleExp) {
+		out := append([]byte(nil), a.bundle...)
+		a.bundleMu.RUnlock()
+		return out
+	}
+	a.bundleMu.RUnlock()
+
 	// Best-effort refresh. If the refresh fails (Vault unreachable,
 	// token expired), serve the stale bundle - it's still the trust
 	// anchor consumers were chaining to before the blip. Returning
@@ -149,11 +167,11 @@ func (a *vaultPKIAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateReque
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csr.Raw})
 
 	body, err := json.Marshal(map[string]any{
-		"csr":          string(csrPEM),
-		"common_name":  id.String(),
-		"uri_sans":     id.String(),
-		"format":       "pem",
-		"ttl":          svidValidity.String(),
+		"csr":                  string(csrPEM),
+		"common_name":          id.String(),
+		"uri_sans":             id.String(),
+		"format":               "pem",
+		"ttl":                  svidValidity.String(),
 		"exclude_cn_from_sans": true,
 	})
 	if err != nil {
