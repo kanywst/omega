@@ -119,9 +119,16 @@ print(json.dumps({'token': sys.argv[1], 'csr': open(sys.argv[2]).read()}))
 }
 
 echo "[demo] attesting with a correct-audience token (expect 200)"
+# Capture the payload first: a command substitution inside an
+# argument does not abort the script under `set -e` even if the
+# subshell fails, so assigning to a variable is the only way a
+# `build_attest_payload` (Python) failure surfaces here instead of
+# curl quietly POSTing an empty body and the assertion downstream
+# blaming the server.
+PAYLOAD=$(build_attest_payload "$TOKEN")
 SVID_JSON=$(curl -fsS -X POST "http://127.0.0.1:$SERVER_PORT/v1/attest/k8s" \
 	-H 'content-type: application/json' \
-	-d "$(build_attest_payload "$TOKEN")")
+	-d "$PAYLOAD")
 
 GOT_SPIFFE_ID=$(echo "$SVID_JSON" | python3 -c "import sys,json; sys.stdout.write(json.load(sys.stdin)['spiffe_id'])")
 if [[ "$GOT_SPIFFE_ID" != "$EXPECTED_SPIFFE_ID" ]]; then
@@ -146,10 +153,15 @@ if ! openssl x509 -in "$DEMO_DIR/leaf.pem" -noout -text | grep -q "URI:$EXPECTED
 fi
 
 echo "[demo] attesting with a wrong-audience token (expect 401)"
-STATUS=$(curl -s -o "$DEMO_DIR/wrong.json" -w '%{http_code}' \
+# Same set-e + command-substitution caveat as above; capture first.
+# Switch the curl flags from `-s` to `-sS` so curl's own errors
+# (network drop, DNS, etc.) still appear on stderr - we want a
+# silent body but a loud failure if curl itself crashes.
+PAYLOAD=$(build_attest_payload "$WRONG_TOKEN")
+STATUS=$(curl -sS -o "$DEMO_DIR/wrong.json" -w '%{http_code}' \
 	-X POST "http://127.0.0.1:$SERVER_PORT/v1/attest/k8s" \
 	-H 'content-type: application/json' \
-	-d "$(build_attest_payload "$WRONG_TOKEN")")
+	-d "$PAYLOAD")
 if [[ "$STATUS" != "401" ]]; then
 	echo "[demo] FAIL: wrong-audience token: got HTTP $STATUS, want 401"
 	cat "$DEMO_DIR/wrong.json" | sed 's/^/       /'
