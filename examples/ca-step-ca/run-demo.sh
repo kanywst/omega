@@ -103,10 +103,16 @@ openssl ecparam -name prime256v1 -genkey -noout -out "$DEMO_DIR/wl.key"
 # not collide with the field separator. The SPIFFE ID flows in the
 # spiffe_id JSON field, not the CSR.
 openssl req -new -key "$DEMO_DIR/wl.key" -subj "/CN=omega-step-ca-demo-workload" -out "$DEMO_DIR/wl.csr"
-CSR_PEM_JSON=$(python3 -c "import json; print(json.dumps(open('$DEMO_DIR/wl.csr').read()))")
+# Build the request body entirely in Python with the shell values
+# delivered through argv, so a path or SPIFFE ID that happened to
+# contain a quote or backslash cannot break out of the JSON string.
+PAYLOAD=$(python3 -c "
+import json, sys
+print(json.dumps({'spiffe_id': sys.argv[1], 'csr': open(sys.argv[2]).read()}))
+" "$SPIFFE_ID" "$DEMO_DIR/wl.csr")
 SVID_JSON=$(curl -fsS -X POST "http://127.0.0.1:$SERVER_PORT/v1/svid" \
 	-H 'content-type: application/json' \
-	-d "{\"spiffe_id\":\"$SPIFFE_ID\",\"csr\":$CSR_PEM_JSON}")
+	-d "$PAYLOAD")
 echo "$SVID_JSON" | python3 -c "import sys,json; sys.stdout.write(json.load(sys.stdin)['svid'])" >"$DEMO_DIR/leaf.pem"
 
 # 3a. Leaf must chain to the bundle.
