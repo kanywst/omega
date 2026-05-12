@@ -86,6 +86,18 @@ changes (see [SECURITY.md](SECURITY.md)).
   `--ca-step-ca-provisioner`, `--ca-step-ca-provisioner-key-file`,
   `--ca-step-ca-ca-cert`. Validates the Plugin pattern on a second
   upstream signer.
+- Federation pump now consumes peers via `GET /v1/spiffe-bundle`
+  (SPIFFE Trust Domain Format), falling back to `GET /v1/bundle`
+  PEM when the peer returns 404 - so a freshly-built omega still
+  federates with peers older than the spiffe-bundle PR. TDF
+  responses are parsed through `go-spiffe v2`'s `spiffebundle.Read`
+  (same parser a SPIRE agent would run), and the peer-supplied
+  `spiffe_refresh_hint` drives the effective per-round poll
+  interval as `min(operator-configured-refresh, min-peer-hint)`,
+  clamped to `[10s, 1h]`. The legacy PEM path now also parses each
+  returned CERTIFICATE block as defence-in-depth so a malformed
+  upstream bundle is rejected instead of silently propagating to
+  every workload's mTLS handshake.
 - `examples/spiffe-bundle-tdf/` — runnable demo proving omega's
   `GET /v1/spiffe-bundle` response is consumed end-to-end by the
   upstream `go-spiffe v2` SDK. The tiny `cmd/consumer` binary
