@@ -10,27 +10,40 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release)
+## Now (next release, post-0.0.2)
 
-- CNCF supply-chain baseline: OpenSSF Scorecard, CodeQL, container
-  signing (cosign keyless), SBOM (SPDX), SLSA Level 3 provenance.
-- OpenAPI 3.1 specification covering every HTTP endpoint, validated
-  in CI.
-- Threat model document (`docs/threat-model.md`) and the first batch
-  of architecture decision records (`docs/adr/`) covering CA, PDP,
-  HA, and scope boundaries.
+- Cloud HSM / KMS-backed CA upstream plugins (AWS Private CA,
+  GCP CAS, Azure Key Vault). The interface seam is in place
+  ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and two
+  non-disk backends have shipped (`--ca-backend=vault-pki` and
+  `--ca-backend=step-ca`); remaining backends follow the same shape
+  (one `Kind` constant + one `Authority` impl + one `identity.New`
+  switch case + tests against a fake HTTP backend), with
+  [`docs/ca-plugin-guide.md`](docs/ca-plugin-guide.md) as the
+  walkthrough.
+- Agent-side Kubernetes workload attestor (cgroup-based pod
+  introspection). The server-side `POST /v1/attest/k8s` endpoint
+  has shipped (TokenReview-backed); the SPIRE-style "agent attests
+  workloads by inspecting `/proc/<pid>/cgroup` then calling
+  kube-apiserver" path is the remaining bit.
+- AuthZEN entity-store mode for Search. Today's
+  `POST /access/v1/search/{subject,resource,action}` requires an
+  explicit candidate list because Cedar has no global directory.
+  An opt-in in-process entity store would let the spec's pattern
+  shape return a full enumeration without leaving Cedar.
 
 ## Next (3-6 months)
 
-- AuthZEN 1.0 batch evaluation endpoint
-  (`POST /access/v1/evaluations`) and Search APIs (subject / resource
-  / action). Required for full spec conformance and for the admin
-  UI's "what can this subject do" inventory view.
-- Agent-side Kubernetes workload attestor (cgroup-based pod
-  introspection): the server-side `POST /v1/attest/k8s` endpoint
-  has shipped; the SPIRE-style "agent attests workloads by
-  inspecting `/proc/<pid>/cgroup` then calling kube-apiserver" path
-  is the remaining bit.
+- Runtime key rotation for the disk authority, with the
+  `spiffe_sequence` envelope field in the TDF bundle finally
+  incrementing on each rotation. Today the bundle is
+  monotonic-at-one for the lifetime of a server process.
+- SPIFFE CSI driver integration so workloads can mount SVIDs as a
+  volume instead of dialing the agent's Unix socket.
+- step-ca and Vault PKI rotation handling (today they serve a
+  stale bundle on transient errors; rotation-aware short-circuit
+  via `spiffe_sequence` comparison waits on the rotation work
+  above).
 
 ## Later (6-12 months)
 
@@ -39,13 +52,9 @@ release as features are ready rather than on a fixed cadence; see
   ID / Google Workspace ID tokens against per-IdP audience and
   template - has shipped; provisioning the user catalog ahead of
   first login is the remaining piece).
-- Additional HSM / KMS-backed CA upstream plugins (step-ca,
-  AWS Private CA, GCP CAS, Azure Key Vault). The interface seam
-  is in place ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md))
-  and the first non-disk backend (Vault PKI) shipped via
-  `--ca-backend=vault-pki`; remaining backends follow the same
-  shape (one `Kind` constant + one `Authority` impl + one
-  `identity.New` switch case + tests against a fake HTTP backend).
+- Native-arm64 image build matrix (today the multi-arch image is
+  cross-compiled on amd64 runners; `ubuntu-24.04-arm` runners would
+  give a faster + more honest arm64 binary).
 
 ## Tracking (research / spec watch)
 

@@ -8,6 +8,18 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-05-13
+
+Substantial conformance, supply-chain, and CA-plugin work since
+0.0.1. Highlights: SPIFFE Trust Domain Format endpoint and
+federation pump migration; AuthZEN discovery, batch, and
+candidate-set Search APIs; OIDC discovery + IdP federation; K8s
+attestor; Vault PKI and step-ca CA backends; Authority plugin
+architecture (ADR 0005); cosign-signed images, Helm charts, and
+SLSA provenance; per-peer federation scheduling; full STRIDE
+threat model and section-by-section SPIFFE / AuthZEN conformance
+matrices.
+
 ### Added
 
 - [`ROADMAP.md`](ROADMAP.md) enumerating the public roadmap by
@@ -330,5 +342,6 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/0-draft/omega/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/0-draft/omega/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/0-draft/omega/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/0-draft/omega/releases/tag/v0.0.1
