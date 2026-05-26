@@ -3,7 +3,7 @@ module github.com/0-draft/omega
 go 1.26.3
 
 require (
-	github.com/cedar-policy/cedar-go v1.6.1
+	github.com/cedar-policy/cedar-go v1.6.2
 	github.com/cert-manager/cert-manager v1.20.2
 	github.com/cert-manager/issuer-lib v0.10.0
 	github.com/go-jose/go-jose/v4 v4.1.4
