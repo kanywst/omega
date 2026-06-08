@@ -10,7 +10,7 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
-	github.com/spiffe/go-spiffe/v2 v2.6.0
+	github.com/spiffe/go-spiffe/v2 v2.7.0
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.69.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0
 	go.opentelemetry.io/otel v1.44.0
@@ -19,13 +19,13 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 	go.opentelemetry.io/proto/otlp v1.10.0
-	golang.org/x/sys v0.45.0
+	golang.org/x/sys v0.46.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	k8s.io/api v0.36.1
 	k8s.io/apimachinery v0.36.1
 	k8s.io/client-go v0.36.1
-	modernc.org/sqlite v1.51.0
+	modernc.org/sqlite v1.52.0
 	sigs.k8s.io/controller-runtime v0.24.1
 )
 
