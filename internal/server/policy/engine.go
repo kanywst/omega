@@ -261,6 +261,12 @@ func valueOf(v any) (cedar.Value, error) {
 		if x != math.Trunc(x) {
 			return nil, fmt.Errorf("number %v has a fractional part; Cedar has no float type (use a whole number or pass it as a string)", x)
 		}
+		// A whole-number float can still exceed the int64 range (e.g. 1e20);
+		// converting that overflows and silently yields a garbage Long. Note
+		// float64(math.MaxInt64) rounds up to 2^63, so reject at >= that bound.
+		if x >= float64(math.MaxInt64) || x < float64(math.MinInt64) {
+			return nil, fmt.Errorf("number %v is out of the supported int64 range", x)
+		}
 		return cedar.Long(int64(x)), nil
 	case int:
 		return cedar.Long(int64(x)), nil

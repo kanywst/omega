@@ -201,6 +201,22 @@ func TestEvaluateAcceptsWholeNumberContextFloat(t *testing.T) {
 	}
 }
 
+// A whole-number float can exceed the int64 range (1e20 is integral but
+// overflows int64). Converting it would silently produce a garbage Long, so
+// out-of-range values must be a hard error rather than a wrapped comparison.
+func TestEvaluateRejectsOutOfRangeContextNumber(t *testing.T) {
+	e := policy.New()
+	_, err := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "User", ID: "alice"},
+		Action:   policy.Action{Name: "GET"},
+		Resource: policy.Entity{Type: "HttpPath", ID: "/x"},
+		Context:  map[string]any{"level": 1e20},
+	})
+	if err == nil {
+		t.Fatal("expected error for out-of-int64-range context number")
+	}
+}
+
 // Fractional numbers nested in subject properties must be rejected too,
 // not just top-level context, since they flow through the same valueOf.
 func TestEvaluateRejectsFractionalSubjectProperty(t *testing.T) {
