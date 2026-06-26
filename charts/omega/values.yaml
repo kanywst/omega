@@ -2,7 +2,7 @@
 # This is a YAML-formatted file.
 
 image:
-  repository: ghcr.io/0-draft/omega
+  repository: ghcr.io/kanywst/omega
   tag: ""            # defaults to .Chart.AppVersion if empty
   pullPolicy: IfNotPresent
 

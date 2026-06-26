@@ -20,7 +20,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/bundle/spiffebundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/0-draft/omega/internal/server/federation"
+	"github.com/kanywst/omega/internal/server/federation"
 )
 
 // newSelfSignedCA returns a fresh ECDSA P-256 self-signed CA cert

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // WebhookConfig configures an HTTP POST forwarder. URL is required;

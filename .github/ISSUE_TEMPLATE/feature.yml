@@ -13,7 +13,7 @@ body:
     id: layer
     attributes:
       label: Design layer
-      description: "See [docs/design-philosophy.md](https://github.com/0-draft/omega/blob/main/docs/design-philosophy.md) for the layer rules."
+      description: "See [docs/design-philosophy.md](https://github.com/kanywst/omega/blob/main/docs/design-philosophy.md) for the layer rules."
       options:
         - Core (in-tree, mandatory)
         - Plugin (in-tree interface + default)
@@ -25,7 +25,7 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: "Existing tools, workarounds, or other designs you considered. If this overlaps with [docs/non-goals.md](https://github.com/0-draft/omega/blob/main/docs/non-goals.md) please address that section explicitly."
+      description: "Existing tools, workarounds, or other designs you considered. If this overlaps with [docs/non-goals.md](https://github.com/kanywst/omega/blob/main/docs/non-goals.md) please address that section explicitly."
   - type: textarea
     id: design
     attributes:

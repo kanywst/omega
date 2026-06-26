@@ -1,7 +1,7 @@
 # Omega - Minimum demo scope
 
 > What ships in the current source tree as the "default" demo path. The
-> [GitHub issues](https://github.com/0-draft/omega/issues) sketches what comes next.
+> [GitHub issues](https://github.com/kanywst/omega/issues) sketches what comes next.
 
 ## Goal
 
@@ -26,7 +26,7 @@
 
 K8s CRDs / Operator wiring (separate manifests), CSI driver, OIDC federation
 hub, PQC (ML-DSA), HSM / KMS Authority plugins, AI agent delegation reference
-implementation. See the [GitHub issues](https://github.com/0-draft/omega/issues) for what is
+implementation. See the [GitHub issues](https://github.com/kanywst/omega/issues) for what is
 queued next.
 
 ## Definition of Done for the demo

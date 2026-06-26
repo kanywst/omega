@@ -88,7 +88,7 @@ func (i *OmegaIssuer) GetConditions() []metav1.Condition { return i.Status.Condi
 // used by issuer-lib to discover which CertificateRequests this signer
 // owns and how to encode CSR issuerName values.
 func (i *OmegaIssuer) GetIssuerTypeIdentifier() string {
-	return "omegaissuers.omega.0-draft.github.io"
+	return "omegaissuers.omega.kanywst.github.io"
 }
 
 // GetConditions exposes the Ready condition slice to issuer-lib.
@@ -98,7 +98,7 @@ func (i *OmegaClusterIssuer) GetConditions() []metav1.Condition { return i.Statu
 // used by issuer-lib to discover which CertificateRequests this signer
 // owns and how to encode CSR issuerName values.
 func (i *OmegaClusterIssuer) GetIssuerTypeIdentifier() string {
-	return "omegaclusterissuers.omega.0-draft.github.io"
+	return "omegaclusterissuers.omega.kanywst.github.io"
 }
 
 // DeepCopy / DeepCopyInto / DeepCopyObject. Hand-written for the same

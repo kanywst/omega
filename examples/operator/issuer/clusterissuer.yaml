@@ -1,5 +1,5 @@
 ---
-apiVersion: omega.0-draft.github.io/v1alpha1
+apiVersion: omega.kanywst.github.io/v1alpha1
 kind: OmegaClusterIssuer
 metadata:
   name: omega

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0-draft/omega/internal/server/identity"
+	"github.com/kanywst/omega/internal/server/identity"
 )
 
 func TestBuildSPIFFEBundleEmitsTDFShape(t *testing.T) {

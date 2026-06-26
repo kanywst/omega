@@ -11,7 +11,7 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // randomLeaderKey picks a per-test advisory-lock key so two tests in

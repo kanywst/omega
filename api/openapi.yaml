@@ -28,7 +28,7 @@ info:
     identifier: Apache-2.0
   contact:
     name: Omega maintainers
-    url: https://github.com/0-draft/omega
+    url: https://github.com/kanywst/omega
 
 servers:
   - url: http://127.0.0.1:8080

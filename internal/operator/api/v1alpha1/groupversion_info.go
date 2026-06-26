@@ -1,8 +1,8 @@
 // Package v1alpha1 contains API Schema definitions for the
-// omega.0-draft.github.io v1alpha1 API group.
+// omega.kanywst.github.io v1alpha1 API group.
 //
 // +kubebuilder:object:generate=true
-// +groupName=omega.0-draft.github.io
+// +groupName=omega.kanywst.github.io
 package v1alpha1
 
 import (
@@ -13,7 +13,7 @@ import (
 
 var (
 	// GroupVersion is the group / version used to register objects.
-	GroupVersion = schema.GroupVersion{Group: "omega.0-draft.github.io", Version: "v1alpha1"}
+	GroupVersion = schema.GroupVersion{Group: "omega.kanywst.github.io", Version: "v1alpha1"}
 
 	schemeBuilder = runtime.NewSchemeBuilder()
 

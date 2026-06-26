@@ -16,11 +16,11 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/0-draft/omega/internal/server/api"
-	"github.com/0-draft/omega/internal/server/identity"
-	"github.com/0-draft/omega/internal/server/oidc"
-	"github.com/0-draft/omega/internal/server/policy"
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/api"
+	"github.com/kanywst/omega/internal/server/identity"
+	"github.com/kanywst/omega/internal/server/oidc"
+	"github.com/kanywst/omega/internal/server/policy"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // idpFixture is a tiny in-process OIDC IdP. discovery + jwks only;

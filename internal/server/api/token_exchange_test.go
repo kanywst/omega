@@ -10,7 +10,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/0-draft/omega/internal/server/api"
+	"github.com/kanywst/omega/internal/server/api"
 )
 
 // issueJWT is a small wrapper around POST /v1/svid/jwt so the

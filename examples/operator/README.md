@@ -11,7 +11,7 @@ The operator ships one cluster-scoped CRD:
 
 | Group                     | Kind        | Short name | Scope   |
 | ------------------------- | ----------- | ---------- | ------- |
-| `omega.0-draft.github.io` | OmegaDomain | `odom`     | Cluster |
+| `omega.kanywst.github.io` | OmegaDomain | `odom`     | Cluster |
 
 A reconcile loop watches `OmegaDomain` resources and translates them
 into HTTP calls against the Omega control plane:

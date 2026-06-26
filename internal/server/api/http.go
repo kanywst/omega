@@ -23,17 +23,17 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/0-draft/omega/internal/server/attest"
-	"github.com/0-draft/omega/internal/server/federation"
-	"github.com/0-draft/omega/internal/server/identity"
-	"github.com/0-draft/omega/internal/server/metrics"
-	"github.com/0-draft/omega/internal/server/oidc"
-	"github.com/0-draft/omega/internal/server/policy"
-	"github.com/0-draft/omega/internal/server/storage"
-	"github.com/0-draft/omega/internal/server/tracing"
+	"github.com/kanywst/omega/internal/server/attest"
+	"github.com/kanywst/omega/internal/server/federation"
+	"github.com/kanywst/omega/internal/server/identity"
+	"github.com/kanywst/omega/internal/server/metrics"
+	"github.com/kanywst/omega/internal/server/oidc"
+	"github.com/kanywst/omega/internal/server/policy"
+	"github.com/kanywst/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/tracing"
 )
 
-var tracer = tracing.Tracer("github.com/0-draft/omega/internal/server/api")
+var tracer = tracing.Tracer("github.com/kanywst/omega/internal/server/api")
 
 type Server struct {
 	store                   *storage.Store

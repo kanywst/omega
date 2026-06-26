@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/0-draft/omega/internal/cli"
+	"github.com/kanywst/omega/internal/cli"
 )
 
 func main() {

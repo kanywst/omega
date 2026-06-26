@@ -10,9 +10,9 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/0-draft/omega/internal/server/metrics"
-	"github.com/0-draft/omega/internal/server/policy"
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/metrics"
+	"github.com/kanywst/omega/internal/server/policy"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // RFC 8693 grant- and token-type identifiers we recognise. The current

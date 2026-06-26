@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 func newStore(t *testing.T) *storage.Store {

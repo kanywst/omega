@@ -25,7 +25,7 @@ recent minor versions.
 Instead, use one of the following private channels:
 
 1. GitHub private vulnerability reporting:
-   <https://github.com/0-draft/omega/security/advisories/new>
+   <https://github.com/kanywst/omega/security/advisories/new>
 2. Email the maintainers listed in [MAINTAINERS.md](MAINTAINERS.md).
 
 Please include:

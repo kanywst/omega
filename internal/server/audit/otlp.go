@@ -17,7 +17,7 @@ import (
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // OTLPConfig configures the OTLP/HTTP-protobuf log forwarder. Endpoint
@@ -117,7 +117,7 @@ func (o *OTLPForwarder) Forward(ctx context.Context, events []storage.AuditEvent
 		ResourceLogs: []*logspb.ResourceLogs{{
 			Resource: o.resource,
 			ScopeLogs: []*logspb.ScopeLogs{{
-				Scope:      &commonpb.InstrumentationScope{Name: "github.com/0-draft/omega/audit"},
+				Scope:      &commonpb.InstrumentationScope{Name: "github.com/kanywst/omega/audit"},
 				LogRecords: records,
 			}},
 		}},

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // fakeForwarder records every batch handed to Forward and lets the test

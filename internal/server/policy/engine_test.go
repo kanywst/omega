@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/0-draft/omega/internal/server/policy"
+	"github.com/kanywst/omega/internal/server/policy"
 )
 
 const policyAllowWebGetAPI = `permit (

@@ -24,7 +24,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/0-draft/omega/internal/server/identity"
+	"github.com/kanywst/omega/internal/server/identity"
 )
 
 // stepCAFixture stands up a step-ca mock that answers the two

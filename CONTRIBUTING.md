@@ -61,7 +61,7 @@ Requirements:
 Clone and bootstrap:
 
 ```bash
-git clone https://github.com/0-draft/omega
+git clone https://github.com/kanywst/omega
 cd omega
 make build
 make test
@@ -106,7 +106,7 @@ the spec on every push. Generated code, if any, lives under
 ## Style
 
 - Go: standard `gofmt` + `goimports` with local prefix
-  `github.com/0-draft/omega`. Enforced by `golangci-lint`.
+  `github.com/kanywst/omega`. Enforced by `golangci-lint`.
 - Markdown: must lint clean under `markdownlint-cli2`. Headings,
   lists, tables, and fenced code blocks need surrounding blank lines;
   every code fence needs a language tag (use `text` for plain output).

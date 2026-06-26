@@ -19,7 +19,7 @@ package audit
 import (
 	"context"
 
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // Forwarder ships a batch of audit events to one external destination.

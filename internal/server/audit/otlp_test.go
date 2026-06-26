@@ -15,8 +15,8 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/0-draft/omega/internal/server/audit"
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/audit"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // startOTLPSink returns an httptest.Server that decodes
