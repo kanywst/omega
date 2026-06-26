@@ -9,6 +9,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -142,11 +143,15 @@ func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
 
 	principalUID := cedar.NewEntityUID(cedar.EntityType(req.Subject.Type), cedar.String(req.Subject.ID))
 	resourceUID := cedar.NewEntityUID(cedar.EntityType(req.Resource.Type), cedar.String(req.Resource.ID))
+	ctxRecord, err := recordFromMap(req.Context)
+	if err != nil {
+		return EvalResponse{}, fmt.Errorf("context: %w", err)
+	}
 	cedarReq := cedar.Request{
 		Principal: principalUID,
 		Action:    cedar.NewEntityUID("Action", cedar.String(req.Action.Name)),
 		Resource:  resourceUID,
-		Context:   recordFromMap(req.Context),
+		Context:   ctxRecord,
 	}
 
 	e.mu.RLock()
@@ -160,7 +165,10 @@ func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
 	// entities from LoadDir win on UID collision (we only fill in attrs
 	// when the operator did not already define the entity).
 	ents := baseEnts
-	overlays := requestEntities(principalUID, req.Subject.Attrs, resourceUID, req.Resource.Attrs)
+	overlays, err := requestEntities(principalUID, req.Subject.Attrs, resourceUID, req.Resource.Attrs)
+	if err != nil {
+		return EvalResponse{}, err
+	}
 	if len(overlays) > 0 {
 		ents = baseEnts.Clone()
 		for uid, ent := range overlays {
@@ -195,63 +203,87 @@ func validate(r EvalRequest) error {
 // resource) carrying the attrs supplied on the request. Returned entries
 // are merged into a per-request clone of the static EntityMap and only
 // take effect when no static entity already exists for that UID.
-func requestEntities(subUID cedar.EntityUID, subAttrs map[string]any, resUID cedar.EntityUID, resAttrs map[string]any) cedar.EntityMap {
+func requestEntities(subUID cedar.EntityUID, subAttrs map[string]any, resUID cedar.EntityUID, resAttrs map[string]any) (cedar.EntityMap, error) {
 	out := cedar.EntityMap{}
 	if len(subAttrs) > 0 {
-		out[subUID] = cedar.Entity{UID: subUID, Attributes: recordFromMap(subAttrs)}
+		rec, err := recordFromMap(subAttrs)
+		if err != nil {
+			return nil, fmt.Errorf("subject.properties: %w", err)
+		}
+		out[subUID] = cedar.Entity{UID: subUID, Attributes: rec}
 	}
 	if len(resAttrs) > 0 && resUID != subUID {
-		out[resUID] = cedar.Entity{UID: resUID, Attributes: recordFromMap(resAttrs)}
+		rec, err := recordFromMap(resAttrs)
+		if err != nil {
+			return nil, fmt.Errorf("resource.properties: %w", err)
+		}
+		out[resUID] = cedar.Entity{UID: resUID, Attributes: rec}
 	}
-	return out
+	return out, nil
 }
 
 // recordFromMap converts a JSON-decoded context map into a Cedar Record.
 // Only the JSON primitive shapes are bridged; nested arrays/objects fall
 // through as Cedar strings of their JSON representation, which avoids
 // pretending to support full Cedar value translation.
-func recordFromMap(m map[string]any) cedar.Record {
+func recordFromMap(m map[string]any) (cedar.Record, error) {
 	if len(m) == 0 {
-		return cedar.NewRecord(cedar.RecordMap{})
+		return cedar.NewRecord(cedar.RecordMap{}), nil
 	}
 	out := cedar.RecordMap{}
 	for k, v := range m {
-		out[cedar.String(k)] = valueOf(v)
+		val, err := valueOf(v)
+		if err != nil {
+			return cedar.Record{}, fmt.Errorf("%q: %w", k, err)
+		}
+		out[cedar.String(k)] = val
 	}
-	return cedar.NewRecord(out)
+	return cedar.NewRecord(out), nil
 }
 
-func valueOf(v any) cedar.Value {
+func valueOf(v any) (cedar.Value, error) {
 	switch x := v.(type) {
 	case nil:
-		return cedar.String("")
+		return cedar.String(""), nil
 	case bool:
 		if x {
-			return cedar.True
+			return cedar.True, nil
 		}
-		return cedar.False
+		return cedar.False, nil
 	case string:
-		return cedar.String(x)
+		return cedar.String(x), nil
 	case float64:
-		return cedar.Long(int64(x))
+		// JSON has only one number type, so integers arrive as float64.
+		// Cedar has no float type; truncating a fractional value would
+		// silently corrupt comparisons (e.g. `5.9` -> `5`), so reject
+		// anything with a fractional part. Whole-number floats (`5.0`)
+		// still map cleanly to Long.
+		if x != math.Trunc(x) {
+			return nil, fmt.Errorf("number %v has a fractional part; Cedar has no float type (use a whole number or pass it as a string)", x)
+		}
+		return cedar.Long(int64(x)), nil
 	case int:
-		return cedar.Long(int64(x))
+		return cedar.Long(int64(x)), nil
 	case int64:
-		return cedar.Long(x)
+		return cedar.Long(x), nil
 	case []string:
 		vals := make([]cedar.Value, 0, len(x))
 		for _, s := range x {
 			vals = append(vals, cedar.String(s))
 		}
-		return cedar.NewSet(vals...)
+		return cedar.NewSet(vals...), nil
 	case []any:
 		vals := make([]cedar.Value, 0, len(x))
 		for _, e := range x {
-			vals = append(vals, valueOf(e))
+			val, err := valueOf(e)
+			if err != nil {
+				return nil, err
+			}
+			vals = append(vals, val)
 		}
-		return cedar.NewSet(vals...)
+		return cedar.NewSet(vals...), nil
 	default:
 		raw, _ := json.Marshal(x)
-		return cedar.String(string(raw))
+		return cedar.String(string(raw)), nil
 	}
 }
