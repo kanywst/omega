@@ -1,12 +1,15 @@
 "use client";
 
-import { Kbd } from "@/components/ui/kbd";
 import { Search } from "lucide-react";
+import { Kbd } from "@/components/ui/kbd";
 
 export function Topbar({
   onPalette,
   health,
-}: { onPalette: () => void; health: "ok" | "down" | "unknown" }) {
+}: {
+  onPalette: () => void;
+  health: "ok" | "down" | "unknown";
+}) {
   const healthLabel = health === "ok" ? "online" : health === "down" ? "offline" : "checking";
   const healthColor =
     health === "ok"

@@ -1,15 +1,18 @@
 "use client";
 
-import { Kbd } from "@/components/ui/kbd";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Command } from "cmdk";
 import { useRouter } from "next/navigation";
+import { Kbd } from "@/components/ui/kbd";
 import { NAV } from "./nav-items";
 
 export function CommandPalette({
   open,
   onOpenChange,
-}: { open: boolean; onOpenChange: (open: boolean) => void }) {
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const router = useRouter();
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>

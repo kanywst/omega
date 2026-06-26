@@ -1,9 +1,9 @@
 "use client";
 
-import { omega } from "@/lib/omega";
-import { useGlobalShortcuts } from "@/lib/shortcuts";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { omega } from "@/lib/omega";
+import { useGlobalShortcuts } from "@/lib/shortcuts";
 import { CommandPalette } from "./command-palette";
 import { NAV } from "./nav-items";
 import { Sidebar } from "./sidebar";

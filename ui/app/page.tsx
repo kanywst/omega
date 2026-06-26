@@ -1,11 +1,11 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 import { CodeBlock, Mono } from "@/components/data/code";
 import { StatusPill } from "@/components/data/status-pill";
 import { PageHeader } from "@/components/shell/page-header";
 import { omega } from "@/lib/omega";
-import { useQuery } from "@tanstack/react-query";
-import Link from "next/link";
 
 export default function Overview() {
   const domains = useQuery({ queryKey: ["domains"], queryFn: omega.listDomains });
@@ -102,15 +102,7 @@ export default function Overview() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: React.ReactNode;
-  sub?: string;
-}) {
+function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
     <div className="flex flex-col gap-1.5 bg-[var(--color-bg)] px-4 py-3.5">
       <span className="font-mono text-[10.5px] text-[var(--color-fg-subtle)] uppercase tracking-[0.06em]">
