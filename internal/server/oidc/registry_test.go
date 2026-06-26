@@ -205,7 +205,9 @@ func TestRegistryRejectsInvalidConfig(t *testing.T) {
 		{"empty name", oidc.IdPConfig{Issuer: "https://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
 		{"empty issuer", oidc.IdPConfig{Name: "x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
 		{"non-http issuer", oidc.IdPConfig{Name: "x", Issuer: "ftp://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
-		{"empty template", oidc.IdPConfig{Name: "x", Issuer: "https://x"}},
+		{"empty template", oidc.IdPConfig{Name: "x", Issuer: "https://x", Audiences: []string{"omega"}}},
+		{"missing audiences", oidc.IdPConfig{Name: "x", Issuer: "https://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
+		{"blank audience value", oidc.IdPConfig{Name: "x", Issuer: "https://x", Audiences: []string{"  "}, SPIFFEIDTemplate: "spiffe://x/{sub}"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -217,10 +219,25 @@ func TestRegistryRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+// Audiences is a required field: an empty AnyAudience makes go-jose
+// skip the `aud` check entirely, so a token minted for any relying
+// party at the issuer would be accepted (confused deputy). Validate
+// must reject it with a clear message.
+func TestValidateRequiresAudiences(t *testing.T) {
+	err := oidc.IdPConfig{
+		Name:             "corp",
+		Issuer:           "https://corp.example",
+		SPIFFEIDTemplate: "spiffe://omega.local/humans/{sub}",
+	}.Validate()
+	if err == nil || !strings.Contains(err.Error(), "audience") {
+		t.Fatalf("expected audience-required error, got %v", err)
+	}
+}
+
 func TestRegistryRejectsDuplicateIdPName(t *testing.T) {
 	_, err := oidc.NewRegistry([]oidc.IdPConfig{
-		{Name: "x", Issuer: "https://a.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
-		{Name: "x", Issuer: "https://b.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
+		{Name: "x", Issuer: "https://a.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
+		{Name: "x", Issuer: "https://b.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("expected duplicate-name error, got %v", err)
@@ -232,9 +249,9 @@ func TestRegistryNamesIsLexicographicallySorted(t *testing.T) {
 	// back sorted so loggers and tests see a stable listing across
 	// runs (Go map iteration is non-deterministic).
 	reg, _ := oidc.NewRegistry([]oidc.IdPConfig{
-		{Name: "okta", Issuer: "https://okta.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
-		{Name: "corp", Issuer: "https://corp.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
-		{Name: "google", Issuer: "https://google.example", SPIFFEIDTemplate: "spiffe://x/{sub}"},
+		{Name: "okta", Issuer: "https://okta.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
+		{Name: "corp", Issuer: "https://corp.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
+		{Name: "google", Issuer: "https://google.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
 	})
 	got := reg.Names()
 	want := []string{"corp", "google", "okta"}

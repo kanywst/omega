@@ -348,7 +348,7 @@ func newServerCommand() *cobra.Command {
 		"path to a PEM file with the step-ca server's TLS trust anchor(s). Empty falls back to the system trust store; production step-ca is almost always behind a private CA and must set this.")
 
 	cmd.Flags().StringArrayVar(&oidcIdPs, "oidc-idp", nil,
-		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key takes one or more values separated by ';'. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")
+		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key is required and takes one or more values separated by ';'; it is the set of `aud` values an incoming ID token must match, so tokens minted for other relying parties at the same issuer are rejected. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")
 
 	cmd.Flags().BoolVar(&k8sAttestEnable, "k8s-attest", false,
 		"enable the POST /v1/attest/k8s endpoint: workloads present a ServiceAccount projected token + CSR, omega validates the token via TokenReview, and issues an X.509-SVID derived from the (namespace, serviceaccount[, podname]) triple.")
