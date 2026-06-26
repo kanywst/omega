@@ -65,7 +65,7 @@ Easier:
 - Shared types stay internal (`internal/server/...`,
   `internal/agent/...`) without forcing a stable public Go API.
 - Container image deduplication: the multi-arch tag at
-  `ghcr.io/0-draft/omega` covers every role.
+  `ghcr.io/kanywst/omega` covers every role.
 - Operator UX: `omega --help` enumerates everything the
   project does.
 

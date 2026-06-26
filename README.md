@@ -1,7 +1,7 @@
 # Omega
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/0-draft/omega/badge)](https://scorecard.dev/viewer/?uri=github.com/0-draft/omega)
-[![CodeQL](https://github.com/0-draft/omega/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/0-draft/omega/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/kanywst/omega/badge)](https://scorecard.dev/viewer/?uri=github.com/kanywst/omega)
+[![CodeQL](https://github.com/kanywst/omega/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/kanywst/omega/actions/workflows/codeql.yml)
 
 > SPIFFE-compatible Workload Identity + OpenID AuthZEN 1.0 Authorization in a single binary. Apache-2.0.
 
@@ -49,7 +49,7 @@ subject type.
 ## Quickstart
 
 ```bash
-git clone https://github.com/0-draft/omega
+git clone https://github.com/kanywst/omega
 cd omega
 make docker-up                    # full stack in containers, no toolchain
 ```

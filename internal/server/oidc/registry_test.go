@@ -16,7 +16,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/0-draft/omega/internal/server/oidc"
+	"github.com/kanywst/omega/internal/server/oidc"
 )
 
 // fakeIdP serves an OIDC discovery document and a JWKS that lets

@@ -263,7 +263,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/0-draft/omega
+          images: ghcr.io/kanywst/omega
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -296,13 +296,13 @@ jobs:
       # Bind the keyless signature to the immutable digest, not the
       # mutable tag, so a later overwrite of the tag does not silently
       # invalidate the signature. metadata-action only ever emits tags
-      # under the single `ghcr.io/0-draft/omega` image, so one cosign
+      # under the single `ghcr.io/kanywst/omega` image, so one cosign
       # invocation against the digest is enough.
       - name: cosign sign image (keyless)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "ghcr.io/0-draft/omega@${DIGEST}"
+        run: cosign sign --yes "ghcr.io/kanywst/omega@${DIGEST}"
 
       # SBOM has to be per-platform: anchore/sbom-action wraps Syft,
       # which when given an OCI manifest-list reference resolves to a
@@ -318,7 +318,7 @@ jobs:
           INDEX_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          raw=$(docker buildx imagetools inspect --raw "ghcr.io/0-draft/omega@${INDEX_DIGEST}")
+          raw=$(docker buildx imagetools inspect --raw "ghcr.io/kanywst/omega@${INDEX_DIGEST}")
           amd64=$(echo "$raw" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
           arm64=$(echo "$raw" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="arm64") | .digest')
           [ -n "$amd64" ] || { echo "no linux/amd64 manifest in index" >&2; exit 1; }
@@ -330,7 +330,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: anchore/sbom-action@v0
         with:
-          image: ghcr.io/0-draft/omega@${{ steps.archs.outputs.amd64 }}
+          image: ghcr.io/kanywst/omega@${{ steps.archs.outputs.amd64 }}
           format: spdx-json
           artifact-name: omega-sbom-linux-amd64.spdx.json
           output-file: ./omega-sbom-linux-amd64.spdx.json
@@ -339,7 +339,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: anchore/sbom-action@v0
         with:
-          image: ghcr.io/0-draft/omega@${{ steps.archs.outputs.arm64 }}
+          image: ghcr.io/kanywst/omega@${{ steps.archs.outputs.arm64 }}
           format: spdx-json
           artifact-name: omega-sbom-linux-arm64.spdx.json
           output-file: ./omega-sbom-linux-arm64.spdx.json
@@ -354,11 +354,11 @@ jobs:
           cosign attest --yes \
             --predicate ./omega-sbom-linux-amd64.spdx.json \
             --type spdxjson \
-            "ghcr.io/0-draft/omega@${AMD64}"
+            "ghcr.io/kanywst/omega@${AMD64}"
           cosign attest --yes \
             --predicate ./omega-sbom-linux-arm64.spdx.json \
             --type spdxjson \
-            "ghcr.io/0-draft/omega@${ARM64}"
+            "ghcr.io/kanywst/omega@${ARM64}"
 
       # GitHub-native build provenance (in-toto v1, sigstore-bundled).
       # `gh attestation verify` and `cosign verify-attestation` both
@@ -367,7 +367,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@v4
         with:
-          subject-name: ghcr.io/0-draft/omega
+          subject-name: ghcr.io/kanywst/omega
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 

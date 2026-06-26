@@ -20,7 +20,7 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/0-draft/omega/internal/server/identity"
+	"github.com/kanywst/omega/internal/server/identity"
 )
 
 // vaultFixture stands up a tiny Vault PKI mock that answers the

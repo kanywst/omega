@@ -10,10 +10,10 @@ kind: ClusterRole
 metadata:
   name: omega-operator
 rules:
-  - apiGroups: ["omega.0-draft.github.io"]
+  - apiGroups: ["omega.kanywst.github.io"]
     resources: ["omegadomains"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  - apiGroups: ["omega.0-draft.github.io"]
+  - apiGroups: ["omega.kanywst.github.io"]
     resources: ["omegadomains/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["coordination.k8s.io"]

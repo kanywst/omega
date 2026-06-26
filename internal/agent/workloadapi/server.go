@@ -43,8 +43,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/0-draft/omega/internal/agent/attestor"
-	"github.com/0-draft/omega/internal/server/api"
+	"github.com/kanywst/omega/internal/agent/attestor"
+	"github.com/kanywst/omega/internal/server/api"
 )
 
 // Mapping maps a peer UID to the SPIFFE ID the agent will request on

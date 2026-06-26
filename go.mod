@@ -1,4 +1,4 @@
-module github.com/0-draft/omega
+module github.com/kanywst/omega
 
 go 1.26.4
 

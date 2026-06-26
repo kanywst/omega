@@ -10,7 +10,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/0-draft/omega/internal/server/attest"
+	"github.com/kanywst/omega/internal/server/attest"
 )
 
 // makeFakeClient builds a fake clientset that intercepts every

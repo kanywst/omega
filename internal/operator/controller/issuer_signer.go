@@ -16,7 +16,7 @@ import (
 	cmissuerv1alpha1 "github.com/cert-manager/issuer-lib/api/v1alpha1"
 	"github.com/cert-manager/issuer-lib/controllers/signer"
 
-	omegav1alpha1 "github.com/0-draft/omega/internal/operator/api/v1alpha1"
+	omegav1alpha1 "github.com/kanywst/omega/internal/operator/api/v1alpha1"
 )
 
 // IssuerSigner implements issuer-lib's Sign + Check by routing

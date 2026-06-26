@@ -8,23 +8,23 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cert-manager-controller-approve:omega-0-draft-github-io
+  name: cert-manager-controller-approve:omega-kanywst-github-io
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["signers"]
     verbs: ["approve"]
     resourceNames:
-      - "omegaissuers.omega.0-draft.github.io/*"
-      - "omegaclusterissuers.omega.0-draft.github.io/*"
+      - "omegaissuers.omega.kanywst.github.io/*"
+      - "omegaclusterissuers.omega.kanywst.github.io/*"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: cert-manager-controller-approve:omega-0-draft-github-io
+  name: cert-manager-controller-approve:omega-kanywst-github-io
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cert-manager-controller-approve:omega-0-draft-github-io
+  name: cert-manager-controller-approve:omega-kanywst-github-io
 subjects:
   - kind: ServiceAccount
     name: cert-manager

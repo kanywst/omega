@@ -9,9 +9,9 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/0-draft/omega/internal/server/metrics"
-	"github.com/0-draft/omega/internal/server/oidc"
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/metrics"
+	"github.com/kanywst/omega/internal/server/oidc"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // OIDCExchangeRequest is the JSON body of POST /v1/oidc/exchange.

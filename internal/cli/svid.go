@@ -21,7 +21,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/svid/jwtsvid"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
 
-	"github.com/0-draft/omega/internal/server/api"
+	"github.com/kanywst/omega/internal/server/api"
 )
 
 func newSVIDCommand() *cobra.Command {

@@ -46,11 +46,11 @@ The `vX.Y.Z` tag triggers two jobs in
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
 1. `image`: builds linux/amd64 + linux/arm64, pushes to
-   `ghcr.io/0-draft/omega:X.Y.Z` and the `:X.Y` and `:X.Y.Z-<sha>`
+   `ghcr.io/kanywst/omega:X.Y.Z` and the `:X.Y` and `:X.Y.Z-<sha>`
    floating tags.
 2. `chart-release`: packages `charts/omega`, appends to
    `gh-pages/index.yaml`, and publishes the chart at
-   `https://0-draft.github.io/omega/`.
+   `https://kanywst.github.io/omega/`.
 
 Do not hand-edit the `gh-pages` branch (see
 [CLAUDE.md](CLAUDE.md) note in the repo). The only manual touch was
@@ -65,11 +65,11 @@ the bootstrap orphan commit.
   ```text
   helm pull omega/omega --version X.Y.Z
   gh release download omega-X.Y.Z \
-    --repo 0-draft/omega \
+    --repo kanywst/omega \
     --pattern 'omega-X.Y.Z.tgz.sigstore.json'
   cosign verify-blob \
     --bundle omega-X.Y.Z.tgz.sigstore.json \
-    --certificate-identity-regexp '^https://github\.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+    --certificate-identity-regexp '^https://github\.com/kanywst/omega/\.github/workflows/ci\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     omega-X.Y.Z.tgz
   ```
@@ -78,16 +78,16 @@ the bootstrap orphan commit.
   host's platform, so verify each explicitly:
 
   ```text
-  docker pull --platform linux/amd64 ghcr.io/0-draft/omega:X.Y.Z
-  docker pull --platform linux/arm64 ghcr.io/0-draft/omega:X.Y.Z
+  docker pull --platform linux/amd64 ghcr.io/kanywst/omega:X.Y.Z
+  docker pull --platform linux/arm64 ghcr.io/kanywst/omega:X.Y.Z
   ```
 
 - The image's keyless cosign signature verifies against the
   workflow that produced it:
 
   ```text
-  cosign verify ghcr.io/0-draft/omega:X.Y.Z \
-    --certificate-identity-regexp '^https://github\.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+  cosign verify ghcr.io/kanywst/omega:X.Y.Z \
+    --certificate-identity-regexp '^https://github\.com/kanywst/omega/\.github/workflows/ci\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
 
@@ -99,16 +99,16 @@ the bootstrap orphan commit.
   cosign verify-attestation \
     --platform linux/amd64 \
     --type spdxjson \
-    --certificate-identity-regexp '^https://github\.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+    --certificate-identity-regexp '^https://github\.com/kanywst/omega/\.github/workflows/ci\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    ghcr.io/0-draft/omega:X.Y.Z
+    ghcr.io/kanywst/omega:X.Y.Z
 
   cosign verify-attestation \
     --platform linux/arm64 \
     --type spdxjson \
-    --certificate-identity-regexp '^https://github\.com/0-draft/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+    --certificate-identity-regexp '^https://github\.com/kanywst/omega/\.github/workflows/ci\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    ghcr.io/0-draft/omega:X.Y.Z
+    ghcr.io/kanywst/omega:X.Y.Z
   ```
 
   The amd64 SBOM is also published as a build artefact named
@@ -118,8 +118,8 @@ the bootstrap orphan commit.
   `gh`:
 
   ```text
-  gh attestation verify oci://ghcr.io/0-draft/omega:X.Y.Z \
-    --repo 0-draft/omega \
+  gh attestation verify oci://ghcr.io/kanywst/omega:X.Y.Z \
+    --repo kanywst/omega \
     --workflow ci.yml
   ```
 

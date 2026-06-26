@@ -1,7 +1,7 @@
 # Omega is not X
 
 A scope statement, written negatively. The five design principles
-([07. Design principles](https://github.com/0-draft/omega/blob/main/docs/scope.md))
+([07. Design principles](https://github.com/kanywst/omega/blob/main/docs/scope.md))
 say what Omega *is*; this page says what it deliberately is not, so
 operators evaluating the project and contributors proposing features
 share the same map of the territory.

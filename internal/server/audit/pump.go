@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 // PumpConfig tunes the polling cadence of Pump. Defaults are chosen so

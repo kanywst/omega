@@ -16,10 +16,10 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
-	"github.com/0-draft/omega/internal/agent/attestor"
-	"github.com/0-draft/omega/internal/agent/workloadapi"
-	"github.com/0-draft/omega/internal/server/tracing"
-	"github.com/0-draft/omega/internal/version"
+	"github.com/kanywst/omega/internal/agent/attestor"
+	"github.com/kanywst/omega/internal/agent/workloadapi"
+	"github.com/kanywst/omega/internal/server/tracing"
+	"github.com/kanywst/omega/internal/version"
 )
 
 func newAgentCommand() *cobra.Command {

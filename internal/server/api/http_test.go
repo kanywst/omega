@@ -24,11 +24,11 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/0-draft/omega/internal/server/api"
-	"github.com/0-draft/omega/internal/server/attest"
-	"github.com/0-draft/omega/internal/server/identity"
-	"github.com/0-draft/omega/internal/server/policy"
-	"github.com/0-draft/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/api"
+	"github.com/kanywst/omega/internal/server/attest"
+	"github.com/kanywst/omega/internal/server/identity"
+	"github.com/kanywst/omega/internal/server/policy"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 var b64RawURL = base64.RawURLEncoding

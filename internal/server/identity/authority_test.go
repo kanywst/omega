@@ -13,7 +13,7 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/0-draft/omega/internal/server/identity"
+	"github.com/kanywst/omega/internal/server/identity"
 )
 
 func TestLoadOrCreatePersistsCA(t *testing.T) {

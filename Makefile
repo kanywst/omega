@@ -4,7 +4,7 @@ BIN        := bin/omega
 DIST       := dist
 PKG        := ./...
 GOFLAGS    := -trimpath
-LDFLAGS    := -s -w -X github.com/0-draft/omega/internal/version.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS    := -s -w -X github.com/kanywst/omega/internal/version.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 all: build
 

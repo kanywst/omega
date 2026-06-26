@@ -20,8 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	omegav1alpha1 "github.com/0-draft/omega/internal/operator/api/v1alpha1"
-	"github.com/0-draft/omega/internal/operator/controller"
+	omegav1alpha1 "github.com/kanywst/omega/internal/operator/api/v1alpha1"
+	"github.com/kanywst/omega/internal/operator/controller"
 )
 
 // scheme aggregates the K8s built-in types (Pods, Events, ...) and the
@@ -98,7 +98,7 @@ Out-of-cluster runs use the default kubeconfig (KUBECONFIG env or
 			if err := (&issuercontrollers.CombinedController{
 				IssuerTypes:        []cmissuerv1alpha1.Issuer{&omegav1alpha1.OmegaIssuer{}},
 				ClusterIssuerTypes: []cmissuerv1alpha1.Issuer{&omegav1alpha1.OmegaClusterIssuer{}},
-				FieldOwner:         "omega-operator.0-draft.github.io",
+				FieldOwner:         "omega-operator.kanywst.github.io",
 				EventRecorder:      eventBroadcaster.NewRecorder("omega-operator"),
 				Sign:               sgnr.Sign,
 				Check:              sgnr.Check,
@@ -122,7 +122,7 @@ Out-of-cluster runs use the default kubeconfig (KUBECONFIG env or
 	cmd.Flags().StringVar(&metricsAddr, "metrics-addr", ":8081", "address the metrics endpoint binds to")
 	cmd.Flags().StringVar(&probeAddr, "health-addr", ":8082", "address the health/readiness endpoints bind to")
 	cmd.Flags().BoolVar(&leaderElect, "leader-elect", false, "enable leader election for HA operator deployments")
-	cmd.Flags().StringVar(&electionID, "leader-election-id", "omega-operator.0-draft.github.io", "lease name used for leader election")
+	cmd.Flags().StringVar(&electionID, "leader-election-id", "omega-operator.kanywst.github.io", "lease name used for leader election")
 	cmd.Flags().StringVar(&omegaURL, "omega-url", "http://omega-server:8080", "Omega control plane base URL the reconciler talks to")
 
 	return cmd

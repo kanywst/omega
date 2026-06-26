@@ -19,7 +19,7 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 
 | Key                       | Default                  | Notes                                |
 | ------------------------- | ------------------------ | ------------------------------------ |
-| `image.repository`        | `ghcr.io/0-draft/omega`  | Container image                      |
+| `image.repository`        | `ghcr.io/kanywst/omega`  | Container image                      |
 | `server.trustDomain`      | `omega.local`            | SPIFFE trust domain                  |
 | `server.policyDir`        | `""`                     | Mount Cedar policies into this path  |
 | `policy.inline`           | `{}`                     | Inline `*.cedar` files via ConfigMap |

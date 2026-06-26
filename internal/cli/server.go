@@ -19,17 +19,17 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/0-draft/omega/internal/server/api"
-	"github.com/0-draft/omega/internal/server/attest"
-	"github.com/0-draft/omega/internal/server/audit"
-	"github.com/0-draft/omega/internal/server/federation"
-	"github.com/0-draft/omega/internal/server/identity"
-	"github.com/0-draft/omega/internal/server/metrics"
-	oidcpkg "github.com/0-draft/omega/internal/server/oidc"
-	"github.com/0-draft/omega/internal/server/policy"
-	"github.com/0-draft/omega/internal/server/storage"
-	"github.com/0-draft/omega/internal/server/tracing"
-	"github.com/0-draft/omega/internal/version"
+	"github.com/kanywst/omega/internal/server/api"
+	"github.com/kanywst/omega/internal/server/attest"
+	"github.com/kanywst/omega/internal/server/audit"
+	"github.com/kanywst/omega/internal/server/federation"
+	"github.com/kanywst/omega/internal/server/identity"
+	"github.com/kanywst/omega/internal/server/metrics"
+	oidcpkg "github.com/kanywst/omega/internal/server/oidc"
+	"github.com/kanywst/omega/internal/server/policy"
+	"github.com/kanywst/omega/internal/server/storage"
+	"github.com/kanywst/omega/internal/server/tracing"
+	"github.com/kanywst/omega/internal/version"
 )
 
 // buildK8sClient resolves a kube-apiserver client for --k8s-attest.

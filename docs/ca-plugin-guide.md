@@ -210,7 +210,7 @@ Three places need updating in the same PR:
 Today, true out-of-tree backends are NOT supported. The
 `Authority` interface lives under
 `internal/server/identity/`, and Go's `internal/` rule blocks
-imports from any module other than `github.com/0-draft/omega`
+imports from any module other than `github.com/kanywst/omega`
 itself. Vendoring does not bypass the check - the rule is
 enforced at compile time against the importing module's path,
 not against the source tree.
@@ -218,7 +218,7 @@ not against the source tree.
 If you want to ship a backend out-of-tree, your only options
 today are:
 
-- maintain a hard fork of `github.com/0-draft/omega` with your
+- maintain a hard fork of `github.com/kanywst/omega` with your
   backend added; or
 - run a separate process that exposes a remote-signing surface
   (e.g. KMS itself, or a thin sidecar that wraps your backend

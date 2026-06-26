@@ -10,7 +10,7 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath \
-      -ldflags "-s -w -X github.com/0-draft/omega/internal/version.Version=${VERSION}" \
+      -ldflags "-s -w -X github.com/kanywst/omega/internal/version.Version=${VERSION}" \
       -o /out/omega ./cmd/omega
 
 FROM gcr.io/distroless/static-debian12:nonroot

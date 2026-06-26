@@ -19,4 +19,4 @@ spec:
   issuerRef:
     name: omega
     kind: OmegaClusterIssuer
-    group: omega.0-draft.github.io
+    group: omega.kanywst.github.io

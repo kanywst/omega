@@ -336,12 +336,12 @@ and the Kubernetes operator.
   Prometheus + Grafana stack in `examples/observability/`.
 - Examples: `hello-svid`, `federation`, `postgres`, `postgres-ha`,
   `mcp-a2a-delegation`, `audit-siem`, `envoy-ext-authz`, `operator`.
-- Helm chart published at <https://0-draft.github.io/omega/> via
+- Helm chart published at <https://kanywst.github.io/omega/> via
   `chart-releaser`.
 - CI matrix: build, race tests, cross-compile, end-to-end demo,
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/0-draft/omega/compare/v0.0.2...HEAD
-[0.0.2]: https://github.com/0-draft/omega/compare/v0.0.1...v0.0.2
-[0.0.1]: https://github.com/0-draft/omega/releases/tag/v0.0.1
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/kanywst/omega/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/kanywst/omega/releases/tag/v0.0.1

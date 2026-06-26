@@ -19,7 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	omegav1alpha1 "github.com/0-draft/omega/internal/operator/api/v1alpha1"
+	omegav1alpha1 "github.com/kanywst/omega/internal/operator/api/v1alpha1"
 )
 
 // DomainReconciler watches OmegaDomain CRs and ensures the corresponding
