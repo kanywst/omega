@@ -258,6 +258,11 @@ func httpsTransport(cfg *tls.Config) *http.Transport {
 	// DefaultTransport is normally a *http.Transport, but an init-time
 	// wrapper (telemetry SDK, etc.) could replace it; guard the assertion
 	// so we fall back to a fresh transport instead of panicking.
+	//
+	// Setting a custom TLSClientConfig would normally suppress HTTP/2, but
+	// the cloned DefaultTransport carries ForceAttemptHTTP2=true, so h2 is
+	// still negotiated. (The fresh-transport fallback omits it, accepting
+	// HTTP/1.1 for the rare replaced-DefaultTransport case.)
 	var t *http.Transport
 	if base, ok := http.DefaultTransport.(*http.Transport); ok {
 		t = base.Clone()
