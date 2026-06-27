@@ -256,7 +256,9 @@ func httpsTransport(cfg *tls.Config) *http.Transport {
 	if base, ok := http.DefaultTransport.(*http.Transport); ok {
 		t = base.Clone()
 	} else {
-		t = &http.Transport{}
+		// DefaultTransport was replaced; keep at least env-proxy support
+		// rather than a bare transport that ignores HTTP(S)_PROXY.
+		t = &http.Transport{Proxy: http.ProxyFromEnvironment}
 	}
 	t.TLSClientConfig = cfg
 	return t

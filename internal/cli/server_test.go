@@ -139,13 +139,23 @@ func TestParseFederatePeersRejectsPinsUnderHTTPSWeb(t *testing.T) {
 
 // Peer clients are keyed by trust domain; a duplicate name would
 // overwrite the earlier peer's verifying client, so it must be rejected.
+// SPIFFE trust domains are case-insensitive, so a mixed-case duplicate
+// (Omega.Beta vs omega.beta) must be caught too.
 func TestParseFederatePeersRejectsDuplicateName(t *testing.T) {
 	specs := []string{
-		"name=omega.beta,url=https://omega.beta:8443",
+		"name=Omega.Beta,url=https://omega.beta:8443",
 		"name=omega.beta,url=https://other.beta:8443",
 	}
 	if _, err := parseFederatePeers(specs, false); err == nil {
-		t.Fatal("expected duplicate peer name to be rejected")
+		t.Fatal("expected duplicate peer name (case-insensitive) to be rejected")
+	}
+}
+
+// A url with no host parses but would fail every background fetch; reject
+// it early at config time.
+func TestParseFederatePeersRejectsURLWithoutHost(t *testing.T) {
+	if _, err := parseFederatePeers([]string{"name=omega.beta,url=https://"}, false); err == nil {
+		t.Fatal("expected a url without a host to be rejected")
 	}
 }
 

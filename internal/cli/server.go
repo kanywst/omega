@@ -644,6 +644,11 @@ func parseFederatePeers(specs []string, allowInsecure bool) ([]federation.PeerCo
 		if p.TrustDomain == "" || rawURL == "" {
 			return nil, fmt.Errorf("entry %q is missing name or url", s)
 		}
+		// SPIFFE trust domains are case-insensitive; lowercase to the
+		// canonical form so the dedup check and the trust-domain-keyed
+		// bundle/client maps can't be bypassed by casing (Omega.Beta vs
+		// omega.beta).
+		p.TrustDomain = strings.ToLower(p.TrustDomain)
 		if seen[p.TrustDomain] {
 			// Clients are keyed by trust domain; a duplicate would overwrite
 			// the earlier peer's verifying client and could run a pinned
@@ -654,6 +659,11 @@ func parseFederatePeers(specs []string, allowInsecure bool) ([]federation.PeerCo
 		u, err := url.Parse(rawURL)
 		if err != nil {
 			return nil, fmt.Errorf("entry %q: parse url: %w", s, err)
+		}
+		if u.Host == "" {
+			// url.Parse accepts "https://" or a path-only value; without a
+			// host every background fetch would just fail in a loop.
+			return nil, fmt.Errorf("entry %q: url %q has no host", s, rawURL)
 		}
 		switch u.Scheme {
 		case "https":
