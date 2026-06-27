@@ -264,6 +264,36 @@ func TestRequireAuth_PublicReadsReachable(t *testing.T) {
 	}
 }
 
+// The audit log exposes every decision's subject and payload, so under
+// require-auth its reads are closed too: a cert with no spiffe SAN is 401
+// on GET /v1/audit, while a properly authenticated caller gets 200. (It
+// is auth-gated but not leader-gated, so followers still serve it.)
+func TestRequireAuth_AuditReadsGated(t *testing.T) {
+	srv, tca := newAuthTestServer(t, true)
+
+	anonCert := tca.issue(t, "anon", "", nil)
+	anon := clientWith(tca, &anonCert)
+	resp, err := anon.Get(srv.URL + "/v1/audit")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated audit read: got %d want 401", resp.StatusCode)
+	}
+
+	webCert := tca.issue(t, "web", "spiffe://omega.local/web", nil)
+	authed := clientWith(tca, &webCert)
+	resp2, err := authed.Get(srv.URL + "/v1/audit")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated audit read: got %d want 200", resp2.StatusCode)
+	}
+}
+
 // With require-auth OFF, today's open-CA behaviour is preserved: an
 // authenticated client may still mint an SVID for an identity that is not
 // its own (the flag, not the transport, is what gates issuance).

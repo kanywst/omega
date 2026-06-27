@@ -153,8 +153,12 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /access/v1/search/subject", gated(s.searchSubject))
 	handle("POST /access/v1/search/resource", gated(s.searchResource))
 	handle("POST /access/v1/search/action", gated(s.searchAction))
-	handle("GET /v1/audit", s.listAudit)
-	handle("GET /v1/audit/verify", s.verifyAudit)
+	// Audit reads expose every decision's subject and full request /
+	// response payload, so when --require-auth is on they are closed to
+	// authenticated callers too. They are NOT leader-gated (reads are
+	// served by followers), hence requireSPIFFEAuth alone, not gated.
+	handle("GET /v1/audit", s.requireSPIFFEAuth(s.listAudit))
+	handle("GET /v1/audit/verify", s.requireSPIFFEAuth(s.verifyAudit))
 	handle("POST /v1/svid/jwt", gated(s.issueJWTSVID))
 	handle("POST /v1/token/exchange", gated(s.tokenExchange))
 	handle("POST /v1/oidc/exchange", leaderOnly(s.exchangeOIDC))

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 // callerCtxKey is the context key under which the authenticated caller's
@@ -38,22 +40,38 @@ func CallerSPIFFEID(ctx context.Context) string {
 }
 
 // spiffeIDFromTLS pulls the SPIFFE URI SAN out of the verified client
-// certificate. The TLS stack has already verified the chain against the
-// configured --client-ca by the time this runs (ClientAuth is
-// RequireAndVerifyClientCert), so this only has to project the already-
-// trusted leaf onto its SPIFFE identity. It deliberately does not trust
-// any caller-supplied header — the identity is the cert.
+// certificate. It keys off cs.VerifiedChains, which the TLS stack only
+// populates after it has actually verified the leaf against the trust
+// anchors (the configured --client-ca, via RequireAndVerifyClientCert),
+// so an unverified or self-signed peer cert can never reach the identity
+// projection even if an embedder fronts this Server with a laxer
+// ClientAuth mode. It deliberately trusts no caller-supplied header — the
+// identity is the cert. Per the X.509-SVID spec a cert carries exactly
+// one URI SAN; we reject anything else rather than picking the first, and
+// return the canonical SPIFFE ID so the caller-vs-requested comparison in
+// authorizeIssuance is normalization-stable.
 func spiffeIDFromTLS(cs *tls.ConnectionState) (string, error) {
-	if cs == nil || len(cs.PeerCertificates) == 0 {
-		return "", errors.New("client certificate required")
+	if cs == nil || len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
+		return "", errors.New("verified client certificate required")
 	}
-	leaf := cs.PeerCertificates[0]
+	leaf := cs.VerifiedChains[0][0]
+	var spiffeURI string
 	for _, u := range leaf.URIs {
 		if u != nil && u.Scheme == "spiffe" {
-			return u.String(), nil
+			if spiffeURI != "" {
+				return "", errors.New("client certificate has more than one spiffe:// URI SAN")
+			}
+			spiffeURI = u.String()
 		}
 	}
-	return "", errors.New("client certificate has no spiffe:// URI SAN")
+	if spiffeURI == "" {
+		return "", errors.New("client certificate has no spiffe:// URI SAN")
+	}
+	id, err := spiffeid.FromString(spiffeURI)
+	if err != nil {
+		return "", fmt.Errorf("client certificate SPIFFE ID: %w", err)
+	}
+	return id.String(), nil
 }
 
 // requireSPIFFEAuth wraps a gated handler with caller authentication.
