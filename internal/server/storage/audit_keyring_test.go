@@ -361,8 +361,13 @@ func TestLoadAuditKeyringRejectsLoosePerms(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "kr.json")
 	body := `{"active_key_id":"k1","keys":[{"id":"k1","secret":"` + base64.StdEncoding.EncodeToString(key(1)) + `"}]}`
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
+	}
+	// Chmod explicitly so umask can't quietly tighten the create mode and
+	// make this test pass for the wrong reason.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
 	}
 	if _, err := LoadAuditKeyring(path); err == nil {
 		t.Fatal("expected a group/world-readable keyring to be rejected")

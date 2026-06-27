@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -121,20 +122,28 @@ func LoadAuditKeyring(path string) (*AuditKeyring, error) {
 }
 
 func readKeyringFile(path string) (string, map[string][]byte, error) {
+	// #nosec G304 -- path is operator-supplied via --audit-hmac-key-file, not user input.
+	fh, err := os.Open(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("audit keyring: open %s: %w", path, err)
+	}
+	defer func() { _ = fh.Close() }()
 	// The keyring is the trust boundary against a DB-only attacker, so it
-	// must not be readable by group/other (like an SSH private key). Unix
-	// only: Windows always reports group/world bits on Perm(), so the
-	// check there would reject every file; access is governed by ACLs we
-	// don't read here.
+	// must not be readable by group/other (like an SSH private key). Stat
+	// the open descriptor (not the path) so the permission check and the
+	// read see the same file — no TOCTOU swap window. Unix only: Windows
+	// always reports group/world bits on Perm(), so the check there would
+	// reject every file; access is governed by ACLs we don't read here.
 	if runtime.GOOS != "windows" {
-		if info, err := os.Stat(path); err != nil {
+		info, err := fh.Stat()
+		if err != nil {
 			return "", nil, fmt.Errorf("audit keyring: stat %s: %w", path, err)
-		} else if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		}
+		if perm := info.Mode().Perm(); perm&0o077 != 0 {
 			return "", nil, fmt.Errorf("audit keyring: %s is group/world accessible (%#o); tighten to 0600", path, perm)
 		}
 	}
-	// #nosec G304 -- path is operator-supplied via --audit-hmac-key-file, not user input.
-	raw, err := os.ReadFile(path)
+	raw, err := io.ReadAll(fh)
 	if err != nil {
 		return "", nil, fmt.Errorf("audit keyring: read %s: %w", path, err)
 	}
