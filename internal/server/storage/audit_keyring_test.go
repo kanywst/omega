@@ -226,11 +226,16 @@ func TestKeyRotationVerifiesOldRows(t *testing.T) {
 		t.Fatalf("rotated keyring verify: %+v err=%v", res, err)
 	}
 
-	// Dropping the retired key makes the old row unverifiable -> surfaced
-	// as an error, not a silent pass.
+	// Dropping the retired key makes the old row unverifiable. That is
+	// reported as an invalid chain at the orphaned row, not a 500 error
+	// (which a DB-write attacker could otherwise trigger to DoS verify).
 	store.UseAuditKeyring(mustKeyring(t, "k2", map[string][]byte{"k2": key(2)}))
-	if _, err := store.VerifyAudit(ctx, nil); err == nil {
-		t.Errorf("expected error when retired key is dropped")
+	res, err = store.VerifyAudit(ctx, nil)
+	if err != nil {
+		t.Fatalf("verify should not error on a dropped key: %v", err)
+	}
+	if res.Valid || res.FirstBadSeq != old.Seq {
+		t.Errorf("expected invalid at the orphaned k1 row (seq %d), got %+v", old.Seq, res)
 	}
 }
 

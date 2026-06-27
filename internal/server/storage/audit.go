@@ -312,20 +312,27 @@ func (s *Store) VerifyAudit(ctx context.Context, anchor *AuditAnchor) (AuditVeri
 				// (pre-keying) rows → nil key → legacy SHA-256. Keyed rows
 				// resolve their secret from the snapshot.
 				var key []byte
+				resolvable := true
 				if !isUnkeyed {
-					if s.auditKeyring == nil {
-						return AuditVerification{}, fmt.Errorf("audit: verify seq %d: row MAC'd under key %q but no keyring is loaded", ev.Seq, ev.KeyID)
-					}
 					k, ok := keySnap[ev.KeyID]
-					if !ok {
-						return AuditVerification{}, fmt.Errorf("audit: verify seq %d: row MAC'd under key %q which is not in the keyring", ev.Seq, ev.KeyID)
+					if s.auditKeyring == nil || !ok {
+						// A keyed row whose key can't be resolved (no keyring
+						// loaded, or the id isn't in it) is unverifiable —
+						// report it as the first bad row rather than aborting
+						// the whole walk with a 500, which a DB-write attacker
+						// could otherwise trigger to DoS verification.
+						res.FirstBadSeq = ev.Seq
+						resolvable = false
+					} else {
+						key = k
 					}
-					key = k
 				}
-				want := macAuditEvent(ev, key)
-				got, derr := hex.DecodeString(ev.Hash)
-				if ev.PrevHash != prev || derr != nil || !hmac.Equal(want, got) {
-					res.FirstBadSeq = ev.Seq
+				if resolvable {
+					want := macAuditEvent(ev, key)
+					got, derr := hex.DecodeString(ev.Hash)
+					if ev.PrevHash != prev || derr != nil || !hmac.Equal(want, got) {
+						res.FirstBadSeq = ev.Seq
+					}
 				}
 			}
 		}
