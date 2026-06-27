@@ -65,7 +65,9 @@ func spiffeIDFromTLS(cs *tls.ConnectionState) (string, error) {
 	if leaf.URIs[0] == nil || leaf.URIs[0].Scheme != "spiffe" {
 		return "", errors.New("client certificate URI SAN is not a spiffe:// id")
 	}
-	id, err := spiffeid.FromString(leaf.URIs[0].String())
+	// Parse the already-parsed *url.URL directly rather than round-tripping
+	// through a string.
+	id, err := spiffeid.FromURI(leaf.URIs[0])
 	if err != nil {
 		return "", fmt.Errorf("client certificate SPIFFE ID: %w", err)
 	}
