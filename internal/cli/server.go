@@ -104,6 +104,7 @@ func newServerCommand() *cobra.Command {
 		tlsKeyFile              string
 		clientCAFile            string
 		requireAuth             bool
+		auditHMACKeyFile        string
 	)
 
 	cmd := &cobra.Command{
@@ -122,6 +123,22 @@ func newServerCommand() *cobra.Command {
 				return err
 			}
 			defer store.Close()
+
+			// H1: key the audit hash chain with HMAC so a DB-only
+			// attacker cannot forge or truncate it. Opt-in: without the
+			// flag the chain stays unkeyed (legacy SHA-256) so existing
+			// deployments and CI examples are unaffected.
+			var auditKeyring *storage.AuditKeyring
+			if strings.TrimSpace(auditHMACKeyFile) != "" {
+				auditKeyring, err = storage.LoadAuditKeyring(strings.TrimSpace(auditHMACKeyFile))
+				if err != nil {
+					return fmt.Errorf("audit-hmac-key-file: %w", err)
+				}
+				store.UseAuditKeyring(auditKeyring)
+				fmt.Fprintf(os.Stderr, "omega server: audit chain keyed with HMAC-SHA-256 (keyring=%s)\n", auditHMACKeyFile)
+			} else {
+				fmt.Fprintf(os.Stderr, "omega server: WARN audit chain is UNKEYED (SHA-256); set --audit-hmac-key-file to make it tamper-resistant (H1)\n")
+			}
 
 			caCfg := identity.Config{
 				Kind:        identity.Kind(strings.TrimSpace(caBackend)),
@@ -176,6 +193,29 @@ func newServerCommand() *cobra.Command {
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+
+			// SIGHUP re-reads the keyring so an operator can rotate keys
+			// (append a new active key, demote the old to retired)
+			// without restarting. Reload is atomic and refuses to drop
+			// the previously-active key.
+			if auditKeyring != nil {
+				hup := make(chan os.Signal, 1)
+				signal.Notify(hup, syscall.SIGHUP)
+				go func() {
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-hup:
+							if err := auditKeyring.Reload(); err != nil {
+								fmt.Fprintf(os.Stderr, "omega server: audit keyring reload failed: %v\n", err)
+							} else {
+								fmt.Fprintf(os.Stderr, "omega server: audit keyring reloaded\n")
+							}
+						}
+					}
+				}()
+			}
 
 			// Postgres-only: opt into advisory-lock leader election so
 			// only one replica accepts writes. SQLite is single-writer
@@ -404,6 +444,13 @@ func newServerCommand() *cobra.Command {
 		"use the http scheme when --audit-otlp-endpoint omits one. Ignored when the endpoint already specifies http:// or https://.")
 	cmd.Flags().StringArrayVar(&auditOTLPHeaders, "audit-otlp-header", nil,
 		"extra HTTP header on each OTLP export, format 'Key: value'. Repeatable; use to inject auth tokens (e.g. 'Authorization: Bearer ...').")
+
+	cmd.Flags().StringVar(&auditHMACKeyFile, "audit-hmac-key-file", "",
+		"path to a JSON keyring that MACs the audit hash chain with HMAC-SHA-256 (H1). "+
+			"Shape: {\"active_key_id\":\"<id>\",\"keys\":[{\"id\":\"<id>\",\"secret\":\"<base64 >=16 bytes>\"}, ...]}. "+
+			"The active key signs new rows; retired keys stay listed so old rows remain verifiable. "+
+			"Each row records its key_id. Empty (default) keeps the legacy unkeyed chain for backward "+
+			"compatibility. Keep this file outside --data-dir and out of DB backups; SIGHUP reloads it for rotation.")
 
 	cmd.Flags().BoolVar(&enforceTokenExchangePol, "enforce-token-exchange-policy", false,
 		"evaluate POST /v1/token/exchange through the loaded Cedar policy set "+

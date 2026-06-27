@@ -108,8 +108,8 @@ func TestPostgresAuditChainAndForward(t *testing.T) {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	if bad, err := s.VerifyAudit(ctx); err != nil || bad != 0 {
-		t.Fatalf("verify clean chain: bad=%d err=%v", bad, err)
+	if res, err := s.VerifyAudit(ctx, nil); err != nil || !res.Valid {
+		t.Fatalf("verify clean chain: %+v err=%v", res, err)
 	}
 
 	events, err := s.ListAudit(ctx, 0, 10)

@@ -57,20 +57,23 @@ func TestVerifyAuditDetectsTamper(t *testing.T) {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	if bad, err := store.VerifyAudit(ctx); err != nil || bad != 0 {
-		t.Fatalf("clean chain: bad=%d err=%v", bad, err)
+	if res, err := store.VerifyAudit(ctx, nil); err != nil || !res.Valid {
+		t.Fatalf("clean chain: %+v err=%v", res, err)
 	}
 
 	if _, err := store.db.ExecContext(ctx,
 		`UPDATE audit_log SET subject = 'tampered' WHERE seq = 3`); err != nil {
 		t.Fatalf("tamper: %v", err)
 	}
-	bad, err := store.VerifyAudit(ctx)
+	res, err := store.VerifyAudit(ctx, nil)
 	if err != nil {
 		t.Fatalf("verify after tamper: %v", err)
 	}
-	if bad != 3 {
-		t.Errorf("first_bad = %d, want 3", bad)
+	if res.FirstBadSeq != 3 {
+		t.Errorf("first_bad = %d, want 3", res.FirstBadSeq)
+	}
+	if res.Valid {
+		t.Errorf("tampered chain reported valid")
 	}
 }
 

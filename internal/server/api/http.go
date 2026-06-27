@@ -1134,14 +1134,34 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) verifyAudit(w http.ResponseWriter, r *http.Request) {
-	bad, err := s.store.VerifyAudit(r.Context())
+	// Optional external checkpoint: ?expected_head=<hash>&expected_count=<n>
+	// lets a caller pin the chain so tail truncation below the anchor is
+	// reported. Both must be present to anchor; otherwise the walk is
+	// unanchored (truncation above the live tail is invisible, as before).
+	var anchor *storage.AuditAnchor
+	head := r.URL.Query().Get("expected_head")
+	if head != "" {
+		count, err := strconv.ParseInt(r.URL.Query().Get("expected_count"), 10, 64)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("expected_count must accompany expected_head and be an integer: %w", err))
+			return
+		}
+		anchor = &storage.AuditAnchor{HeadHash: head, Count: count}
+	}
+
+	res, err := s.store.VerifyAudit(r.Context(), anchor)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Response shape is extended, not broken: `valid` and `first_bad_seq`
+	// keep their meaning; `truncated`, `count`, and `head_hash` are added.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"valid":         bad == 0,
-		"first_bad_seq": bad,
+		"valid":         res.Valid,
+		"first_bad_seq": res.FirstBadSeq,
+		"truncated":     res.Truncated,
+		"count":         res.Count,
+		"head_hash":     res.HeadHash,
 	})
 }
 
