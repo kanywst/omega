@@ -179,12 +179,25 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 	if _, err := spiffeid.TrustDomainFromString(p.TrustDomain); err != nil {
 		return nil, fmt.Errorf("trust domain %q: %w", p.TrustDomain, err)
 	}
+	// The fetch appends a fixed bundle path to this base URL, so it must
+	// have a host and no query/fragment. These mirror the CLI parser's
+	// checks so a direct NewRegistry caller can't slip past them.
+	if u.Host == "" {
+		return nil, fmt.Errorf("url %q has no host", p.URL)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("url %q must not carry a query or fragment", p.URL)
+	}
 	switch u.Scheme {
 	case "http":
 		// Plaintext, unverified. Only reachable when the operator
 		// passed --federation-allow-insecure; the loud warning is
 		// emitted at parse time in the CLI. No redirect policy here: an
-		// already-insecure peer has nothing more to downgrade.
+		// already-insecure peer has nothing more to downgrade. A
+		// verification profile/pin would be silently ignored, so reject it.
+		if p.Profile != "" || p.EndpointSPIFFEID != "" || p.EndpointBundleFile != "" || p.EndpointCAFile != "" {
+			return nil, fmt.Errorf("http:// peer %q is unauthenticated and cannot use a verification profile or endpoint pins", p.TrustDomain)
+		}
 		return client, nil
 	case "https":
 		// handled below
@@ -217,6 +230,9 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 	}
 	switch profile {
 	case ProfileHTTPSWeb:
+		if p.EndpointSPIFFEID != "" || p.EndpointBundleFile != "" {
+			return nil, fmt.Errorf("profile https_web ignores endpoint_spiffe_id/endpoint_bundle; use profile=https_spiffe to pin a SPIFFE endpoint")
+		}
 		tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 		if p.EndpointCAFile != "" {
 			// #nosec G304 -- EndpointCAFile is operator-supplied via --federate-with endpoint_ca, not user input.
@@ -233,6 +249,9 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 		client.Transport = httpsTransport(tlsCfg)
 		return client, nil
 	case ProfileHTTPSSPIFFE:
+		if p.EndpointCAFile != "" {
+			return nil, fmt.Errorf("profile https_spiffe ignores endpoint_ca; verification uses endpoint_bundle")
+		}
 		endpointID, err := spiffeid.FromString(p.EndpointSPIFFEID)
 		if err != nil {
 			return nil, fmt.Errorf("endpoint_spiffe_id %q: %w", p.EndpointSPIFFEID, err)
@@ -292,11 +311,14 @@ func httpsTransport(cfg *tls.Config) *http.Transport {
 // clientFor returns the verifying http.Client for a peer trust domain,
 // falling back to a default client if (impossibly) absent so a fetch
 // never nil-panics.
-func (r *Registry) clientFor(trustDomain string) *http.Client {
+func (r *Registry) clientFor(trustDomain string) (*http.Client, error) {
 	if c, ok := r.peerClients[strings.ToLower(trustDomain)]; ok && c != nil {
-		return c
+		return c, nil
 	}
-	return &http.Client{Timeout: 10 * time.Second}
+	// Fail closed: silently falling back to a bare client would bypass the
+	// peer's configured verification profile. NewRegistry builds a client
+	// for every peer, so this is only reachable on a programming error.
+	return nil, fmt.Errorf("federation: no verifying client configured for peer %q", trustDomain)
 }
 
 // Bundles returns a fresh copy of the trust-domain -> PEM map. Callers
@@ -475,7 +497,11 @@ func (r *Registry) fetchTDF(ctx context.Context, peer PeerConfig) ([]byte, time.
 	if err != nil {
 		return nil, 0, err
 	}
-	resp, err := r.clientFor(peer.TrustDomain).Do(req)
+	client, err := r.clientFor(peer.TrustDomain)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -520,7 +546,11 @@ func (r *Registry) fetchPEM(ctx context.Context, peer PeerConfig) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	resp, err := r.clientFor(peer.TrustDomain).Do(req)
+	client, err := r.clientFor(peer.TrustDomain)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

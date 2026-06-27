@@ -462,6 +462,27 @@ func TestNewRegistryRejectsHTTPSSPIFFEWithoutSeed(t *testing.T) {
 	}
 }
 
+// NewRegistry is exported, so it must reject profile/field mismatches and
+// malformed URLs itself (not only the CLI parser), since a direct caller
+// bypasses parseFederatePeers.
+func TestNewRegistryRejectsBadPeerConfig(t *testing.T) {
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
+	cases := map[string]federation.PeerConfig{
+		"web with spiffe pin":    {TrustDomain: "omega.beta", URL: "https://omega.beta:8443", Profile: federation.ProfileHTTPSWeb, EndpointBundleFile: "/x.pem"},
+		"spiffe with endpointca": {TrustDomain: "omega.beta", URL: "https://omega.beta:8443", Profile: federation.ProfileHTTPSSPIFFE, EndpointSPIFFEID: "spiffe://omega.beta/cp", EndpointBundleFile: "/x.pem", EndpointCAFile: "/c.pem"},
+		"url no host":            {TrustDomain: "omega.beta", URL: "https://"},
+		"url with query":         {TrustDomain: "omega.beta", URL: "https://omega.beta:8443?x=1"},
+	}
+	for name, peer := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := federation.NewRegistry(td, ownPEM, []federation.PeerConfig{peer}, time.Hour); err == nil {
+				t.Fatalf("expected NewRegistry to reject %s", name)
+			}
+		})
+	}
+}
+
 // NewRegistry is exported, so it must reject duplicate peer trust domains
 // itself (case-insensitively) rather than silently overwriting a client.
 func TestNewRegistryRejectsDuplicatePeer(t *testing.T) {
