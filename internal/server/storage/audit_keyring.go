@@ -159,20 +159,20 @@ func (kr *AuditKeyring) Reload() error {
 	if err := validateKeyset(activeID, keys); err != nil {
 		return err
 	}
-	kr.mu.RLock()
-	prevActive := kr.activeID
-	kr.mu.RUnlock()
-	if _, ok := keys[prevActive]; !ok {
-		return fmt.Errorf("audit keyring: reload would drop previously-active key %q (rows written under it would become unverifiable)", prevActive)
-	}
 	cp := make(map[string][]byte, len(keys))
 	for id, k := range keys {
 		cp[id] = k
 	}
+	// Hold the write lock across reading the previously-active id, the drop
+	// check, and the swap, so concurrent reloads cannot interleave between
+	// the check and the assignment and drop a still-referenced active key.
 	kr.mu.Lock()
+	defer kr.mu.Unlock()
+	if _, ok := cp[kr.activeID]; !ok {
+		return fmt.Errorf("audit keyring: reload would drop previously-active key %q (rows written under it would become unverifiable)", kr.activeID)
+	}
 	kr.activeID = activeID
 	kr.keys = cp
-	kr.mu.Unlock()
 	return nil
 }
 
