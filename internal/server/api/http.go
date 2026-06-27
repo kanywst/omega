@@ -45,6 +45,7 @@ type Server struct {
 	k8sSVIDTemplate         string
 	oidc                    *oidc.Registry
 	spiffeBundleRefreshHint time.Duration
+	requireAuth             bool
 }
 
 func NewServer(store *storage.Store, ca identity.Authority, pdp *policy.Engine) *Server {
@@ -123,24 +124,39 @@ func (s *Server) Handler() http.Handler {
 			h(w, r)
 		}
 	}
+	// gated wraps the write / PDP / issuance surface with both the HA
+	// leader gate and (when --require-auth is on) caller authentication.
+	// The auth check runs first so a follower still answers 503 with the
+	// usual Retry-After rather than leaking a 401 to a leader-routing
+	// load balancer that is only probing where to send writes.
+	gated := func(h http.HandlerFunc) http.HandlerFunc {
+		return s.requireSPIFFEAuth(leaderOnly(h))
+	}
 	handle("GET /healthz", s.healthz)
 	handle("GET /v1/leader", s.leaderState)
-	handle("POST /v1/domains", leaderOnly(s.createDomain))
+	handle("POST /v1/domains", gated(s.createDomain))
 	handle("GET /v1/domains", s.listDomains)
 	handle("GET /v1/domains/{name}", s.getDomain)
-	handle("POST /v1/svid", leaderOnly(s.issueSVID))
+	handle("POST /v1/svid", gated(s.issueSVID))
+	// The attestation enrollment paths (POST /v1/attest/k8s and
+	// POST /v1/oidc/exchange) carry their own platform-rooted / external-
+	// IdP proof and are how a workload obtains its *first* SVID, so they
+	// are gated by the leader check only, not by requireSPIFFEAuth -
+	// requiring an Omega client SVID here would break the bootstrap
+	// chicken-and-egg the trust-model design (#83) calls out. They derive
+	// identity from validated input, never a caller-asserted spiffe_id.
 	handle("POST /v1/attest/k8s", leaderOnly(s.attestK8s))
 	handle("GET /v1/bundle", s.getBundle)
 	handle("GET /v1/spiffe-bundle", s.getSPIFFEBundle)
-	handle("POST /access/v1/evaluation", leaderOnly(s.evaluateAccess))
-	handle("POST /access/v1/evaluations", leaderOnly(s.evaluateAccessBatch))
-	handle("POST /access/v1/search/subject", leaderOnly(s.searchSubject))
-	handle("POST /access/v1/search/resource", leaderOnly(s.searchResource))
-	handle("POST /access/v1/search/action", leaderOnly(s.searchAction))
+	handle("POST /access/v1/evaluation", gated(s.evaluateAccess))
+	handle("POST /access/v1/evaluations", gated(s.evaluateAccessBatch))
+	handle("POST /access/v1/search/subject", gated(s.searchSubject))
+	handle("POST /access/v1/search/resource", gated(s.searchResource))
+	handle("POST /access/v1/search/action", gated(s.searchAction))
 	handle("GET /v1/audit", s.listAudit)
 	handle("GET /v1/audit/verify", s.verifyAudit)
-	handle("POST /v1/svid/jwt", leaderOnly(s.issueJWTSVID))
-	handle("POST /v1/token/exchange", leaderOnly(s.tokenExchange))
+	handle("POST /v1/svid/jwt", gated(s.issueJWTSVID))
+	handle("POST /v1/token/exchange", gated(s.tokenExchange))
 	handle("POST /v1/oidc/exchange", leaderOnly(s.exchangeOIDC))
 	handle("GET /v1/jwt/bundle", s.getJWTBundle)
 	handle("GET /v1/federation/bundles", s.getFederationBundles)
@@ -211,6 +227,9 @@ func (s *Server) issueJWTSVID(w http.ResponseWriter, r *http.Request) {
 	id, err := spiffeid.FromString(req.SPIFFEID)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("spiffe_id: %w", err))
+		return
+	}
+	if !s.authorizeIssuance(w, r, id.String()) {
 		return
 	}
 	if len(req.Audience) == 0 {
@@ -450,6 +469,9 @@ func (s *Server) issueSVID(w http.ResponseWriter, r *http.Request) {
 	id, err := spiffeid.FromString(req.SPIFFEID)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("spiffe_id: %w", err))
+		return
+	}
+	if !s.authorizeIssuance(w, r, id.String()) {
 		return
 	}
 	block, _ := pem.Decode([]byte(req.CSR))

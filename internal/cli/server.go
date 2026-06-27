@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
@@ -98,6 +100,10 @@ func newServerCommand() *cobra.Command {
 		caStepCAProvisioner     string
 		caStepCAKeyFile         string
 		caStepCACACertFile      string
+		tlsCertFile             string
+		tlsKeyFile              string
+		clientCAFile            string
+		requireAuth             bool
 	)
 
 	cmd := &cobra.Command{
@@ -242,7 +248,8 @@ func newServerCommand() *cobra.Command {
 			apiServer := api.NewServer(store, ca, pdp).
 				WithFederation(fed).
 				WithEnforceTokenExchangePolicy(enforceTokenExchangePol).
-				WithSPIFFEBundleRefreshHint(spiffeBundleRefreshHint)
+				WithSPIFFEBundleRefreshHint(spiffeBundleRefreshHint).
+				WithRequireAuth(requireAuth)
 
 			if len(oidcIdPs) > 0 {
 				cfgs, err := parseOIDCIdPFlags(oidcIdPs)
@@ -276,16 +283,40 @@ func newServerCommand() *cobra.Command {
 					k8sSVIDTemplate, k8sTokenAudiences)
 			}
 
+			tlsConf, err := buildServerTLS(tlsCertFile, tlsKeyFile, clientCAFile)
+			if err != nil {
+				return err
+			}
+			if requireAuth && clientCAFile == "" {
+				return errors.New("--require-auth needs --client-ca: caller authentication verifies client SVIDs against a CA bundle (mTLS); set --client-ca (and --tls-cert/--tls-key) or leave --require-auth off")
+			}
+			if requireAuth {
+				fmt.Fprintf(os.Stderr, "omega server: require-auth=true (mTLS-authenticated callers; cross-identity SVID issuance denied)\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "omega server: WARNING require-auth=false: POST /v1/svid trusts the caller-asserted spiffe_id, so any client that reaches the listener can mint an SVID for any identity (open CA). Set --require-auth=true with mTLS to close this (see docs/design/control-plane-trust-model.md C1).\n")
+			}
+
 			srv := &http.Server{
 				Addr:              httpAddr,
 				Handler:           apiServer.Handler(),
 				ReadHeaderTimeout: 5 * time.Second,
+				TLSConfig:         tlsConf,
 			}
 
 			errCh := make(chan error, 1)
 			go func() {
-				fmt.Fprintf(os.Stderr, "omega server: trust-domain=%s data-dir=%s listen=http://%s\n", ca.TrustDomain(), dataDir, httpAddr)
-				if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				scheme := "http"
+				if tlsConf != nil {
+					scheme = "https"
+				}
+				fmt.Fprintf(os.Stderr, "omega server: trust-domain=%s data-dir=%s listen=%s://%s\n", ca.TrustDomain(), dataDir, scheme, httpAddr)
+				// Cert/key are already loaded into TLSConfig.Certificates, so
+				// ListenAndServeTLS takes empty path arguments.
+				serve := srv.ListenAndServe
+				if tlsConf != nil {
+					serve = func() error { return srv.ListenAndServeTLS("", "") }
+				}
+				if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					errCh <- err
 					return
 				}
@@ -384,7 +415,58 @@ func newServerCommand() *cobra.Command {
 			"document served at GET /v1/spiffe-bundle. The recommended minimum "+
 			"interval between peer re-fetches.")
 
+	cmd.Flags().StringVar(&tlsCertFile, "tls-cert", "",
+		"PEM certificate (chain) for the HTTP listener. Set together with --tls-key to serve HTTPS; leave both empty (default) to serve plaintext HTTP for backward compatibility.")
+	cmd.Flags().StringVar(&tlsKeyFile, "tls-key", "",
+		"PEM private key matching --tls-cert. Required when --tls-cert is set.")
+	cmd.Flags().StringVar(&clientCAFile, "client-ca", "",
+		"PEM CA bundle used to require and verify client certificates (mutual TLS). When set, the listener rejects any client whose certificate does not chain to this bundle. Requires --tls-cert/--tls-key. Empty (default) disables client-cert verification.")
+	cmd.Flags().BoolVar(&requireAuth, "require-auth", false,
+		"require an authenticated caller on every write / PDP / issuance endpoint: the request must arrive over mTLS with a verified client certificate carrying a spiffe:// URI SAN, and SVID issuance is bound to that caller (self-renewal only; minting a different identity is denied). Default false keeps today's open, unauthenticated behaviour. Requires --client-ca. Public reads (/healthz, /v1/leader, GET /v1/bundle, GET /v1/domains) and the attestation enrollment paths stay reachable. See docs/design/control-plane-trust-model.md (C1).")
+
 	return cmd
+}
+
+// buildServerTLS assembles the listener tls.Config from the operator's
+// flags. It returns (nil, nil) when no --tls-cert/--tls-key are set so
+// the caller serves plaintext HTTP (the backward-compatible default).
+//
+// When cert+key are set it serves TLS with a 1.2 floor. When --client-ca
+// is additionally set it switches to mutual TLS: client certificates are
+// required and verified against that bundle, which is what lets the
+// application layer trust the SPIFFE URI SAN it reads off the peer cert.
+func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
+	if certFile == "" && keyFile == "" {
+		if clientCAFile != "" {
+			return nil, errors.New("--client-ca requires --tls-cert/--tls-key: client-cert verification only applies to a TLS listener")
+		}
+		return nil, nil
+	}
+	if certFile == "" || keyFile == "" {
+		return nil, errors.New("--tls-cert and --tls-key must be set together")
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load tls keypair: %w", err)
+	}
+	cfg := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{cert},
+	}
+	if clientCAFile != "" {
+		// #nosec G304 -- clientCAFile is operator-supplied via --client-ca, not user input.
+		pem, err := os.ReadFile(clientCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read --client-ca: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("--client-ca %q contained no PEM certificates", clientCAFile)
+		}
+		cfg.ClientCAs = pool
+		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return cfg, nil
 }
 
 // isPostgresDSN duplicates storage.isPostgresDSN so the CLI can decide
