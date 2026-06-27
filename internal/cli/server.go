@@ -344,9 +344,16 @@ func newServerCommand() *cobra.Command {
 			}
 
 			srv := &http.Server{
-				Addr:              httpAddr,
-				Handler:           apiServer.Handler(),
+				Addr:    httpAddr,
+				Handler: apiServer.Handler(),
+				// ReadHeaderTimeout alone leaves a slow client dripping the
+				// request body; ReadTimeout/WriteTimeout/IdleTimeout bound the
+				// whole exchange so a trickle can't pin a connection. The API
+				// has no streaming endpoints, so these fixed budgets are safe.
 				ReadHeaderTimeout: 5 * time.Second,
+				ReadTimeout:       15 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       120 * time.Second,
 				TLSConfig:         tlsConf,
 			}
 
