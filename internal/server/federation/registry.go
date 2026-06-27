@@ -203,8 +203,9 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 		}
 		// Also pin the host: a compromised/misconfigured peer must not be
 		// able to redirect the fetch to a different origin (e.g. one whose
-		// cert it controls under https_web).
-		if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+		// cert it controls under https_web). Compare Hostname() (no port)
+		// so a default-vs-explicit :443 difference isn't a false positive.
+		if len(via) > 0 && req.URL.Hostname() != via[0].URL.Hostname() {
 			return fmt.Errorf("refusing cross-host redirect to %q (federation bundle endpoint must stay on the configured host)", req.URL.Redacted())
 		}
 		return nil
