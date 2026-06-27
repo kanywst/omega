@@ -685,6 +685,12 @@ func parseFederatePeers(specs []string, allowInsecure bool) ([]federation.PeerCo
 			if p.EndpointBundleFile == "" {
 				return nil, fmt.Errorf("entry %q: profile https_spiffe requires endpoint_bundle (operator-pinned seed bundle)", s)
 			}
+			if p.EndpointCAFile != "" {
+				// https_spiffe verifies against the SPIFFE bundle, so a
+				// web-PKI endpoint_ca is silently ignored — reject it so the
+				// operator's intent isn't quietly dropped.
+				return nil, fmt.Errorf("entry %q: endpoint_ca is ignored under profile=https_spiffe (verification uses endpoint_bundle); remove it or use profile=https_web", s)
+			}
 		default:
 			return nil, fmt.Errorf("entry %q: unknown profile %q (want https_web or https_spiffe)", s, p.Profile)
 		}

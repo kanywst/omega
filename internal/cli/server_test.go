@@ -104,6 +104,16 @@ func TestParseFederatePeersHTTPSSPIFFERequiresPins(t *testing.T) {
 	}
 }
 
+// endpoint_ca is a web-PKI knob; under https_spiffe verification uses the
+// SPIFFE bundle, so endpoint_ca would be silently ignored and must error.
+func TestParseFederatePeersRejectsEndpointCAUnderHTTPSSPIFFE(t *testing.T) {
+	spec := "name=omega.beta,url=https://omega.beta:8443,profile=https_spiffe," +
+		"endpoint_spiffe_id=spiffe://omega.beta/cp,endpoint_bundle=/etc/omega/beta.pem,endpoint_ca=/etc/omega/web.pem"
+	if _, err := parseFederatePeers([]string{spec}, false); err == nil {
+		t.Fatal("expected endpoint_ca under https_spiffe to be rejected")
+	}
+}
+
 func TestParseFederatePeersUnknownProfile(t *testing.T) {
 	if _, err := parseFederatePeers([]string{"name=omega.beta,url=https://omega.beta:8443,profile=mtls_web"}, false); err == nil {
 		t.Fatal("expected unknown profile to be rejected")
