@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -354,6 +355,9 @@ func TestAuditKeyringReload(t *testing.T) {
 // The keyring is the trust boundary against a DB-only attacker, so a
 // group/world-readable file must be rejected.
 func TestLoadAuditKeyringRejectsLoosePerms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits are not meaningful on Windows")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "kr.json")
 	body := `{"active_key_id":"k1","keys":[{"id":"k1","secret":"` + base64.StdEncoding.EncodeToString(key(1)) + `"}]}`

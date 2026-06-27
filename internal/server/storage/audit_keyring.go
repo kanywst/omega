@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -121,11 +122,16 @@ func LoadAuditKeyring(path string) (*AuditKeyring, error) {
 
 func readKeyringFile(path string) (string, map[string][]byte, error) {
 	// The keyring is the trust boundary against a DB-only attacker, so it
-	// must not be readable by group/other (like an SSH private key).
-	if info, err := os.Stat(path); err != nil {
-		return "", nil, fmt.Errorf("audit keyring: stat %s: %w", path, err)
-	} else if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return "", nil, fmt.Errorf("audit keyring: %s is group/world accessible (%#o); tighten to 0600", path, perm)
+	// must not be readable by group/other (like an SSH private key). Unix
+	// only: Windows always reports group/world bits on Perm(), so the
+	// check there would reject every file; access is governed by ACLs we
+	// don't read here.
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(path); err != nil {
+			return "", nil, fmt.Errorf("audit keyring: stat %s: %w", path, err)
+		} else if perm := info.Mode().Perm(); perm&0o077 != 0 {
+			return "", nil, fmt.Errorf("audit keyring: %s is group/world accessible (%#o); tighten to 0600", path, perm)
+		}
 	}
 	// #nosec G304 -- path is operator-supplied via --audit-hmac-key-file, not user input.
 	raw, err := os.ReadFile(path)
@@ -186,20 +192,33 @@ func (kr *AuditKeyring) Reload() error {
 	return nil
 }
 
-// active returns the active key_id and its secret, used to MAC new rows.
+// active returns the active key_id and a copy of its secret, used to MAC
+// new rows. The copy keeps callers from mutating the live key material.
 func (kr *AuditKeyring) active() (string, []byte) {
 	kr.mu.RLock()
 	defer kr.mu.RUnlock()
-	return kr.activeID, kr.keys[kr.activeID]
+	return kr.activeID, cloneBytes(kr.keys[kr.activeID])
 }
 
-// lookup returns the secret for keyID. ok is false when the keyring does
-// not hold that id (e.g. a row written under a key that was dropped).
+// lookup returns a copy of the secret for keyID. ok is false when the
+// keyring does not hold that id (e.g. a row written under a dropped key).
 func (kr *AuditKeyring) lookup(keyID string) (secret []byte, ok bool) {
 	kr.mu.RLock()
 	defer kr.mu.RUnlock()
-	secret, ok = kr.keys[keyID]
-	return secret, ok
+	s, ok := kr.keys[keyID]
+	if !ok {
+		return nil, false
+	}
+	return cloneBytes(s), true
+}
+
+func cloneBytes(b []byte) []byte {
+	if b == nil {
+		return nil
+	}
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	return cp
 }
 
 // Snapshot returns a copy of the keyring's id->secret map taken under a
