@@ -175,6 +175,10 @@ func (s *Store) schemaDDL() []string {
 			   last_seq    BIGINT NOT NULL,
 			   updated_at  BIGINT NOT NULL
 			 )`,
+			`CREATE TABLE IF NOT EXISTS audit_meta (
+			   k  TEXT   PRIMARY KEY,
+			   v  BIGINT NOT NULL
+			 )`,
 		}
 	}
 	return []string{
@@ -203,6 +207,10 @@ func (s *Store) schemaDDL() []string {
 		   name        TEXT    PRIMARY KEY,
 		   last_seq    INTEGER NOT NULL,
 		   updated_at  INTEGER NOT NULL
+		 )`,
+		`CREATE TABLE IF NOT EXISTS audit_meta (
+		   k  TEXT    PRIMARY KEY,
+		   v  INTEGER NOT NULL
 		 )`,
 	}
 }
