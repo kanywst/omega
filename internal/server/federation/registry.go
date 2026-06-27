@@ -157,38 +157,38 @@ func NewRegistry(ownTD spiffeid.TrustDomain, ownBundle []byte, peers []PeerConfi
 // transport verification.
 func buildPeerClient(p PeerConfig) (*http.Client, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	// A bundle endpoint is a fixed path; it must never redirect us onto a
-	// plaintext leg, which would bypass the per-peer TLS verification that
-	// lives on the Transport. Refuse any redirect that leaves https. (A
-	// pure network MITM cannot forge this over the authenticated channel,
-	// but a malicious/misconfigured peer self-downgrade can.)
-	client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
-		if req.URL.Scheme != "https" {
-			return fmt.Errorf("refusing redirect to non-https %q (federation bundle endpoint must stay on https)", req.URL.Redacted())
-		}
-		return nil
-	}
 	u, err := url.Parse(p.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse url %q: %w", p.URL, err)
 	}
 	// Validate the peer trust domain for every profile (it is the bundle
-	// map key, and the https_spiffe seed bundle's domain), so a typo fails
-	// fast at startup rather than at the first fetch.
-	td, err := spiffeid.TrustDomainFromString(p.TrustDomain)
-	if err != nil {
+	// map key), so a typo fails fast at startup rather than at first fetch.
+	if _, err := spiffeid.TrustDomainFromString(p.TrustDomain); err != nil {
 		return nil, fmt.Errorf("trust domain %q: %w", p.TrustDomain, err)
 	}
 	switch u.Scheme {
 	case "http":
 		// Plaintext, unverified. Only reachable when the operator
 		// passed --federation-allow-insecure; the loud warning is
-		// emitted at parse time in the CLI.
+		// emitted at parse time in the CLI. No redirect policy here: an
+		// already-insecure peer has nothing more to downgrade.
 		return client, nil
 	case "https":
 		// handled below
 	default:
 		return nil, fmt.Errorf("unsupported url scheme %q (want https)", u.Scheme)
+	}
+
+	// For an https peer a bundle endpoint is a fixed path; it must never
+	// redirect us onto a plaintext leg, which would bypass the per-peer
+	// TLS verification on the Transport. Refuse any redirect that leaves
+	// https. (A network MITM cannot forge this over the authenticated
+	// channel, but a malicious/misconfigured peer self-downgrade can.)
+	client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return fmt.Errorf("refusing redirect to non-https %q (federation bundle endpoint must stay on https)", req.URL.Redacted())
+		}
+		return nil
 	}
 
 	profile := p.Profile
@@ -220,7 +220,10 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 		if p.EndpointBundleFile == "" {
 			return nil, fmt.Errorf("profile https_spiffe requires endpoint_bundle to seed verification of %s", endpointID)
 		}
-		bundle, err := x509bundle.Load(td, p.EndpointBundleFile)
+		// Load the seed bundle under the endpoint SVID's own trust domain
+		// (which may differ from the peer name), so AuthorizeID can chain
+		// the presented SVID to these authorities.
+		bundle, err := x509bundle.Load(endpointID.TrustDomain(), p.EndpointBundleFile)
 		if err != nil {
 			return nil, fmt.Errorf("load endpoint_bundle: %w", err)
 		}
@@ -246,7 +249,15 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 // config, rather than a bare &http.Transport{} that would drop all those
 // defaults.
 func httpsTransport(cfg *tls.Config) *http.Transport {
-	t := http.DefaultTransport.(*http.Transport).Clone()
+	// DefaultTransport is normally a *http.Transport, but an init-time
+	// wrapper (telemetry SDK, etc.) could replace it; guard the assertion
+	// so we fall back to a fresh transport instead of panicking.
+	var t *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		t = base.Clone()
+	} else {
+		t = &http.Transport{}
+	}
 	t.TLSClientConfig = cfg
 	return t
 }
