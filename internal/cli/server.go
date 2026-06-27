@@ -198,9 +198,9 @@ func newServerCommand() *cobra.Command {
 			// (append a new active key, demote the old to retired)
 			// without restarting. Reload is atomic and refuses to drop
 			// the previously-active key.
-			if auditKeyring != nil {
+			if auditKeyring != nil && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)
-				signal.Notify(hup, syscall.SIGHUP)
+				signal.Notify(hup, sighupSignals...)
 				go func() {
 					defer signal.Stop(hup)
 					for {
