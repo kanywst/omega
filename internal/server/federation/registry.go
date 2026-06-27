@@ -172,6 +172,13 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse url %q: %w", p.URL, err)
 	}
+	// Validate the peer trust domain for every profile (it is the bundle
+	// map key, and the https_spiffe seed bundle's domain), so a typo fails
+	// fast at startup rather than at the first fetch.
+	td, err := spiffeid.TrustDomainFromString(p.TrustDomain)
+	if err != nil {
+		return nil, fmt.Errorf("trust domain %q: %w", p.TrustDomain, err)
+	}
 	switch u.Scheme {
 	case "http":
 		// Plaintext, unverified. Only reachable when the operator
@@ -203,13 +210,9 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 			}
 			tlsCfg.RootCAs = roots
 		}
-		client.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+		client.Transport = httpsTransport(tlsCfg)
 		return client, nil
 	case ProfileHTTPSSPIFFE:
-		td, err := spiffeid.TrustDomainFromString(p.TrustDomain)
-		if err != nil {
-			return nil, fmt.Errorf("trust domain: %w", err)
-		}
 		endpointID, err := spiffeid.FromString(p.EndpointSPIFFEID)
 		if err != nil {
 			return nil, fmt.Errorf("endpoint_spiffe_id %q: %w", p.EndpointSPIFFEID, err)
@@ -231,11 +234,21 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 		// identity). This is the same verification a go-spiffe client
 		// would perform.
 		tlsCfg := tlsconfig.TLSClientConfig(bundle, tlsconfig.AuthorizeID(endpointID))
-		client.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+		client.Transport = httpsTransport(tlsCfg)
 		return client, nil
 	default:
 		return nil, fmt.Errorf("unknown profile %q (want https_web or https_spiffe)", profile)
 	}
+}
+
+// httpsTransport clones http.DefaultTransport (keeping its proxy, dialer
+// timeouts, keep-alives and HTTP/2 support) and swaps in the per-peer TLS
+// config, rather than a bare &http.Transport{} that would drop all those
+// defaults.
+func httpsTransport(cfg *tls.Config) *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = cfg
+	return t
 }
 
 // clientFor returns the verifying http.Client for a peer trust domain,
