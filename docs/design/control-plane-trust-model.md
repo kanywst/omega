@@ -324,6 +324,19 @@ Two complementary changes:
   `VerifyAudit` selects the matching key; old rows stay verifiable under
   their retired key. The keyring file is mounted read-only and excluded
   from any DB backup path.
+- **Rotation reload:** because the keyring is read-only to the process, a
+  rotation is applied by updating the mounted file and signalling the
+  server — `SIGHUP` triggers a re-read (with a slower periodic re-stat as
+  a fallback); a full restart also picks it up. Reload is atomic: the new
+  keyring must parse and still contain the previously-active `key_id` (now
+  retired) before it replaces the in-memory set, so an in-flight verify
+  never loses a key. In multi-replica (Postgres) deployments, rotation is
+  a two-step rollout: first append the new key as **retired** to every
+  replica's keyring (so any node can verify rows the new leader will
+  write), then flip it to **active** on the leader. This ordering means a
+  follower promoted mid-rollout (see leader election) can always verify
+  the active leader's rows even if its own active key is briefly stale; a
+  node must never MAC under a `key_id` it cannot also load for verify.
 - **Verify-side:** `VerifyAudit` gains (a) HMAC recomputation with the
   per-row key epoch, (b) an optional `expectedHead` / `expectedCount`
   parameter sourced from the latest external checkpoint, and (c) a
@@ -412,6 +425,21 @@ profiles:
    `https_web`-verified first fetch (web-PKI + pinned `endpoint_spiffe_id`)
    to seed the bundle, then pin `https_spiffe` for all later refreshes
    (trust-on-first-use, logged). The bundle is never accepted unverified.
+
+   **TOFU must persist the seed, or it is not "first use."** Today
+   `federation.Registry` keeps peer bundles only in an in-memory map
+   (`peerBundles`, `registry.go`); nothing is written to the store. If the
+   `https_web` TOFU path seeded a bundle into that map and the process
+   restarted, the seed would be lost and TOFU would re-run on every boot —
+   degrading "trust on first use" to "trust on every restart," reopening a
+   MITM window on each upgrade/restart. So this profile requires wiring
+   `Registry` to the storage layer: a TOFU-seeded bundle is persisted on
+   first acquisition and, on restart, loaded from the DB so subsequent
+   fetches verify against the stored anchor (no repeat `https_web`). The
+   operator-pinned `endpoint_bundle` path avoids this entirely and stays
+   the recommended default; the TOFU fallback is only acceptable with
+   persistence, and the recurring-window risk must be documented for any
+   deployment that knowingly runs it without a persisted store.
 
 3. **Config surface (per peer):** extend the `--federate-with` grammar
    with `profile=https_web|https_spiffe`, `endpoint_spiffe_id=...`,
