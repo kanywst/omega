@@ -88,8 +88,23 @@ Each control plane gets a repeatable `--federate-with` flag:
 ```bash
 omega server \
   --http-addr 127.0.0.1:18088 --trust-domain omega.alpha \
-  --federate-with name=omega.beta,url=http://127.0.0.1:18089
+  --federate-with name=omega.beta,url=http://127.0.0.1:18089 \
+  --federation-allow-insecure
 ```
+
+The fetch authenticates the peer's bundle endpoint, so peer URLs must be
+`https://`. This loopback demo points two control planes at each other
+over plaintext `http://`, which is only accepted because of the explicit
+`--federation-allow-insecure` escape hatch (logged loudly at startup);
+never use it outside a demo. For real federation use one of the SPIFFE
+Federation profiles per peer:
+
+- `profile=https_web` (default): standard web-PKI verification of the
+  endpoint cert (system roots, or `endpoint_ca=<pem-file>`), with the
+  usual hostname check.
+- `profile=https_spiffe`: verify the endpoint's X.509-SVID against the
+  pinned `endpoint_spiffe_id=spiffe://peer/...`, seeded from an
+  out-of-band `endpoint_bundle=<pem-file>`.
 
 The server fetches `<url>/v1/bundle` immediately on startup and then
 every 30 seconds. A peer that is currently unreachable is omitted from
@@ -104,7 +119,7 @@ before SPIFFE federation goes from "demonstrated" to "production":
 
 | gap                        | what's missing                                                                                                               | follow-up                                                                                                    |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Bundle authenticity        | The bundle fetch is plain HTTP - no signature, no mTLS to the peer control plane. A man-in-the-middle could swap the bundle. | mTLS to peer using the agent's own SVID, with the peer's bundle pinned via initial out-of-band exchange.     |
+| Bundle authenticity        | Addressed: the fetch now requires `https://` and verifies the peer endpoint identity (`https_web` / `https_spiffe`). Plaintext `http://` only via `--federation-allow-insecure`. Remaining: persisting a `https_web`-TOFU seed across restarts. | Persist TOFU-seeded bundles in the store so trust-on-first-use is not re-run on every restart.     |
 | JWKS federation            | Only X.509 bundles are exchanged today. JWT-SVID validation across trust domains needs the peer's JWKS too.                  | Extend `/v1/federation/bundles` with a JWKS section per trust domain alongside the OIDC federation hub work. |
 | Bundle freshness signaling | Peers re-fetch on a fixed 30s timer. A rotated CA would propagate within that window but there is no push or refresh hint.   | Emit a `refresh_hint` per the SPIFFE Trust Domain and Bundle Format and have agents long-poll.               |
 

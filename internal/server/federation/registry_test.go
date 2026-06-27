@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -12,6 +13,9 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -71,7 +75,7 @@ func marshalTDF(t *testing.T, td spiffeid.TrustDomain, anchors []*x509.Certifica
 func TestRegistryOwnOnly(t *testing.T) {
 	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
 	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
-	r := federation.NewRegistry(td, ownPEM, nil, time.Hour)
+	r := newRegistry(t, td, ownPEM, nil, time.Hour)
 	got := r.Bundles()
 	if len(got) != 1 || string(got["omega.alpha"]) != string(ownPEM) {
 		t.Fatalf("unexpected bundles: %v", got)
@@ -98,7 +102,7 @@ func TestRegistryFetchesPeerViaTDF(t *testing.T) {
 
 	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
 	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
-	r := federation.NewRegistry(td, ownPEM, []federation.PeerConfig{
+	r := newRegistry(t, td, ownPEM, []federation.PeerConfig{
 		{TrustDomain: "omega.beta", URL: peerSrv.URL},
 	}, time.Hour)
 
@@ -149,7 +153,7 @@ func TestRegistryFallsBackToPEMWhenTDFAbsent(t *testing.T) {
 
 	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
 	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
-	r := federation.NewRegistry(td, ownPEM, []federation.PeerConfig{
+	r := newRegistry(t, td, ownPEM, []federation.PeerConfig{
 		{TrustDomain: "omega.beta", URL: peerSrv.URL},
 	}, time.Hour)
 
@@ -177,7 +181,7 @@ func TestRegistryFallsBackToPEMWhenTDFAbsent(t *testing.T) {
 func TestRegistryIgnoresUnreachablePeer(t *testing.T) {
 	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
 	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
-	r := federation.NewRegistry(td, ownPEM, []federation.PeerConfig{
+	r := newRegistry(t, td, ownPEM, []federation.PeerConfig{
 		{TrustDomain: "omega.dead", URL: "http://127.0.0.1:1"}, // closed port
 	}, time.Hour)
 
@@ -209,7 +213,7 @@ func TestRegistryRejectsMalformedPEM(t *testing.T) {
 
 	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
 	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
-	r := federation.NewRegistry(td, ownPEM, []federation.PeerConfig{
+	r := newRegistry(t, td, ownPEM, []federation.PeerConfig{
 		{TrustDomain: "omega.bad", URL: peerSrv.URL},
 	}, time.Hour)
 
@@ -253,7 +257,7 @@ func TestRegistryPeersHaveIndependentCadences(t *testing.T) {
 
 	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
 	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
-	r := federation.NewRegistry(td, ownPEM, []federation.PeerConfig{
+	r := newRegistry(t, td, ownPEM, []federation.PeerConfig{
 		{TrustDomain: "omega.fast", URL: fastSrv.URL},
 		{TrustDomain: "omega.slow", URL: slowSrv.URL},
 	}, time.Hour)
@@ -276,6 +280,198 @@ func TestRegistryPeersHaveIndependentCadences(t *testing.T) {
 	if got, want := r.PeerRefresh("omega.slow"), 300*time.Second; got != want {
 		t.Errorf("slow peer refresh: got %s want %s", got, want)
 	}
+}
+
+// newSPIFFEEndpoint mints a fresh CA for trust domain td and a leaf
+// X.509-SVID for spiffe://td<path> signed by it. It returns the CA's
+// PEM (to seed endpoint_bundle), the TLS server certificate the peer
+// endpoint presents, the SVID's SPIFFE ID, and the CA cert (so it can
+// also be served as the peer's own TDF bundle).
+func newSPIFFEEndpoint(t *testing.T, td, path string) (caPEM []byte, serverCert tls.Certificate, id spiffeid.ID, caCert *x509.Certificate) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen ca key: %v", err)
+	}
+	caTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: td + " CA"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTpl, caTpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("self-sign ca: %v", err)
+	}
+	caCert, err = x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse ca: %v", err)
+	}
+	caPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+
+	id = spiffeid.RequireFromString("spiffe://" + td + path)
+	uri, err := url.Parse(id.String())
+	if err != nil {
+		t.Fatalf("parse spiffe uri: %v", err)
+	}
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen leaf key: %v", err)
+	}
+	leafTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		URIs:                  []*url.URL{uri},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTpl, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("sign leaf: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatalf("parse leaf: %v", err)
+	}
+	serverCert = tls.Certificate{
+		Certificate: [][]byte{leafDER},
+		PrivateKey:  leafKey,
+		Leaf:        leaf,
+	}
+	return caPEM, serverCert, id, caCert
+}
+
+// writeTemp writes b to a fresh file under t.TempDir and returns its path.
+func writeTemp(t *testing.T, name string, b []byte) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return p
+}
+
+// startSPIFFEPeer starts an HTTPS test server that presents serverCert
+// and serves the peer's own TDF bundle at /v1/spiffe-bundle.
+func startSPIFFEPeer(t *testing.T, serverCert tls.Certificate, peerTD spiffeid.TrustDomain, anchors []*x509.Certificate) *httptest.Server {
+	t.Helper()
+	tdf := marshalTDF(t, peerTD, anchors, 120*time.Second, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/spiffe-bundle", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(tdf)
+	})
+	srv := httptest.NewUnstartedServer(mux)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestRegistryHTTPSSPIFFEVerifiesPinnedEndpoint(t *testing.T) {
+	const peerTD = "omega.beta"
+	caPEM, serverCert, id, caCert := newSPIFFEEndpoint(t, peerTD, "/control-plane")
+	peerTDObj := spiffeid.RequireTrustDomainFromString(peerTD)
+	srv := startSPIFFEPeer(t, serverCert, peerTDObj, []*x509.Certificate{caCert})
+
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	r := newRegistry(t, spiffeid.RequireTrustDomainFromString("omega.alpha"), ownPEM, []federation.PeerConfig{{
+		TrustDomain:        peerTD,
+		URL:                srv.URL,
+		Profile:            federation.ProfileHTTPSSPIFFE,
+		EndpointSPIFFEID:   id.String(),
+		EndpointBundleFile: writeTemp(t, "beta-ca.pem", caPEM),
+	}}, time.Hour)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go r.Run(ctx)
+
+	waitFor(t, 2*time.Second, func() bool {
+		return string(r.Bundles()[peerTD]) != ""
+	}, "pinned https_spiffe peer bundle never appeared")
+}
+
+func TestRegistryHTTPSSPIFFERejectsWrongEndpointID(t *testing.T) {
+	const peerTD = "omega.beta"
+	caPEM, serverCert, _, caCert := newSPIFFEEndpoint(t, peerTD, "/control-plane")
+	peerTDObj := spiffeid.RequireTrustDomainFromString(peerTD)
+	srv := startSPIFFEPeer(t, serverCert, peerTDObj, []*x509.Certificate{caCert})
+
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	r := newRegistry(t, spiffeid.RequireTrustDomainFromString("omega.alpha"), ownPEM, []federation.PeerConfig{{
+		TrustDomain:        peerTD,
+		URL:                srv.URL,
+		Profile:            federation.ProfileHTTPSSPIFFE,
+		EndpointSPIFFEID:   "spiffe://" + peerTD + "/someone-else", // pinned ID != endpoint SVID
+		EndpointBundleFile: writeTemp(t, "beta-ca.pem", caPEM),
+	}}, time.Hour)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 400*time.Millisecond)
+	defer cancel()
+	r.Run(ctx)
+
+	if _, ok := r.Bundles()[peerTD]; ok {
+		t.Fatal("peer with mismatched endpoint SPIFFE ID should not be trusted")
+	}
+}
+
+func TestRegistryHTTPSSPIFFERejectsWrongSeedBundle(t *testing.T) {
+	const peerTD = "omega.beta"
+	_, serverCert, id, caCert := newSPIFFEEndpoint(t, peerTD, "/control-plane")
+	peerTDObj := spiffeid.RequireTrustDomainFromString(peerTD)
+	srv := startSPIFFEPeer(t, serverCert, peerTDObj, []*x509.Certificate{caCert})
+
+	// Seed with an UNRELATED CA: the endpoint SVID does not chain to it,
+	// so verification must fail even though the pinned ID matches.
+	wrongCAPEM, _, _ := newSelfSignedCA(t, "Unrelated CA")
+
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	r := newRegistry(t, spiffeid.RequireTrustDomainFromString("omega.alpha"), ownPEM, []federation.PeerConfig{{
+		TrustDomain:        peerTD,
+		URL:                srv.URL,
+		Profile:            federation.ProfileHTTPSSPIFFE,
+		EndpointSPIFFEID:   id.String(),
+		EndpointBundleFile: writeTemp(t, "wrong-ca.pem", wrongCAPEM),
+	}}, time.Hour)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 400*time.Millisecond)
+	defer cancel()
+	r.Run(ctx)
+
+	if _, ok := r.Bundles()[peerTD]; ok {
+		t.Fatal("peer whose endpoint SVID does not chain to the seed bundle should not be trusted")
+	}
+}
+
+func TestNewRegistryRejectsHTTPSSPIFFEWithoutSeed(t *testing.T) {
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	_, err := federation.NewRegistry(spiffeid.RequireTrustDomainFromString("omega.alpha"), ownPEM, []federation.PeerConfig{{
+		TrustDomain:      "omega.beta",
+		URL:              "https://omega.beta:8443",
+		Profile:          federation.ProfileHTTPSSPIFFE,
+		EndpointSPIFFEID: "spiffe://omega.beta/control-plane",
+		// EndpointBundleFile intentionally empty.
+	}}, time.Hour)
+	if err == nil {
+		t.Fatal("expected NewRegistry to reject https_spiffe peer without endpoint_bundle")
+	}
+}
+
+// newRegistry wraps federation.NewRegistry and fails the test on the
+// construction error (file/profile validation) so the existing
+// happy-path cases stay terse.
+func newRegistry(t *testing.T, ownTD spiffeid.TrustDomain, ownBundle []byte, peers []federation.PeerConfig, refresh time.Duration) *federation.Registry {
+	t.Helper()
+	r, err := federation.NewRegistry(ownTD, ownBundle, peers, refresh)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	return r
 }
 
 func waitFor(t *testing.T, d time.Duration, cond func() bool, msg string) {

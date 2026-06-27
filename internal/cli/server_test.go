@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kanywst/omega/internal/server/federation"
 )
 
 func TestHasNonEmpty(t *testing.T) {
@@ -35,6 +37,76 @@ func TestHasNonEmpty(t *testing.T) {
 				t.Errorf("hasNonEmpty(%v) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseFederatePeersRejectsHTTP(t *testing.T) {
+	// http:// must be rejected by default: an unauthenticated fetch
+	// lets a MITM inject a rogue CA as a trusted federated anchor.
+	_, err := parseFederatePeers([]string{"name=omega.beta,url=http://127.0.0.1:18089"}, false)
+	if err == nil {
+		t.Fatal("expected http:// federation peer to be rejected without --federation-allow-insecure")
+	}
+	if !strings.Contains(err.Error(), "http://") {
+		t.Fatalf("error should call out the http scheme, got: %v", err)
+	}
+}
+
+func TestParseFederatePeersAllowsHTTPWithInsecureFlag(t *testing.T) {
+	peers, err := parseFederatePeers([]string{"name=omega.beta,url=http://127.0.0.1:18089"}, true)
+	if err != nil {
+		t.Fatalf("http peer should be allowed with the insecure flag: %v", err)
+	}
+	if len(peers) != 1 || peers[0].URL != "http://127.0.0.1:18089" {
+		t.Fatalf("unexpected peers: %+v", peers)
+	}
+}
+
+func TestParseFederatePeersDefaultsToHTTPSWeb(t *testing.T) {
+	peers, err := parseFederatePeers([]string{"name=omega.beta,url=https://omega.beta:8443"}, false)
+	if err != nil {
+		t.Fatalf("https web peer should parse: %v", err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("want 1 peer, got %d", len(peers))
+	}
+	if peers[0].Profile != federation.ProfileHTTPSWeb {
+		t.Fatalf("default profile should be https_web, got %q", peers[0].Profile)
+	}
+}
+
+func TestParseFederatePeersHTTPSSPIFFE(t *testing.T) {
+	spec := "name=omega.beta,url=https://omega.beta:8443,profile=https_spiffe," +
+		"endpoint_spiffe_id=spiffe://omega.beta/control-plane,endpoint_bundle=/etc/omega/beta.pem"
+	peers, err := parseFederatePeers([]string{spec}, false)
+	if err != nil {
+		t.Fatalf("https_spiffe peer should parse: %v", err)
+	}
+	p := peers[0]
+	if p.Profile != federation.ProfileHTTPSSPIFFE ||
+		p.EndpointSPIFFEID != "spiffe://omega.beta/control-plane" ||
+		p.EndpointBundleFile != "/etc/omega/beta.pem" {
+		t.Fatalf("unexpected parsed peer: %+v", p)
+	}
+}
+
+func TestParseFederatePeersHTTPSSPIFFERequiresPins(t *testing.T) {
+	cases := map[string]string{
+		"missing endpoint_spiffe_id": "name=omega.beta,url=https://omega.beta:8443,profile=https_spiffe,endpoint_bundle=/etc/omega/beta.pem",
+		"missing endpoint_bundle":    "name=omega.beta,url=https://omega.beta:8443,profile=https_spiffe,endpoint_spiffe_id=spiffe://omega.beta/cp",
+	}
+	for name, spec := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseFederatePeers([]string{spec}, false); err == nil {
+				t.Fatalf("expected %s to be rejected", name)
+			}
+		})
+	}
+}
+
+func TestParseFederatePeersUnknownProfile(t *testing.T) {
+	if _, err := parseFederatePeers([]string{"name=omega.beta,url=https://omega.beta:8443,profile=mtls_web"}, false); err == nil {
+		t.Fatal("expected unknown profile to be rejected")
 	}
 }
 

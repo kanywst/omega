@@ -27,6 +27,7 @@ omega server \
 	--trust-domain omega.alpha \
 	--data-dir "$DEMO_DIR/alpha" \
 	--federate-with "name=omega.beta,url=http://127.0.0.1:$BETA_PORT" \
+	--federation-allow-insecure \
 	>"$DEMO_DIR/alpha-server.log" 2>&1 &
 echo $! >"$DEMO_DIR/alpha-server.pid"
 
@@ -36,6 +37,7 @@ omega server \
 	--trust-domain omega.beta \
 	--data-dir "$DEMO_DIR/beta" \
 	--federate-with "name=omega.alpha,url=http://127.0.0.1:$ALPHA_PORT" \
+	--federation-allow-insecure \
 	>"$DEMO_DIR/beta-server.log" 2>&1 &
 echo $! >"$DEMO_DIR/beta-server.pid"
 

@@ -6,7 +6,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -73,6 +75,7 @@ func newServerCommand() *cobra.Command {
 		otlpEndpoint            string
 		otlpInsecure            bool
 		federateWith            []string
+		federationAllowInsecure bool
 		webhookURL              string
 		webhookSecret           string
 		auditBatch              int
@@ -183,11 +186,14 @@ func newServerCommand() *cobra.Command {
 				}
 			}
 
-			peers, err := parseFederatePeers(federateWith)
+			peers, err := parseFederatePeers(federateWith, federationAllowInsecure)
 			if err != nil {
 				return fmt.Errorf("federate-with: %w", err)
 			}
-			fed := federation.NewRegistry(ca.TrustDomain(), ca.BundlePEM(), peers, 30*time.Second)
+			fed, err := federation.NewRegistry(ca.TrustDomain(), ca.BundlePEM(), peers, 30*time.Second)
+			if err != nil {
+				return fmt.Errorf("federation: %w", err)
+			}
 
 			metrics.SetBuildInfo(version.Version)
 
@@ -388,8 +394,15 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP/HTTP traces endpoint, host:port (overrides OTEL_EXPORTER_OTLP_ENDPOINT). Empty disables tracing.")
 	cmd.Flags().BoolVar(&otlpInsecure, "otlp-insecure", false, "send OTLP traces over plaintext HTTP (no TLS)")
 	cmd.Flags().StringArrayVar(&federateWith, "federate-with", nil,
-		"federate with a peer trust domain (repeatable). Format: 'name=<peer-trust-domain>,url=<http-base-url>'. "+
-			"The server will fetch the peer's /v1/bundle and serve it from /v1/federation/bundles.")
+		"federate with a peer trust domain (repeatable). Format: 'name=<peer-trust-domain>,url=<https-base-url>"+
+			"[,profile=https_web|https_spiffe][,endpoint_spiffe_id=spiffe://...][,endpoint_ca=<pem-file>][,endpoint_bundle=<pem-file>]'. "+
+			"The server fetches the peer's /v1/spiffe-bundle (falling back to /v1/bundle) and serves it from /v1/federation/bundles. "+
+			"The fetch authenticates the peer endpoint: profile=https_web (default) uses web-PKI (system roots or endpoint_ca) with hostname verification; "+
+			"profile=https_spiffe verifies the endpoint X.509-SVID against the pinned endpoint_spiffe_id, seeded from endpoint_bundle. "+
+			"URLs must be https unless --federation-allow-insecure is set.")
+	cmd.Flags().BoolVar(&federationAllowInsecure, "federation-allow-insecure", false,
+		"allow http:// (plaintext, UNAUTHENTICATED) --federate-with peer endpoints. "+
+			"A MITM can inject a rogue CA as a trusted federated anchor; use only for loopback/demo loops. Logged loudly when set.")
 	cmd.Flags().StringVar(&webhookURL, "audit-webhook-url", "",
 		"POST audit events to this URL as JSON batches. Empty disables the webhook forwarder.")
 	cmd.Flags().StringVar(&webhookSecret, "audit-webhook-secret", "",
@@ -632,32 +645,83 @@ func parseHeaderFlags(specs []string) (map[string]string, error) {
 }
 
 // parseFederatePeers parses --federate-with values like
-// "name=omega.beta,url=http://127.0.0.1:18089" into PeerConfig entries.
-func parseFederatePeers(specs []string) ([]federation.PeerConfig, error) {
+// "name=omega.beta,url=https://omega.beta:8080,profile=https_spiffe,
+// endpoint_spiffe_id=spiffe://omega.beta/control-plane,
+// endpoint_bundle=/etc/omega/beta-bundle.pem" into PeerConfig entries.
+//
+// The fetch path authenticates the peer bundle endpoint (SPIFFE
+// Federation profiles), so URLs must be https. http:// is rejected
+// unless allowInsecure is set (the --federation-allow-insecure escape
+// hatch for loopback/demo loops); when used it is logged loudly.
+func parseFederatePeers(specs []string, allowInsecure bool) ([]federation.PeerConfig, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
+	if allowInsecure {
+		slog.Warn("federation: --federation-allow-insecure is set; http:// peer endpoints will be fetched WITHOUT transport authentication (MITM can inject a rogue CA). Use this only for loopback/demo.")
+	}
 	out := make([]federation.PeerConfig, 0, len(specs))
 	for _, s := range specs {
-		var name, url string
+		var p federation.PeerConfig
+		var rawURL string
 		for _, kv := range strings.Split(s, ",") {
 			k, v, ok := strings.Cut(kv, "=")
 			if !ok {
 				return nil, fmt.Errorf("invalid entry %q (expected key=value pairs)", s)
 			}
+			v = strings.TrimSpace(v)
 			switch strings.TrimSpace(k) {
 			case "name":
-				name = strings.TrimSpace(v)
+				p.TrustDomain = v
 			case "url":
-				url = strings.TrimSpace(v)
+				rawURL = v
+				p.URL = v
+			case "profile":
+				p.Profile = federation.Profile(v)
+			case "endpoint_spiffe_id":
+				p.EndpointSPIFFEID = v
+			case "endpoint_ca":
+				p.EndpointCAFile = v
+			case "endpoint_bundle":
+				p.EndpointBundleFile = v
 			default:
-				return nil, fmt.Errorf("unknown key %q in %q (expected name= and url=)", k, s)
+				return nil, fmt.Errorf("unknown key %q in %q (expected name= url= profile= endpoint_spiffe_id= endpoint_ca= endpoint_bundle=)", k, s)
 			}
 		}
-		if name == "" || url == "" {
+		if p.TrustDomain == "" || rawURL == "" {
 			return nil, fmt.Errorf("entry %q is missing name or url", s)
 		}
-		out = append(out, federation.PeerConfig{TrustDomain: name, URL: url})
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return nil, fmt.Errorf("entry %q: parse url: %w", s, err)
+		}
+		switch u.Scheme {
+		case "https":
+			// authenticated; verification profile applies below.
+		case "http":
+			if !allowInsecure {
+				return nil, fmt.Errorf("entry %q: http:// federation endpoints are rejected (MITM can inject a rogue trust anchor); use https:// or pass --federation-allow-insecure for loopback/demo only", s)
+			}
+			slog.Warn("federation: peer endpoint is plaintext http and will NOT be authenticated", "peer", p.TrustDomain, "url", rawURL)
+		default:
+			return nil, fmt.Errorf("entry %q: unsupported url scheme %q (want https)", s, u.Scheme)
+		}
+		if p.Profile == "" {
+			p.Profile = federation.ProfileHTTPSWeb
+		}
+		switch p.Profile {
+		case federation.ProfileHTTPSWeb:
+		case federation.ProfileHTTPSSPIFFE:
+			if p.EndpointSPIFFEID == "" {
+				return nil, fmt.Errorf("entry %q: profile https_spiffe requires endpoint_spiffe_id", s)
+			}
+			if p.EndpointBundleFile == "" {
+				return nil, fmt.Errorf("entry %q: profile https_spiffe requires endpoint_bundle (operator-pinned seed bundle)", s)
+			}
+		default:
+			return nil, fmt.Errorf("entry %q: unknown profile %q (want https_web or https_spiffe)", s, p.Profile)
+		}
+		out = append(out, p)
 	}
 	return out, nil
 }

@@ -17,25 +17,69 @@ package federation
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/bundle/spiffebundle"
+	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
+)
+
+// Profile names a SPIFFE Federation bundle-endpoint authentication
+// profile. It controls how the peer's HTTPS endpoint identity is
+// verified before its bundle bytes are trusted as a federated anchor.
+type Profile string
+
+const (
+	// ProfileHTTPSWeb verifies the endpoint with standard web-PKI:
+	// system roots (or an operator-supplied endpoint_ca) plus the
+	// usual hostname check.
+	ProfileHTTPSWeb Profile = "https_web"
+	// ProfileHTTPSSPIFFE verifies the endpoint's X.509-SVID against a
+	// pinned endpoint SPIFFE ID, chaining to an operator-seeded bundle
+	// (endpoint_bundle). This is the SPIFFE-native profile and does
+	// not depend on web-PKI for the control-plane link.
+	ProfileHTTPSSPIFFE Profile = "https_spiffe"
 )
 
 // PeerConfig identifies one federated trust domain by its name and the
-// HTTP base URL of the peer Omega control plane that vends the bundle.
+// HTTPS base URL of the peer Omega control plane that vends the bundle,
+// plus the endpoint-identity verification material used to authenticate
+// the fetch (SPIFFE Federation bundle-endpoint profiles).
 type PeerConfig struct {
 	TrustDomain string
 	URL         string
+
+	// Profile selects the endpoint-identity verification profile.
+	// Empty defaults to ProfileHTTPSWeb. Ignored for http:// peers
+	// (the explicit --federation-allow-insecure escape hatch), whose
+	// fetch is plaintext and unverified.
+	Profile Profile
+
+	// EndpointSPIFFEID is the SPIFFE ID the peer endpoint must present
+	// in its X.509-SVID URI SAN. Required for ProfileHTTPSSPIFFE.
+	EndpointSPIFFEID string
+
+	// EndpointCAFile is an optional PEM file of web-PKI roots used to
+	// verify the endpoint under ProfileHTTPSWeb. Empty falls back to
+	// the system trust store.
+	EndpointCAFile string
+
+	// EndpointBundleFile is the operator-seeded PEM trust bundle that
+	// bootstraps verification of the peer's X.509-SVID under
+	// ProfileHTTPSSPIFFE. Required for that profile.
+	EndpointBundleFile string
 }
 
 // Registry serves the merged trust-bundle map for this control plane.
@@ -51,8 +95,12 @@ type Registry struct {
 	ownTD     spiffeid.TrustDomain
 	ownBundle []byte
 
-	peers      []PeerConfig
-	httpClient *http.Client
+	peers []PeerConfig
+	// peerClients holds one verifying http.Client per peer (keyed by
+	// trust domain), built from that peer's bundle-endpoint profile.
+	// A peer never shares the bare default client: its fetch is
+	// authenticated against its own pinned endpoint identity.
+	peerClients map[string]*http.Client
 
 	// configuredRefresh is the operator-supplied default (CLI flag).
 	// A peer with no TDF refresh hint inherits this; per-peer
@@ -71,22 +119,122 @@ const (
 )
 
 // NewRegistry returns a Registry that always serves ownTD -> ownBundle
-// and lazily merges in peer bundles once Run has populated them. The
-// caller is responsible for invoking Run; Bundles() is safe to call
+// and lazily merges in peer bundles once Run has populated them. Each
+// peer gets its own verifying http.Client built from its bundle-endpoint
+// profile; constructing those clients reads the operator-supplied
+// endpoint_ca / endpoint_bundle files, so NewRegistry can fail at
+// startup with a clear error instead of silently fetching unverified.
+//
+// The caller is responsible for invoking Run; Bundles() is safe to call
 // before Run completes (it just returns own-only).
-func NewRegistry(ownTD spiffeid.TrustDomain, ownBundle []byte, peers []PeerConfig, refresh time.Duration) *Registry {
+func NewRegistry(ownTD spiffeid.TrustDomain, ownBundle []byte, peers []PeerConfig, refresh time.Duration) (*Registry, error) {
 	if refresh <= 0 {
 		refresh = 30 * time.Second
+	}
+	clients := make(map[string]*http.Client, len(peers))
+	for _, p := range peers {
+		client, err := buildPeerClient(p)
+		if err != nil {
+			return nil, fmt.Errorf("peer %s: %w", p.TrustDomain, err)
+		}
+		clients[p.TrustDomain] = client
 	}
 	return &Registry{
 		ownTD:             ownTD,
 		ownBundle:         ownBundle,
 		peers:             peers,
-		httpClient:        &http.Client{Timeout: 10 * time.Second},
+		peerClients:       clients,
 		configuredRefresh: refresh,
 		peerBundles:       map[string][]byte{},
 		peerRefreshHints:  map[string]time.Duration{},
+	}, nil
+}
+
+// buildPeerClient constructs the verifying http.Client for one peer
+// according to its bundle-endpoint authentication profile. http://
+// peers (only reachable via the --federation-allow-insecure escape
+// hatch, which parseFederatePeers gates) get a plain client with no
+// transport verification.
+func buildPeerClient(p PeerConfig) (*http.Client, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	u, err := url.Parse(p.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parse url %q: %w", p.URL, err)
 	}
+	switch u.Scheme {
+	case "http":
+		// Plaintext, unverified. Only reachable when the operator
+		// passed --federation-allow-insecure; the loud warning is
+		// emitted at parse time in the CLI.
+		return client, nil
+	case "https":
+		// handled below
+	default:
+		return nil, fmt.Errorf("unsupported url scheme %q (want https)", u.Scheme)
+	}
+
+	profile := p.Profile
+	if profile == "" {
+		profile = ProfileHTTPSWeb
+	}
+	switch profile {
+	case ProfileHTTPSWeb:
+		tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+		if p.EndpointCAFile != "" {
+			// #nosec G304 -- EndpointCAFile is operator-supplied via --federate-with endpoint_ca, not user input.
+			pemBytes, err := os.ReadFile(p.EndpointCAFile)
+			if err != nil {
+				return nil, fmt.Errorf("read endpoint_ca: %w", err)
+			}
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM(pemBytes) {
+				return nil, fmt.Errorf("endpoint_ca %s has no parseable certificates", p.EndpointCAFile)
+			}
+			tlsCfg.RootCAs = roots
+		}
+		client.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+		return client, nil
+	case ProfileHTTPSSPIFFE:
+		td, err := spiffeid.TrustDomainFromString(p.TrustDomain)
+		if err != nil {
+			return nil, fmt.Errorf("trust domain: %w", err)
+		}
+		endpointID, err := spiffeid.FromString(p.EndpointSPIFFEID)
+		if err != nil {
+			return nil, fmt.Errorf("endpoint_spiffe_id %q: %w", p.EndpointSPIFFEID, err)
+		}
+		if p.EndpointBundleFile == "" {
+			return nil, fmt.Errorf("profile https_spiffe requires endpoint_bundle to seed verification of %s", endpointID)
+		}
+		bundle, err := x509bundle.Load(td, p.EndpointBundleFile)
+		if err != nil {
+			return nil, fmt.Errorf("load endpoint_bundle: %w", err)
+		}
+		if len(bundle.X509Authorities()) == 0 {
+			return nil, fmt.Errorf("endpoint_bundle %s has no x509 authorities", p.EndpointBundleFile)
+		}
+		// tlsconfig builds an InsecureSkipVerify config whose
+		// VerifyPeerCertificate checks the endpoint SVID chains to the
+		// seeded bundle AND that its URI SAN equals the pinned ID, so
+		// hostname/IP in the URL is irrelevant (the SPIFFE ID is the
+		// identity). This is the same verification a go-spiffe client
+		// would perform.
+		tlsCfg := tlsconfig.TLSClientConfig(bundle, tlsconfig.AuthorizeID(endpointID))
+		client.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+		return client, nil
+	default:
+		return nil, fmt.Errorf("unknown profile %q (want https_web or https_spiffe)", profile)
+	}
+}
+
+// clientFor returns the verifying http.Client for a peer trust domain,
+// falling back to a default client if (impossibly) absent so a fetch
+// never nil-panics.
+func (r *Registry) clientFor(trustDomain string) *http.Client {
+	if c, ok := r.peerClients[trustDomain]; ok && c != nil {
+		return c
+	}
+	return &http.Client{Timeout: 10 * time.Second}
 }
 
 // Bundles returns a fresh copy of the trust-domain -> PEM map. Callers
@@ -246,7 +394,7 @@ func (r *Registry) fetchPeer(ctx context.Context, peer PeerConfig) ([]byte, time
 	// Peer does not serve /v1/spiffe-bundle; fall back to the legacy
 	// PEM endpoint so a freshly-built omega still federates with peers
 	// older than the spiffe-bundle PR.
-	pemBytes, err = r.fetchPEM(ctx, peer.URL)
+	pemBytes, err = r.fetchPEM(ctx, peer)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -265,7 +413,7 @@ func (r *Registry) fetchTDF(ctx context.Context, peer PeerConfig) ([]byte, time.
 	if err != nil {
 		return nil, 0, err
 	}
-	resp, err := r.httpClient.Do(req)
+	resp, err := r.clientFor(peer.TrustDomain).Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -304,13 +452,13 @@ func (r *Registry) fetchTDF(ctx context.Context, peer PeerConfig) ([]byte, time.
 	return buf.Bytes(), hint, nil
 }
 
-func (r *Registry) fetchPEM(ctx context.Context, baseURL string) ([]byte, error) {
-	url := strings.TrimRight(baseURL, "/") + "/v1/bundle"
+func (r *Registry) fetchPEM(ctx context.Context, peer PeerConfig) ([]byte, error) {
+	url := strings.TrimRight(peer.URL, "/") + "/v1/bundle"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := r.httpClient.Do(req)
+	resp, err := r.clientFor(peer.TrustDomain).Do(req)
 	if err != nil {
 		return nil, err
 	}
