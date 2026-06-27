@@ -65,7 +65,7 @@ func newTestCA(t *testing.T) *testCA {
 // issue mints a leaf certificate signed by the CA. uriSAN, when
 // non-empty, becomes a spiffe:// URI SAN; ips populate IP SANs (used for
 // the server cert so the client can verify 127.0.0.1).
-func (ca *testCA) issue(t *testing.T, cn, uriSAN string, ips []net.IP) tls.Certificate {
+func (ca *testCA) issue(t *testing.T, cn, uriSAN string, ips []net.IP, extraURIs ...string) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -86,6 +86,13 @@ func (ca *testCA) issue(t *testing.T, cn, uriSAN string, ips []net.IP) tls.Certi
 			t.Fatalf("uri san: %v", err)
 		}
 		tmpl.URIs = []*url.URL{u}
+	}
+	for _, extra := range extraURIs {
+		u, err := url.Parse(extra)
+		if err != nil {
+			t.Fatalf("extra uri san: %v", err)
+		}
+		tmpl.URIs = append(tmpl.URIs, u)
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
@@ -171,6 +178,24 @@ func TestRequireAuth_NoClientCert_Rejected(t *testing.T) {
 func TestRequireAuth_NonSPIFFECert_401(t *testing.T) {
 	srv, tca := newAuthTestServer(t, true)
 	cert := tca.issue(t, "no-spiffe", "", nil)
+	client := clientWith(tca, &cert)
+	resp, err := client.Post(srv.URL+"/v1/svid", "application/json", bytes.NewReader(svidBody(t, "spiffe://omega.local/web")))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 401 (body=%s)", resp.StatusCode, raw)
+	}
+}
+
+// An X.509-SVID has exactly one URI SAN. A cert carrying the spiffe id
+// plus a second URI SAN must be rejected (401), not have its first URI
+// silently picked — otherwise a broader client-CA could smuggle a SAN.
+func TestRequireAuth_MultipleURISANs_401(t *testing.T) {
+	srv, tca := newAuthTestServer(t, true)
+	cert := tca.issue(t, "web", "spiffe://omega.local/web", nil, "https://evil.example/extra")
 	client := clientWith(tca, &cert)
 	resp, err := client.Post(srv.URL+"/v1/svid", "application/json", bytes.NewReader(svidBody(t, "spiffe://omega.local/web")))
 	if err != nil {
