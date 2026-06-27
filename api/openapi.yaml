@@ -665,9 +665,31 @@ paths:
       summary: Verify the audit log hash chain.
       description: |
         Walks the chain from genesis. `valid: true` and
-        `first_bad_seq: 0` means every row's hash matches the running
-        SHA-256. A non-zero `first_bad_seq` is the lowest sequence at
-        which the chain breaks.
+        `first_bad_seq: 0` means every row's MAC matches. A non-zero
+        `first_bad_seq` is the lowest sequence at which the chain breaks.
+
+        Optionally pin an external checkpoint with `expected_head` and
+        `expected_count` (both required together) so tail truncation below
+        the anchor is reported as `truncated: true`.
+      parameters:
+        - name: expected_head
+          in: query
+          required: false
+          description: |
+            Anchored verification: the expected head hash at a prior
+            checkpoint. Must be supplied together with `expected_count`.
+          schema:
+            type: string
+        - name: expected_count
+          in: query
+          required: false
+          description: |
+            Anchored verification: the expected row count at the
+            checkpoint. Non-negative; must accompany `expected_head`.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
       responses:
         "200":
           description: Verification result.
@@ -675,6 +697,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuditVerifyResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1392,6 +1416,19 @@ components:
             `0` when the chain is intact. Otherwise the lowest sequence
             number at which the recomputed hash diverges from the
             stored one.
+        truncated:
+          type: boolean
+          description: |
+            Present for anchored verification: `true` when the live tail
+            is shorter than the pinned `expected_count` / `expected_head`
+            checkpoint (tail truncation), distinct from a hash mismatch.
+        count:
+          type: integer
+          format: int64
+          description: Number of rows walked.
+        head_hash:
+          type: string
+          description: The hash of the last (head) row walked.
 
   responses:
     BadRequest:
