@@ -193,10 +193,11 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 		// Plaintext, unverified. Only reachable when the operator
 		// passed --federation-allow-insecure; the loud warning is
 		// emitted at parse time in the CLI. No redirect policy here: an
-		// already-insecure peer has nothing more to downgrade. A
-		// verification profile/pin would be silently ignored, so reject it.
-		if p.Profile != "" || p.EndpointSPIFFEID != "" || p.EndpointBundleFile != "" || p.EndpointCAFile != "" {
-			return nil, fmt.Errorf("http:// peer %q is unauthenticated and cannot use a verification profile or endpoint pins", p.TrustDomain)
+		// already-insecure peer has nothing more to downgrade. https_web is
+		// the harmless default (a no-op on http), but a SPIFFE profile or
+		// endpoint pin implies verification that won't happen, so reject it.
+		if p.Profile == ProfileHTTPSSPIFFE || p.EndpointSPIFFEID != "" || p.EndpointBundleFile != "" || p.EndpointCAFile != "" {
+			return nil, fmt.Errorf("http:// peer %q is unauthenticated and cannot use profile=https_spiffe or endpoint pins", p.TrustDomain)
 		}
 		return client, nil
 	case "https":
