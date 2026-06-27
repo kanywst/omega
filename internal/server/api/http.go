@@ -126,11 +126,13 @@ func (s *Server) Handler() http.Handler {
 	}
 	// gated wraps the write / PDP / issuance surface with both the HA
 	// leader gate and (when --require-auth is on) caller authentication.
-	// The auth check runs first so a follower still answers 503 with the
-	// usual Retry-After rather than leaking a 401 to a leader-routing
-	// load balancer that is only probing where to send writes.
+	// The leader gate runs first so a follower answers 503 with the usual
+	// Retry-After before any auth check — a client (or leader-routing load
+	// balancer) that hit the wrong replica learns to reroute without
+	// having to present a client cert just to discover it. Auth is still
+	// enforced on the leader, the only replica that serves writes.
 	gated := func(h http.HandlerFunc) http.HandlerFunc {
-		return s.requireSPIFFEAuth(leaderOnly(h))
+		return leaderOnly(s.requireSPIFFEAuth(h))
 	}
 	handle("GET /healthz", s.healthz)
 	handle("GET /v1/leader", s.leaderState)
