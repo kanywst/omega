@@ -677,6 +677,11 @@ func parseFederatePeers(specs []string, allowInsecure bool) ([]federation.PeerCo
 			if !allowInsecure {
 				return nil, fmt.Errorf("entry %q: http:// federation endpoints are rejected (MITM can inject a rogue trust anchor); use https:// or pass --federation-allow-insecure for loopback/demo only", s)
 			}
+			if p.Profile != "" || p.EndpointSPIFFEID != "" || p.EndpointBundleFile != "" || p.EndpointCAFile != "" {
+				// http is unauthenticated, so a verification profile/pin is
+				// silently ignored — reject it rather than imply security.
+				return nil, fmt.Errorf("entry %q: http:// peer is unauthenticated and cannot use profile/endpoint_spiffe_id/endpoint_bundle/endpoint_ca", s)
+			}
 			slog.Warn("federation: peer endpoint is plaintext http and will NOT be authenticated", "peer", p.TrustDomain, "url", rawURL)
 		default:
 			return nil, fmt.Errorf("entry %q: unsupported url scheme %q (want https)", s, u.Scheme)
