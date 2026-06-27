@@ -462,6 +462,19 @@ func TestNewRegistryRejectsHTTPSSPIFFEWithoutSeed(t *testing.T) {
 	}
 }
 
+// NewRegistry is exported, so it must reject duplicate peer trust domains
+// itself (case-insensitively) rather than silently overwriting a client.
+func TestNewRegistryRejectsDuplicatePeer(t *testing.T) {
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	_, err := federation.NewRegistry(spiffeid.RequireTrustDomainFromString("omega.alpha"), ownPEM, []federation.PeerConfig{
+		{TrustDomain: "Omega.Beta", URL: "https://omega.beta:8443"},
+		{TrustDomain: "omega.beta", URL: "https://other.beta:8443"},
+	}, time.Hour)
+	if err == nil {
+		t.Fatal("expected NewRegistry to reject a duplicate peer trust domain")
+	}
+}
+
 // newRegistry wraps federation.NewRegistry and fails the test on the
 // construction error (file/profile validation) so the existing
 // happy-path cases stay terse.

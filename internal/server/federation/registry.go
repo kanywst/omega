@@ -138,6 +138,13 @@ func NewRegistry(ownTD spiffeid.TrustDomain, ownBundle []byte, peers []PeerConfi
 	clients := make(map[string]*http.Client, len(peers))
 	for i, p := range peers {
 		p.TrustDomain = strings.ToLower(p.TrustDomain)
+		if _, dup := clients[p.TrustDomain]; dup {
+			// Clients/bundles are keyed by trust domain; a duplicate would
+			// overwrite the earlier peer's verifying client while both stay
+			// in r.peers. Reject it here too (the CLI parser also does), so
+			// a direct caller can't construct that ambiguous state.
+			return nil, fmt.Errorf("duplicate federation peer trust domain %q", p.TrustDomain)
+		}
 		canon[i] = p
 		client, err := buildPeerClient(p)
 		if err != nil {
