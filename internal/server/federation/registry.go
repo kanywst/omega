@@ -184,9 +184,15 @@ func buildPeerClient(p PeerConfig) (*http.Client, error) {
 	// TLS verification on the Transport. Refuse any redirect that leaves
 	// https. (A network MITM cannot forge this over the authenticated
 	// channel, but a malicious/misconfigured peer self-downgrade can.)
-	client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if req.URL.Scheme != "https" {
 			return fmt.Errorf("refusing redirect to non-https %q (federation bundle endpoint must stay on https)", req.URL.Redacted())
+		}
+		// Also pin the host: a compromised/misconfigured peer must not be
+		// able to redirect the fetch to a different origin (e.g. one whose
+		// cert it controls under https_web).
+		if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+			return fmt.Errorf("refusing cross-host redirect to %q (federation bundle endpoint must stay on the configured host)", req.URL.Redacted())
 		}
 		return nil
 	}
