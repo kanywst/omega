@@ -145,6 +145,20 @@ func (s *Store) AppendAudit(ctx context.Context, ev AuditEvent) (AuditEvent, err
 	); err != nil {
 		return AuditEvent{}, fmt.Errorf("audit: update hash: %w", err)
 	}
+
+	// Record the keying epoch: the seq of the first keyed row. ON CONFLICT
+	// DO NOTHING means only that first keyed write sets it; later writes
+	// are no-ops. VerifyAudit uses it to reject any unkeyed row at or
+	// after keying began, which a forged downgrade cannot evade.
+	if s.auditKeyring != nil {
+		if _, err := tx.ExecContext(ctx,
+			s.rebind(`INSERT INTO audit_meta(k, v) VALUES (?, ?) ON CONFLICT(k) DO NOTHING`),
+			auditMetaKeyedFromSeq, seq,
+		); err != nil {
+			return AuditEvent{}, fmt.Errorf("audit: record keying epoch: %w", err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return AuditEvent{}, fmt.Errorf("audit: commit: %w", err)
 	}
@@ -209,12 +223,36 @@ func (s *Store) ListAudit(ctx context.Context, since int64, limit int) ([]AuditE
 // unkeyed SHA-256 path for "unkeyed" rows). The first row whose prev_hash
 // linkage or MAC fails sets FirstBadSeq.
 //
+// When a keyring is loaded, VerifyAudit additionally rejects downgrade
+// forgeries — an attacker writing an unkeyed (plain SHA-256) row chained
+// onto the keyed head. Two complementary checks catch this:
+//   - the persisted keying epoch: any unkeyed row at or after the seq
+//     where keying began is forged;
+//   - contiguous-prefix: once a keyed row has been seen in the walk, any
+//     later unkeyed row is a downgrade.
+//
+// Legacy rows written before keying was enabled (seq below the epoch)
+// stay verifiable on the SHA-256 path, so the legitimate
+// legacy-then-enable-keying migration still verifies.
+//
 // anchor is optional. When non-nil it is an externally-published
 // checkpoint (head hash + row count); VerifyAudit then reports
 // Truncated when the live tail has fewer rows than the checkpoint or no
 // longer contains the anchored head hash — i.e. the newest rows were
 // deleted below the anchor. A clean, untruncated walk yields Valid=true.
 func (s *Store) VerifyAudit(ctx context.Context, anchor *AuditAnchor) (AuditVerification, error) {
+	var (
+		keyedFrom int64
+		hasEpoch  bool
+	)
+	if s.auditKeyring != nil {
+		var err error
+		keyedFrom, hasEpoch, err = s.auditKeyedFromSeq(ctx)
+		if err != nil {
+			return AuditVerification{}, err
+		}
+	}
+
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT seq, ts, kind, actor, subject, decision, payload, prev_hash, hash, key_id
 		 FROM audit_log ORDER BY seq ASC`,
@@ -227,6 +265,7 @@ func (s *Store) VerifyAudit(ctx context.Context, anchor *AuditAnchor) (AuditVeri
 	res := AuditVerification{HeadHash: genesisHash}
 	prev := genesisHash
 	sawAnchorHead := anchor != nil && anchor.HeadHash == genesisHash
+	sawKeyed := false
 	for rows.Next() {
 		var (
 			ev      AuditEvent
@@ -239,15 +278,32 @@ func (s *Store) VerifyAudit(ctx context.Context, anchor *AuditAnchor) (AuditVeri
 		}
 		ev.Ts = time.Unix(0, tsNanos).UTC()
 		ev.Payload = json.RawMessage(payload)
+		isUnkeyed := ev.KeyID == "" || ev.KeyID == keyIDUnkeyed
 
 		if res.FirstBadSeq == 0 {
-			key, err := s.auditKeyFor(ev.KeyID)
-			if err != nil {
-				return AuditVerification{}, fmt.Errorf("audit: verify seq %d: %w", ev.Seq, err)
-			}
-			if ev.PrevHash != prev || hashAuditEvent(ev, key) != ev.Hash {
+			switch {
+			case s.auditKeyring != nil && isUnkeyed && hasEpoch && ev.Seq >= keyedFrom:
+				// Downgrade: an unkeyed row at/after keying began. A
+				// forged row chained onto the keyed head lands here.
 				res.FirstBadSeq = ev.Seq
+			case s.auditKeyring != nil && isUnkeyed && sawKeyed:
+				// Downgrade (defense in depth): unkeyed row after a keyed
+				// row breaks the contiguous keyed suffix.
+				res.FirstBadSeq = ev.Seq
+			default:
+				key, kerr := s.auditKeyFor(ev.KeyID)
+				if kerr != nil {
+					return AuditVerification{}, fmt.Errorf("audit: verify seq %d: %w", ev.Seq, kerr)
+				}
+				want := macAuditEvent(ev, key)
+				got, derr := hex.DecodeString(ev.Hash)
+				if ev.PrevHash != prev || derr != nil || !hmac.Equal(want, got) {
+					res.FirstBadSeq = ev.Seq
+				}
 			}
+		}
+		if !isUnkeyed {
+			sawKeyed = true
 		}
 		if anchor != nil && ev.Hash == anchor.HeadHash {
 			sawAnchorHead = true
@@ -269,6 +325,26 @@ func (s *Store) VerifyAudit(ctx context.Context, anchor *AuditAnchor) (AuditVeri
 	return res, nil
 }
 
+// auditMetaKeyedFromSeq is the audit_meta key under which the seq of the
+// first keyed row is recorded. It marks the boundary below which legacy
+// unkeyed rows are legitimate and at/above which an unkeyed row is forged.
+const auditMetaKeyedFromSeq = "keyed_from_seq"
+
+// auditKeyedFromSeq reads the persisted keying epoch. ok is false when no
+// keyed row has ever been written (so the whole chain is legacy/unkeyed).
+func (s *Store) auditKeyedFromSeq(ctx context.Context) (seq int64, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx,
+		s.rebind(`SELECT v FROM audit_meta WHERE k = ?`), auditMetaKeyedFromSeq,
+	).Scan(&seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("audit: read keying epoch: %w", err)
+	}
+	return seq, true, nil
+}
+
 // auditKeyFor returns the HMAC key for a row's key_id. The unkeyed
 // sentinel yields a nil key (legacy SHA-256). For any other id the
 // keyring must hold the key, otherwise the row cannot be verified and the
@@ -287,10 +363,19 @@ func (s *Store) auditKeyFor(keyID string) ([]byte, error) {
 	return key, nil
 }
 
-// hashAuditEvent computes a row's chained MAC. With a nil key it is the
-// legacy unkeyed SHA-256 (backward compatible); with a key it is
-// HMAC-SHA-256, which a DB-only attacker cannot forge without the key.
-func hashAuditEvent(ev AuditEvent, key []byte) string {
+// macAuditEvent computes a row's chained MAC as raw bytes.
+//
+// With a nil key it is the legacy unkeyed SHA-256 over
+// (seq|ts|kind|actor|subject|decision|payload|prev_hash) — byte-for-byte
+// identical to the original chain, so default (no-keyring) mode stays
+// compatible.
+//
+// With a key it is HMAC-SHA-256 over the same fields PLUS the
+// domain-separated key_id. Folding key_id into the keyed MAC authenticates
+// the selector that picks the verify key: an attacker cannot swap a keyed
+// row's key_id (e.g. downgrade it to "unkeyed" to force the legacy
+// SHA-256 path) without invalidating the MAC.
+func macAuditEvent(ev AuditEvent, key []byte) []byte {
 	var h hash.Hash
 	if len(key) == 0 {
 		h = sha256.New()
@@ -301,5 +386,14 @@ func hashAuditEvent(ev AuditEvent, key []byte) string {
 	h.Write([]byte(ev.Payload))
 	h.Write([]byte("|"))
 	h.Write([]byte(ev.PrevHash))
-	return hex.EncodeToString(h.Sum(nil))
+	if len(key) != 0 {
+		h.Write([]byte("|keyid|"))
+		h.Write([]byte(ev.KeyID))
+	}
+	return h.Sum(nil)
+}
+
+// hashAuditEvent is the hex-encoded MAC stored in audit_log.hash.
+func hashAuditEvent(ev AuditEvent, key []byte) string {
+	return hex.EncodeToString(macAuditEvent(ev, key))
 }

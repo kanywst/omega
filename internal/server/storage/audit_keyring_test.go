@@ -391,3 +391,63 @@ func TestMigrationAddsKeyIDToLegacyDB(t *testing.T) {
 	}
 	_ = store2.Close()
 }
+
+// TestKeyedChainRejectsUnkeyedDowngradeForgery locks the H1 downgrade
+// fix: with a keyring loaded, an attacker with DB write access cannot
+// forge an unkeyed (plain SHA-256) row chained onto the keyed head. The
+// forged row is internally consistent on the legacy path, but VerifyAudit
+// rejects it because keying has begun (persisted epoch + contiguous
+// prefix), so the chain is reported invalid at the forged seq.
+func TestKeyedChainRejectsUnkeyedDowngradeForgery(t *testing.T) {
+	ctx := context.Background()
+	store := openAuditTestStore(t)
+	store.UseAuditKeyring(mustKeyring(t, "k1", map[string][]byte{"k1": key(1)}))
+
+	var head string
+	for i := 0; i < 3; i++ {
+		ev, err := store.AppendAudit(ctx, AuditEvent{Kind: "k", Subject: "real"})
+		if err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		head = ev.Hash
+	}
+	if res, err := store.VerifyAudit(ctx, nil); err != nil || !res.Valid {
+		t.Fatalf("clean keyed chain: %+v err=%v", res, err)
+	}
+
+	// Forge an unkeyed row chained onto the real keyed head: key_id =
+	// "unkeyed" + a self-computed SHA-256 (no key needed). This is the
+	// exact downgrade attack the review demonstrated.
+	forged := AuditEvent{
+		Ts:       time.Now().UTC(),
+		Kind:     "forged",
+		Subject:  "attacker",
+		Payload:  json.RawMessage("{}"),
+		PrevHash: head,
+		KeyID:    keyIDUnkeyed,
+	}
+	var seq int64
+	if err := store.db.QueryRowContext(ctx, store.rebind(
+		`INSERT INTO audit_log(ts, kind, actor, subject, decision, payload, prev_hash, hash, key_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`),
+		forged.Ts.UnixNano(), forged.Kind, forged.Actor, forged.Subject, forged.Decision,
+		string(forged.Payload), forged.PrevHash, "pending", forged.KeyID,
+	).Scan(&seq); err != nil {
+		t.Fatalf("inject forged row: %v", err)
+	}
+	forged.Seq = seq
+	// Plain SHA-256, computable by anyone — the heart of the downgrade.
+	forgedHash := hashAuditEvent(forged, nil)
+	if _, err := store.db.ExecContext(ctx, store.rebind(
+		`UPDATE audit_log SET hash = ? WHERE seq = ?`), forgedHash, seq); err != nil {
+		t.Fatalf("set forged hash: %v", err)
+	}
+
+	res, err := store.VerifyAudit(ctx, nil)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if res.Valid || res.FirstBadSeq != seq {
+		t.Errorf("downgrade forgery not rejected: %+v (want valid=false first_bad=%d)", res, seq)
+	}
+}
