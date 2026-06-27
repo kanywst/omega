@@ -1154,6 +1154,12 @@ func (s *Server) verifyAudit(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("expected_count must be an integer: %w", err))
 			return
 		}
+		if count < 0 {
+			// A negative anchor count can never exceed the live row count,
+			// so the truncation check would silently never fire. Reject it.
+			writeErr(w, http.StatusBadRequest, errors.New("expected_count must be non-negative"))
+			return
+		}
 		anchor = &storage.AuditAnchor{HeadHash: head, Count: count}
 	}
 
