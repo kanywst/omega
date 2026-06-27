@@ -1405,7 +1405,7 @@ components:
     AuditVerifyResponse:
       type: object
       additionalProperties: false
-      required: [valid, first_bad_seq]
+      required: [valid, first_bad_seq, truncated, count, head_hash]
       properties:
         valid:
           type: boolean
@@ -1419,9 +1419,11 @@ components:
         truncated:
           type: boolean
           description: |
-            Present for anchored verification: `true` when the live tail
-            is shorter than the pinned `expected_count` / `expected_head`
-            checkpoint (tail truncation), distinct from a hash mismatch.
+            Always present. For anchored verification, `true` when the
+            live chain is shorter than the pinned `expected_count` OR the
+            anchored `expected_head` is no longer present (tail truncation),
+            distinct from a hash mismatch. Always `false` for an unanchored
+            walk.
         count:
           type: integer
           format: int64
