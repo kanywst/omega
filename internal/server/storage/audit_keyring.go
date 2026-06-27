@@ -120,6 +120,13 @@ func LoadAuditKeyring(path string) (*AuditKeyring, error) {
 }
 
 func readKeyringFile(path string) (string, map[string][]byte, error) {
+	// The keyring is the trust boundary against a DB-only attacker, so it
+	// must not be readable by group/other (like an SSH private key).
+	if info, err := os.Stat(path); err != nil {
+		return "", nil, fmt.Errorf("audit keyring: stat %s: %w", path, err)
+	} else if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return "", nil, fmt.Errorf("audit keyring: %s is group/world accessible (%#o); tighten to 0600", path, perm)
+	}
 	// #nosec G304 -- path is operator-supplied via --audit-hmac-key-file, not user input.
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -145,9 +152,11 @@ func readKeyringFile(path string) (string, map[string][]byte, error) {
 }
 
 // Reload re-reads the keyring file and atomically replaces the in-memory
-// key set. The new file must parse, validate, and still contain the
-// currently-active key_id (now possibly retired) so an in-flight verify
-// never loses a key it might need. Intended to back a SIGHUP handler.
+// key set. The new file must parse, validate, and be a superset of the
+// currently-loaded key ids — dropping ANY previously-known key (active or
+// retired) is refused, because rows already on disk may be MAC'd under it
+// and would become unverifiable. Keys may only be added. Intended to back
+// a SIGHUP handler.
 func (kr *AuditKeyring) Reload() error {
 	if kr.path == "" {
 		return fmt.Errorf("audit keyring: not file-backed, cannot reload")
@@ -163,13 +172,14 @@ func (kr *AuditKeyring) Reload() error {
 	for id, k := range keys {
 		cp[id] = k
 	}
-	// Hold the write lock across reading the previously-active id, the drop
-	// check, and the swap, so concurrent reloads cannot interleave between
-	// the check and the assignment and drop a still-referenced active key.
+	// Hold the write lock across the drop check and the swap, so concurrent
+	// reloads cannot interleave between the check and the assignment.
 	kr.mu.Lock()
 	defer kr.mu.Unlock()
-	if _, ok := cp[kr.activeID]; !ok {
-		return fmt.Errorf("audit keyring: reload would drop previously-active key %q (rows written under it would become unverifiable)", kr.activeID)
+	for id := range kr.keys {
+		if _, ok := cp[id]; !ok {
+			return fmt.Errorf("audit keyring: reload would drop key %q that earlier rows may be MAC'd under (rows would become unverifiable); keys may only be added", id)
+		}
 	}
 	kr.activeID = activeID
 	kr.keys = cp
@@ -201,7 +211,11 @@ func (kr *AuditKeyring) Snapshot() map[string][]byte {
 	defer kr.mu.RUnlock()
 	cp := make(map[string][]byte, len(kr.keys))
 	for id, k := range kr.keys {
-		cp[id] = k
+		// Deep-copy the secret so a caller mutating the snapshot can't reach
+		// back into the live keyring's key material.
+		b := make([]byte, len(k))
+		copy(b, k)
+		cp[id] = b
 	}
 	return cp
 }

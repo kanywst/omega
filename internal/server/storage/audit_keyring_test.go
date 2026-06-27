@@ -339,6 +339,45 @@ func TestAuditKeyringReload(t *testing.T) {
 	if err := kr.Reload(); err == nil {
 		t.Errorf("expected reload to refuse dropping previously-active key")
 	}
+
+	// Dropping an OLDER retired key (k1) is also refused, even though the
+	// active key (k2) is retained — rows MAC'd under k1 would be orphaned.
+	write(`{"active_key_id":"k2","keys":[{"id":"k2","secret":"` + base64.StdEncoding.EncodeToString(key(2)) + `"}]}`)
+	if err := kr.Reload(); err == nil {
+		t.Errorf("expected reload to refuse dropping an older retired key")
+	}
+	if _, ok := kr.lookup("k1"); !ok {
+		t.Errorf("k1 must still be loadable after the refused reload")
+	}
+}
+
+// The keyring is the trust boundary against a DB-only attacker, so a
+// group/world-readable file must be rejected.
+func TestLoadAuditKeyringRejectsLoosePerms(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kr.json")
+	body := `{"active_key_id":"k1","keys":[{"id":"k1","secret":"` + base64.StdEncoding.EncodeToString(key(1)) + `"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := LoadAuditKeyring(path); err == nil {
+		t.Fatal("expected a group/world-readable keyring to be rejected")
+	}
+}
+
+// Snapshot must deep-copy secrets so a caller can't mutate the live keyring.
+func TestAuditKeyringSnapshotIsDeepCopied(t *testing.T) {
+	kr, err := NewAuditKeyring("k1", map[string][]byte{"k1": key(1)})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	snap := kr.Snapshot()
+	for i := range snap["k1"] {
+		snap["k1"][i] ^= 0xff
+	}
+	if _, live := kr.active(); live[0] == snap["k1"][0] {
+		t.Error("mutating the snapshot changed the live keyring secret")
+	}
 }
 
 // TestMigrationAddsKeyIDToLegacyDB exercises the upgrade path: a database
