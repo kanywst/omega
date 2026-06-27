@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -53,12 +52,8 @@ func (s *Server) exchangeOIDC(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("OIDC IdP federation is not configured on this server (start omega server with at least one --oidc-idp)"))
 		return
 	}
-	// 1 MiB is two orders of magnitude above the largest realistic
-	// OIDC ID token (a few KiB even for a 50-group user) and bounds
-	// the memory cost of an abusive caller.
 	var req OIDCExchangeRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if req.IDP == "" {
@@ -129,10 +124,10 @@ func (s *Server) exchangeOIDC(w http.ResponseWriter, r *http.Request) {
 		// RFC 8693 §4.1: `act` records the actor that asserted the
 		// principal. Here the actor is the upstream OIDC IdP.
 		"act": map[string]any{
-			"sub":     claims.Subject,
-			"iss":     claims.Issuer,
-			"idp":     claims.IdPName,
-			"kind":    "oidc-idp",
+			"sub":  claims.Subject,
+			"iss":  claims.Issuer,
+			"idp":  claims.IdPName,
+			"kind": "oidc-idp",
 		},
 	}
 	svid, err := s.ca.IssueJWTSVID(id, req.Audience, ttl, extra)
@@ -146,12 +141,12 @@ func (s *Server) exchangeOIDC(w http.ResponseWriter, r *http.Request) {
 		Subject:  id.String(),
 		Decision: "ok",
 		Payload: mustJSON(map[string]any{
-			"idp":           claims.IdPName,
-			"upstream_sub":  claims.Subject,
-			"upstream_iss":  claims.Issuer,
-			"audience":      req.Audience,
-			"expires_in":    int(ttl / time.Second),
-			"kid":           svid.KeyID,
+			"idp":          claims.IdPName,
+			"upstream_sub": claims.Subject,
+			"upstream_iss": claims.Issuer,
+			"audience":     req.Audience,
+			"expires_in":   int(ttl / time.Second),
+			"kid":          svid.KeyID,
 		}),
 	})
 	writeJSON(w, http.StatusOK, OIDCExchangeResponse{

@@ -1096,3 +1096,21 @@ func TestAuthzenDiscoveryReturns404WhenIssuerNotConfigured(t *testing.T) {
 		t.Fatalf("status: got %d want 404", resp.StatusCode)
 	}
 }
+
+// Every JSON endpoint caps the request body via http.MaxBytesReader, so
+// an over-large body is rejected before omega buffers it (memory-
+// exhaustion DoS). createDomain stands in for all of them since they
+// share the decodeJSONBody helper.
+func TestHTTPRejectsOversizedBody(t *testing.T) {
+	srv := newTestServer(t)
+	big := strings.Repeat("a", 2<<20) // 2 MiB, above the 1 MiB cap
+	body := `{"name":"x","description":"` + big + `"}`
+	resp, err := http.Post(srv.URL+"/v1/domains", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge && resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 413 or 400 for oversized body, got %d", resp.StatusCode)
+	}
+}

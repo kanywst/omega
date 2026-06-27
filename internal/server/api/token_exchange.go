@@ -65,8 +65,7 @@ type TokenExchangeResponse struct {
 // every prior `act` nesting).
 func (s *Server) tokenExchange(w http.ResponseWriter, r *http.Request) {
 	var req TokenExchangeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if req.GrantType != grantTypeTokenExchange {

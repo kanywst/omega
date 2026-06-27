@@ -205,8 +205,7 @@ type IssueJWTSVIDResponse struct {
 
 func (s *Server) issueJWTSVID(w http.ResponseWriter, r *http.Request) {
 	var req IssueJWTSVIDRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	id, err := spiffeid.FromString(req.SPIFFEID)
@@ -387,8 +386,7 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 	var d storage.Domain
-	if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &d) {
 		return
 	}
 	created, err := s.store.CreateDomain(r.Context(), d)
@@ -446,8 +444,7 @@ type IssueSVIDResponse struct {
 
 func (s *Server) issueSVID(w http.ResponseWriter, r *http.Request) {
 	var req IssueSVIDRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	id, err := spiffeid.FromString(req.SPIFFEID)
@@ -526,8 +523,7 @@ func (s *Server) attestK8s(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req K8sAttestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	claims, err := s.k8sAttestor.Attest(r.Context(), req.Token)
@@ -605,8 +601,7 @@ func (s *Server) attestK8s(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) evaluateAccess(w http.ResponseWriter, r *http.Request) {
 	var req policy.EvalRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	_, evalSpan := tracer.Start(r.Context(), "policy.Evaluate",
@@ -699,8 +694,7 @@ const MaxBatchEvaluations = 100
 // already see when they fan out single calls themselves).
 func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
 	var req BatchEvalRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if n := len(req.Evaluations); n > MaxBatchEvaluations {
@@ -903,8 +897,7 @@ type ActionSearchResponse struct {
 
 func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 	var req SubjectSearchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if len(req.Subjects) == 0 {
@@ -949,8 +942,7 @@ func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
 	var req ResourceSearchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if len(req.Resources) == 0 {
@@ -995,8 +987,7 @@ func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) searchAction(w http.ResponseWriter, r *http.Request) {
 	var req ActionSearchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if len(req.Actions) == 0 {
@@ -1166,6 +1157,33 @@ func (s *Server) getSPIFFEBundle(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+// maxJSONBodyBytes caps the size of any JSON request body the API will
+// read. 1 MiB is two orders of magnitude above the largest realistic
+// payload (even a 50-group OIDC token or a batch of 100 evaluations is
+// a few KiB) and bounds the memory an abusive caller can force omega to
+// buffer.
+const maxJSONBodyBytes = 1 << 20
+
+// decodeJSONBody reads and decodes a single JSON value from the request
+// body with the body size capped at maxJSONBodyBytes via
+// http.MaxBytesReader. It writes the error response itself (413 when the
+// cap is exceeded, 400 for malformed JSON) and returns false so the
+// caller can simply `return`. Every JSON-decoding handler routes through
+// this so no endpoint can be used as a memory-exhaustion DoS surface.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			writeErr(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body too large (max %d bytes)", maxJSONBodyBytes))
+			return false
+		}
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+		return false
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

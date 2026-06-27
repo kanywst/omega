@@ -259,6 +259,13 @@ func newServerCommand() *cobra.Command {
 			}
 
 			if k8sAttestEnable {
+				// An empty audience disables TokenReview's audience check,
+				// which lets any pod's default ServiceAccount token be
+				// replayed against omega. Require an explicit audience so
+				// the misconfiguration fails fast at startup.
+				if !hasNonEmpty(k8sTokenAudiences) {
+					return errors.New("k8s-attest: --k8s-token-audience is required when --k8s-attest=true (set it to the URL workloads use to reach omega so replayed default SA tokens are rejected)")
+				}
 				k8sClient, err := buildK8sClient(k8sKubeconfig)
 				if err != nil {
 					return fmt.Errorf("k8s-attest: %w", err)
@@ -348,7 +355,7 @@ func newServerCommand() *cobra.Command {
 		"path to a PEM file with the step-ca server's TLS trust anchor(s). Empty falls back to the system trust store; production step-ca is almost always behind a private CA and must set this.")
 
 	cmd.Flags().StringArrayVar(&oidcIdPs, "oidc-idp", nil,
-		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key takes one or more values separated by ';'. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")
+		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key is required and takes one or more values separated by ';'; it is the set of `aud` values an incoming ID token must match, so tokens minted for other relying parties at the same issuer are rejected. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")
 
 	cmd.Flags().BoolVar(&k8sAttestEnable, "k8s-attest", false,
 		"enable the POST /v1/attest/k8s endpoint: workloads present a ServiceAccount projected token + CSR, omega validates the token via TokenReview, and issues an X.509-SVID derived from the (namespace, serviceaccount[, podname]) triple.")
@@ -356,7 +363,7 @@ func newServerCommand() *cobra.Command {
 		"spiffe://omega.local/k8s/{namespace}/{serviceaccount}",
 		"SPIFFE ID template for k8s-attested SVIDs. Placeholders: {namespace}, {serviceaccount}, {podname}. The rendered ID must lie in --trust-domain.")
 	cmd.Flags().StringSliceVar(&k8sTokenAudiences, "k8s-token-audience", nil,
-		"expected audience(s) on the projected token (repeat to allow more than one). Empty disables the audience check; set to the URL workloads use to reach omega (e.g. https://omega.example.com).")
+		"expected audience(s) on the projected token (repeat to allow more than one). Required when --k8s-attest=true: set to the URL workloads use to reach omega (e.g. https://omega.example.com) so a replayed default ServiceAccount token, which carries no such audience, is rejected.")
 	cmd.Flags().StringVar(&k8sKubeconfig, "kubeconfig", "",
 		"path to a kubeconfig for out-of-cluster runs (used by --k8s-attest). Empty = use the in-cluster ServiceAccount config, falling back to the default kubeconfig discovery if that fails.")
 
@@ -384,6 +391,18 @@ func newServerCommand() *cobra.Command {
 // whether to start leader election without exporting it from storage.
 func isPostgresDSN(spec string) bool {
 	return strings.HasPrefix(spec, "postgres://") || strings.HasPrefix(spec, "postgresql://")
+}
+
+// hasNonEmpty reports whether vals contains at least one entry that is
+// not blank after trimming. Used to reject an effectively-empty
+// --k8s-token-audience (e.g. `--k8s-token-audience=` or whitespace).
+func hasNonEmpty(vals []string) bool {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveVaultToken assembles the Vault token from (in order of

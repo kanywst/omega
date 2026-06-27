@@ -58,6 +58,18 @@ func (c IdPConfig) Validate() error {
 	if strings.TrimSpace(c.SPIFFEIDTemplate) == "" {
 		return fmt.Errorf("oidc: idp %q: spiffe_id_template is empty", c.Name)
 	}
+	// Audiences must be non-empty: go-jose skips the `aud` check
+	// entirely when AnyAudience is empty, which would accept any token
+	// minted for any relying party at this issuer (confused deputy).
+	// Require at least one expected audience so the check is enforced.
+	if len(c.Audiences) == 0 {
+		return fmt.Errorf("oidc: idp %q: at least one audience is required", c.Name)
+	}
+	for _, a := range c.Audiences {
+		if strings.TrimSpace(a) == "" {
+			return fmt.Errorf("oidc: idp %q: audience values must be non-empty", c.Name)
+		}
+	}
 	return nil
 }
 
@@ -66,16 +78,16 @@ func (c IdPConfig) Validate() error {
 // is also returned for templates that reference e.g. `groups` or
 // `email_verified`.
 type Claims struct {
-	Issuer       string
-	Subject      string
-	Audience     []string
-	Email        string
-	PreferredUN  string
-	Name         string
-	Raw          map[string]any
-	IssuedAt     time.Time
-	ExpiresAt    time.Time
-	IdPName      string // copied from IdPConfig.Name for downstream rendering
+	Issuer      string
+	Subject     string
+	Audience    []string
+	Email       string
+	PreferredUN string
+	Name        string
+	Raw         map[string]any
+	IssuedAt    time.Time
+	ExpiresAt   time.Time
+	IdPName     string // copied from IdPConfig.Name for downstream rendering
 }
 
 // Registry is the omega-server's view of all configured IdPs.
@@ -145,8 +157,8 @@ func (r *Registry) Validate(ctx context.Context, idpName, idToken string) (*Clai
 // is re-fetched when validation fails with an unknown `kid`, with a
 // short cooldown to prevent thrash against a misconfigured IdP.
 type idpClient struct {
-	cfg    IdPConfig
-	http   *http.Client
+	cfg  IdPConfig
+	http *http.Client
 
 	mu          sync.Mutex
 	jwksURI     string

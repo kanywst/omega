@@ -160,3 +160,73 @@ func TestLoadDirRejectsBadPolicy(t *testing.T) {
 		t.Error("expected error loading invalid cedar")
 	}
 }
+
+// JSON has a single number type, so integers in a context arrive as
+// float64. Cedar has no float type; silently truncating 5.9 -> 5 would
+// corrupt authz comparisons, so a fractional value must be a hard error.
+func TestEvaluateRejectsFractionalContextNumber(t *testing.T) {
+	e := policy.New()
+	_, err := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "User", ID: "alice"},
+		Action:   policy.Action{Name: "GET"},
+		Resource: policy.Entity{Type: "HttpPath", ID: "/x"},
+		Context:  map[string]any{"level": 5.9},
+	})
+	if err == nil {
+		t.Fatal("expected error for fractional context number")
+	}
+}
+
+// A whole-number float (5.0, the shape every JSON integer decodes to)
+// must still map cleanly to a Cedar Long and compare correctly.
+func TestEvaluateAcceptsWholeNumberContextFloat(t *testing.T) {
+	dir := writePolicies(t, map[string]string{
+		"lvl.cedar": `permit (principal, action == Action::"GET", resource) when { context.level == 5 };`,
+	})
+	e := policy.New()
+	if err := e.LoadDir(dir); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	resp, err := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "User", ID: "alice"},
+		Action:   policy.Action{Name: "GET"},
+		Resource: policy.Entity{Type: "HttpPath", ID: "/x"},
+		Context:  map[string]any{"level": 5.0},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if !resp.Decision {
+		t.Errorf("whole-number float 5.0 must map to Long(5) and satisfy context.level == 5")
+	}
+}
+
+// A whole-number float can exceed the int64 range (1e20 is integral but
+// overflows int64). Converting it would silently produce a garbage Long, so
+// out-of-range values must be a hard error rather than a wrapped comparison.
+func TestEvaluateRejectsOutOfRangeContextNumber(t *testing.T) {
+	e := policy.New()
+	_, err := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "User", ID: "alice"},
+		Action:   policy.Action{Name: "GET"},
+		Resource: policy.Entity{Type: "HttpPath", ID: "/x"},
+		Context:  map[string]any{"level": 1e20},
+	})
+	if err == nil {
+		t.Fatal("expected error for out-of-int64-range context number")
+	}
+}
+
+// Fractional numbers nested in subject properties must be rejected too,
+// not just top-level context, since they flow through the same valueOf.
+func TestEvaluateRejectsFractionalSubjectProperty(t *testing.T) {
+	e := policy.New()
+	_, err := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "User", ID: "alice", Attrs: map[string]any{"score": 1.5}},
+		Action:   policy.Action{Name: "GET"},
+		Resource: policy.Entity{Type: "HttpPath", ID: "/x"},
+	})
+	if err == nil {
+		t.Fatal("expected error for fractional subject property")
+	}
+}
