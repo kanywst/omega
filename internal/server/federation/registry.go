@@ -131,8 +131,14 @@ func NewRegistry(ownTD spiffeid.TrustDomain, ownBundle []byte, peers []PeerConfi
 	if refresh <= 0 {
 		refresh = 30 * time.Second
 	}
+	// SPIFFE trust domains are case-insensitive. Canonicalize to lowercase
+	// here too (not only in the CLI parser) so a direct caller of this
+	// exported constructor can't split the dedup / map keys by casing.
+	canon := make([]PeerConfig, len(peers))
 	clients := make(map[string]*http.Client, len(peers))
-	for _, p := range peers {
+	for i, p := range peers {
+		p.TrustDomain = strings.ToLower(p.TrustDomain)
+		canon[i] = p
 		client, err := buildPeerClient(p)
 		if err != nil {
 			return nil, fmt.Errorf("peer %s: %w", p.TrustDomain, err)
@@ -142,7 +148,7 @@ func NewRegistry(ownTD spiffeid.TrustDomain, ownBundle []byte, peers []PeerConfi
 	return &Registry{
 		ownTD:             ownTD,
 		ownBundle:         ownBundle,
-		peers:             peers,
+		peers:             canon,
 		peerClients:       clients,
 		configuredRefresh: refresh,
 		peerBundles:       map[string][]byte{},
@@ -279,7 +285,7 @@ func httpsTransport(cfg *tls.Config) *http.Transport {
 // falling back to a default client if (impossibly) absent so a fetch
 // never nil-panics.
 func (r *Registry) clientFor(trustDomain string) *http.Client {
-	if c, ok := r.peerClients[trustDomain]; ok && c != nil {
+	if c, ok := r.peerClients[strings.ToLower(trustDomain)]; ok && c != nil {
 		return c
 	}
 	return &http.Client{Timeout: 10 * time.Second}
