@@ -55,19 +55,17 @@ func spiffeIDFromTLS(cs *tls.ConnectionState) (string, error) {
 		return "", errors.New("verified client certificate required")
 	}
 	leaf := cs.VerifiedChains[0][0]
-	var spiffeURI string
-	for _, u := range leaf.URIs {
-		if u != nil && u.Scheme == "spiffe" {
-			if spiffeURI != "" {
-				return "", errors.New("client certificate has more than one spiffe:// URI SAN")
-			}
-			spiffeURI = u.String()
-		}
+	// An X.509-SVID carries exactly one URI SAN. Reject any other count —
+	// including one spiffe:// plus an extra non-spiffe URI — so a broader
+	// client-CA that mints multi-URI certs can't smuggle a second SAN past
+	// the identity projection.
+	if len(leaf.URIs) != 1 {
+		return "", fmt.Errorf("client certificate must have exactly one URI SAN, got %d", len(leaf.URIs))
 	}
-	if spiffeURI == "" {
-		return "", errors.New("client certificate has no spiffe:// URI SAN")
+	if leaf.URIs[0] == nil || leaf.URIs[0].Scheme != "spiffe" {
+		return "", errors.New("client certificate URI SAN is not a spiffe:// id")
 	}
-	id, err := spiffeid.FromString(spiffeURI)
+	id, err := spiffeid.FromString(leaf.URIs[0].String())
 	if err != nil {
 		return "", fmt.Errorf("client certificate SPIFFE ID: %w", err)
 	}
