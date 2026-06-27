@@ -1,10 +1,10 @@
 "use client";
 
+import { Download } from "lucide-react";
 import { CodeBlock } from "@/components/data/code";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { omega } from "@/lib/omega";
-import { Download } from "lucide-react";
 
 export default function BundlePage() {
   return (

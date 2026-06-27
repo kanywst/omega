@@ -1,10 +1,10 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { Mono } from "@/components/data/code";
 import { EmptyState } from "@/components/data/empty-state";
 import { PageHeader } from "@/components/shell/page-header";
 import { omega } from "@/lib/omega";
-import { useQuery } from "@tanstack/react-query";
 
 export default function DomainsPage() {
   const q = useQuery({ queryKey: ["domains"], queryFn: omega.listDomains });

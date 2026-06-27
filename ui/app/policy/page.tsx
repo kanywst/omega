@@ -1,11 +1,11 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { Mono } from "@/components/data/code";
 import { EmptyState } from "@/components/data/empty-state";
 import { StatusPill } from "@/components/data/status-pill";
 import { PageHeader } from "@/components/shell/page-header";
 import { omega } from "@/lib/omega";
-import { useQuery } from "@tanstack/react-query";
 
 export default function PolicyPage() {
   const events = useQuery({ queryKey: ["audit", 300], queryFn: () => omega.listAudit(300) });

@@ -1,8 +1,8 @@
 "use client";
 
-import { cn } from "@/lib/cn";
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
+import { cn } from "@/lib/cn";
 
 /**
  * Inline mono span for SPIFFE IDs, kids, hashes — never truncated.

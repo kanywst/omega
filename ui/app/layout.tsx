@@ -1,7 +1,7 @@
-import { AppShell } from "@/components/shell/app-shell";
 import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
+import { AppShell } from "@/components/shell/app-shell";
 import { Providers } from "./providers";
 import "./globals.css";
 

@@ -1,9 +1,9 @@
 "use client";
 
-import { Kbd } from "@/components/ui/kbd";
-import { cn } from "@/lib/cn";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Kbd } from "@/components/ui/kbd";
+import { cn } from "@/lib/cn";
 import { NAV } from "./nav-items";
 
 export function Sidebar() {
