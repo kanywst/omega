@@ -159,6 +159,19 @@ func TestParseFederatePeersRejectsURLWithoutHost(t *testing.T) {
 	}
 }
 
+// A query or fragment would corrupt the appended bundle path, so the base
+// url must not carry one.
+func TestParseFederatePeersRejectsURLWithQueryOrFragment(t *testing.T) {
+	for _, spec := range []string{
+		"name=omega.beta,url=https://omega.beta:8443?foo=bar",
+		"name=omega.beta,url=https://omega.beta:8443#frag",
+	} {
+		if _, err := parseFederatePeers([]string{spec}, false); err == nil {
+			t.Fatalf("expected %q to be rejected", spec)
+		}
+	}
+}
+
 // Enabling --k8s-attest without an audience leaves TokenReview's
 // audience check disabled, which lets any pod's default ServiceAccount
 // token be replayed. The server must refuse to start in that state.

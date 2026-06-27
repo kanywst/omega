@@ -713,6 +713,11 @@ func parseFederatePeers(specs []string, allowInsecure bool) ([]federation.PeerCo
 			// host every background fetch would just fail in a loop.
 			return nil, fmt.Errorf("entry %q: url %q has no host", s, rawURL)
 		}
+		if u.RawQuery != "" || u.Fragment != "" {
+			// The fetch appends the bundle path to this base URL; a query or
+			// fragment would corrupt the resulting endpoint URL.
+			return nil, fmt.Errorf("entry %q: url %q must not carry a query or fragment", s, rawURL)
+		}
 		switch u.Scheme {
 		case "https":
 			// authenticated; verification profile applies below.
