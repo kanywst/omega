@@ -37,9 +37,10 @@ const (
 )
 
 type Store struct {
-	db     *sql.DB
-	driver driverKind
-	leader leaderState
+	db           *sql.DB
+	driver       driverKind
+	leader       leaderState
+	auditKeyring *AuditKeyring
 }
 
 type Domain struct {
@@ -109,7 +110,40 @@ func (s *Store) applySchema(ctx context.Context) error {
 			return fmt.Errorf("apply schema: %w", err)
 		}
 	}
+	return s.applyMigrations(ctx)
+}
+
+// applyMigrations runs forward, idempotent ALTERs that the CREATE TABLE
+// IF NOT EXISTS blocks above cannot retrofit onto a database created by
+// an earlier Omega version. Each statement is safe to run repeatedly: on
+// a fresh DB the column already exists (it is in schemaDDL), so SQLite's
+// "duplicate column name" and Postgres's IF NOT EXISTS make it a no-op.
+func (s *Store) applyMigrations(ctx context.Context) error {
+	for _, ddl := range s.migrationDDL() {
+		if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+			// SQLite has no ADD COLUMN IF NOT EXISTS; tolerate the
+			// duplicate-column error so re-running Open is a no-op.
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
+			return fmt.Errorf("apply migration: %w", err)
+		}
+	}
 	return nil
+}
+
+// migrationDDL adds the audit_log.key_id column to databases created
+// before the HMAC keyring landed. Existing rows default to the "unkeyed"
+// sentinel so VerifyAudit checks them on the legacy SHA-256 path.
+func (s *Store) migrationDDL() []string {
+	if s.driver == driverPostgres {
+		return []string{
+			`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS key_id TEXT NOT NULL DEFAULT 'unkeyed'`,
+		}
+	}
+	return []string{
+		`ALTER TABLE audit_log ADD COLUMN key_id TEXT NOT NULL DEFAULT 'unkeyed'`,
+	}
 }
 
 func (s *Store) schemaDDL() []string {
@@ -131,7 +165,8 @@ func (s *Store) schemaDDL() []string {
 			   decision   TEXT    NOT NULL DEFAULT '',
 			   payload    TEXT    NOT NULL DEFAULT '',
 			   prev_hash  TEXT    NOT NULL,
-			   hash       TEXT    NOT NULL UNIQUE
+			   hash       TEXT    NOT NULL UNIQUE,
+			   key_id     TEXT    NOT NULL DEFAULT 'unkeyed'
 			 )`,
 			`CREATE INDEX IF NOT EXISTS idx_audit_kind ON audit_log(kind)`,
 			`CREATE INDEX IF NOT EXISTS idx_audit_subject ON audit_log(subject)`,
@@ -159,7 +194,8 @@ func (s *Store) schemaDDL() []string {
 		   decision   TEXT    NOT NULL DEFAULT '',
 		   payload    TEXT    NOT NULL DEFAULT '',
 		   prev_hash  TEXT    NOT NULL,
-		   hash       TEXT    NOT NULL UNIQUE
+		   hash       TEXT    NOT NULL UNIQUE,
+		   key_id     TEXT    NOT NULL DEFAULT 'unkeyed'
 		 )`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_kind ON audit_log(kind)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_subject ON audit_log(subject)`,
