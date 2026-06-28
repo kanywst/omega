@@ -7,7 +7,7 @@
 
 **Ω - the authorization & audit layer for SPIFFE identities.**
 
-Omega makes the SPIFFE ID a first-class AuthZEN subject — every Service, Human, and AI Agent decision evaluated against one PDP and recorded in one tamper-evident audit trail. Where SPIFFE/SPIRE stops at issuance, Omega adds the authorization and audit layer on top: SPIFFE-native identity (X.509-SVID / JWT-SVID, Workload API), an AuthZEN 1.0 PDP (Cedar), SPIFFE federation, and the audit log behind one HTTP API and one Workload API socket — SPIRE-compatible, Apache-2.0.
+Omega makes the SPIFFE ID a first-class AuthZEN subject — every Service, Human, and AI Agent decision is evaluated against one PDP and recorded in one tamper-evident audit trail. Where SPIFFE/SPIRE stops at issuance, Omega adds the authorization and audit layer on top, packaging SPIFFE-native identity (X.509-SVID / JWT-SVID, Workload API), an AuthZEN 1.0 PDP (Cedar), SPIFFE federation, and the audit log behind one HTTP API and one Workload API socket — SPIRE-compatible, Apache-2.0.
 
 ## Why
 
