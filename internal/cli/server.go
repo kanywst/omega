@@ -199,6 +199,13 @@ func newServerCommand() *cobra.Command {
 				if bundlePath == "" {
 					return errors.New("--identity-source-bundle is required when --identity-source=spire-upstream")
 				}
+				// --trust-domain defaults to omega.local; in spire-upstream
+				// mode it must name the upstream domain, so require it to be
+				// set explicitly rather than silently publishing the upstream
+				// bundle under the default domain.
+				if !cmd.Flags().Changed("trust-domain") {
+					return errors.New("--trust-domain must be set to the upstream trust domain when --identity-source=spire-upstream")
+				}
 				// #nosec G304 -- bundlePath is operator-supplied via --identity-source-bundle, not user input.
 				bundlePEM, rerr := os.ReadFile(bundlePath)
 				if rerr != nil {
@@ -206,7 +213,7 @@ func newServerCommand() *cobra.Command {
 				}
 				ca, err = identity.NewUpstreamSource(strings.TrimSpace(trustDomain), strings.TrimSpace(issuerURL), bundlePEM)
 				if err != nil {
-					return err
+					return fmt.Errorf("identity-source: %w", err)
 				}
 				fmt.Fprintf(os.Stderr, "omega server: identity-source=spire-upstream trust-domain=%s bundle=%s (issuance disabled; serving authz + audit over upstream-issued SVIDs)\n", ca.TrustDomain(), bundlePath)
 			default:
