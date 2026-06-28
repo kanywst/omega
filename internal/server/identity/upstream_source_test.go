@@ -1,7 +1,14 @@
 package identity_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"testing"
 
 	"github.com/kanywst/omega/internal/server/identity"
@@ -64,4 +71,28 @@ func TestNewUpstreamSourceRejectsBadInput(t *testing.T) {
 	if _, err := identity.NewUpstreamSource("", "", upstreamBundle(t)); err == nil {
 		t.Fatal("expected error for an empty trust domain")
 	}
+	if _, err := identity.NewUpstreamSource("upstream.example", "", leafCertPEM(t)); err == nil {
+		t.Fatal("expected error for a leaf-only bundle (a trust bundle must hold CA anchors)")
+	}
+}
+
+// leafCertPEM returns a self-signed PEM certificate with IsCA=false, so it
+// is parseable but not a valid trust anchor.
+func leafCertPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "leaf"},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

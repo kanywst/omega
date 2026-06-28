@@ -44,8 +44,9 @@ var emptyJWKS = []byte(`{"keys":[]}`)
 // Istio root, the same material an operator would wire into --client-ca).
 // issuerURL is the OIDC issuer advertised at /.well-known/openid-configuration
 // (empty disables discovery). It validates that the trust domain parses,
-// the issuer URL normalizes, and the bundle contains at least one
-// certificate.
+// the issuer URL normalizes, and the bundle contains at least one CA
+// certificate. The bundle is copied so a later mutation of the caller's
+// slice cannot alter the stored trust anchors.
 func NewUpstreamSource(trustDomain, issuerURL string, x509BundlePEM []byte) (Source, error) {
 	td, err := spiffeid.TrustDomainFromString(trustDomain)
 	if err != nil {
@@ -55,15 +56,16 @@ func NewUpstreamSource(trustDomain, issuerURL string, x509BundlePEM []byte) (Sou
 	if err != nil {
 		return nil, err
 	}
-	if !hasCertificate(x509BundlePEM) {
-		return nil, errors.New("identity: upstream bundle contained no PEM CERTIFICATE block")
+	if !hasCACertificate(x509BundlePEM) {
+		return nil, errors.New("identity: upstream bundle contained no CA certificate (a trust bundle must hold trust anchors)")
 	}
-	return upstreamSource{td: td, issuerURL: issuer, x509Bundle: x509BundlePEM}, nil
+	return upstreamSource{td: td, issuerURL: issuer, x509Bundle: append([]byte(nil), x509BundlePEM...)}, nil
 }
 
-// hasCertificate reports whether pemBytes holds at least one parseable
-// X.509 certificate.
-func hasCertificate(pemBytes []byte) bool {
+// hasCACertificate reports whether pemBytes holds at least one parseable
+// X.509 CA certificate. A trust bundle is a set of trust anchors, so a
+// PEM carrying only leaf certificates is rejected.
+func hasCACertificate(pemBytes []byte) bool {
 	for rest := pemBytes; len(rest) > 0; {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
@@ -73,7 +75,7 @@ func hasCertificate(pemBytes []byte) bool {
 		if block.Type != "CERTIFICATE" {
 			continue
 		}
-		if _, err := x509.ParseCertificate(block.Bytes); err == nil {
+		if cert, err := x509.ParseCertificate(block.Bytes); err == nil && cert.IsCA {
 			return true
 		}
 	}
