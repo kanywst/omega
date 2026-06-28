@@ -8,6 +8,54 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-28
+
+First release under the `kanywst` org. Closes the three highest-severity
+trust-model gaps from a fresh-context security review — the control-plane
+API was an open CA, the audit chain was forgeable, and federation bundle
+fetch was unauthenticated — each shipped opt-in so existing deployments
+are unaffected on upgrade.
+
+### Added
+
+- **Control-plane API authentication (opt-in).** `--tls-cert` /
+  `--tls-key` serve TLS; `--client-ca` requires & verifies client certs
+  (mTLS); `--require-auth` binds every write / PDP / issuance endpoint to
+  the caller's verified SPIFFE client SVID and refuses to mint an SVID for
+  a different identity (self-renewal only). Audit reads are gated too.
+  Default off preserves the previous behaviour.
+- **Tamper-resistant audit log (opt-in).** `--audit-hmac-key-file` keys
+  the hash chain with HMAC-SHA-256 from a rotatable keyring (`SIGHUP`
+  reload), records a per-row `key_id`, and detects forged downgrades and
+  tail truncation against an optional `(expected_head, expected_count)`
+  anchor on `GET /v1/audit/verify`. Default (no key) keeps the legacy
+  unkeyed chain.
+- **Authenticated SPIFFE federation.** `--federate-with` peers are fetched
+  over HTTPS with bundle-endpoint verification — `profile=https_web`
+  (web-PKI) or `profile=https_spiffe` (pinned `endpoint_spiffe_id` seeded
+  from `endpoint_bundle`). Plaintext requires the explicit
+  `--federation-allow-insecure` escape hatch.
+- CI: a `ui` job (typecheck / lint / build) and `concurrency`
+  cancellation.
+
+### Changed
+
+- **Transferred to `github.com/kanywst/omega`.** Go module path, the
+  `ghcr.io/kanywst/omega` image, the Helm repo
+  (<https://kanywst.github.io/omega/>), and the Kubernetes CRD API group
+  `omega.kanywst.github.io` all moved off `0-draft`. The API-group change
+  is **breaking** for existing `OmegaDomain` / `OmegaIssuer` resources
+  (re-apply under the new group).
+
+### Fixed
+
+- Security quick-wins: OIDC IdP federation now requires a non-empty
+  audience; JSON request bodies are size-bounded; `--k8s-attest` requires
+  a token audience; Cedar context rejects fractional / out-of-range
+  numbers; OIDC-claim-derived SPIFFE IDs reject path/control characters.
+- UI builds again: biome v2 config migration and the deprecated tsconfig
+  `baseUrl` removed.
+
 ## [0.0.2] - 2026-05-13
 
 Substantial conformance, supply-chain, and CA-plugin work since
@@ -342,6 +390,7 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kanywst/omega/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/kanywst/omega/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/kanywst/omega/releases/tag/v0.0.1
