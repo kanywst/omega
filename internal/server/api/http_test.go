@@ -61,6 +61,54 @@ func newTestServerWithStore(t *testing.T, pdp *policy.Engine) (*httptest.Server,
 	return srv, store
 }
 
+func TestSpireUpstreamDisablesIssuance(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	// Borrow a built-in CA's bundle as the "upstream" trust material.
+	upstreamCA, err := identity.LoadOrCreate(filepath.Join(dir, "upstream"), "upstream.example")
+	if err != nil {
+		t.Fatalf("upstream ca: %v", err)
+	}
+	src, err := identity.NewUpstreamSource("upstream.example", upstreamCA.BundlePEM())
+	if err != nil {
+		t.Fatalf("NewUpstreamSource: %v", err)
+	}
+
+	srv := httptest.NewServer(api.NewServer(store, src, policy.New()).Handler())
+	t.Cleanup(srv.Close)
+
+	// Issuance routes report 501 in spire-upstream mode.
+	for _, path := range []string{"/v1/svid", "/v1/svid/jwt", "/v1/attest/k8s", "/v1/token/exchange", "/v1/oidc/exchange"} {
+		resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("post %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotImplemented {
+			t.Errorf("POST %s status = %d, want 501", path, resp.StatusCode)
+		}
+	}
+
+	// The upstream trust bundle is still served.
+	resp, err := http.Get(srv.URL + "/v1/bundle")
+	if err != nil {
+		t.Fatalf("get bundle: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/bundle status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != string(upstreamCA.BundlePEM()) {
+		t.Fatal("GET /v1/bundle did not serve the upstream bundle")
+	}
+}
+
 func TestHTTPDomainRoundTrip(t *testing.T) {
 	srv := newTestServer(t)
 

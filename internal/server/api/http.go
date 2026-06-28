@@ -35,6 +35,12 @@ import (
 
 var tracer = tracing.Tracer("github.com/kanywst/omega/internal/server/api")
 
+// errIssuanceDisabledUpstream is surfaced (501) on the issuance and
+// token-exchange routes when the server runs in spire-upstream identity
+// mode: there is no local CA, so SVIDs come from the upstream SPIFFE
+// issuer and Omega serves only the authorization + audit layer.
+var errIssuanceDisabledUpstream = errors.New("issuance disabled: omega is in spire-upstream identity mode; obtain SVIDs from the upstream SPIFFE issuer")
+
 type Server struct {
 	store                   *storage.Store
 	ca                      identity.Source
@@ -138,12 +144,26 @@ func (s *Server) Handler() http.Handler {
 	gated := func(h http.HandlerFunc) http.HandlerFunc {
 		return leaderOnly(s.requireSPIFFEAuth(h))
 	}
+	// issuingOnly fails an issuance / token-exchange route with 501 when
+	// the server runs in spire-upstream identity mode (no local CA). It is
+	// the outermost wrapper so the route reports "not supported here"
+	// regardless of leader state or auth - it is a property of the mode,
+	// not of this request.
+	issuingOnly := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if s.ca.SourceKind() == identity.SourceSPIREUpstream {
+				writeErr(w, http.StatusNotImplemented, errIssuanceDisabledUpstream)
+				return
+			}
+			h(w, r)
+		}
+	}
 	handle("GET /healthz", s.healthz)
 	handle("GET /v1/leader", s.leaderState)
 	handle("POST /v1/domains", gated(s.createDomain))
 	handle("GET /v1/domains", s.listDomains)
 	handle("GET /v1/domains/{name}", s.getDomain)
-	handle("POST /v1/svid", gated(s.issueSVID))
+	handle("POST /v1/svid", issuingOnly(gated(s.issueSVID)))
 	// The attestation enrollment paths (POST /v1/attest/k8s and
 	// POST /v1/oidc/exchange) carry their own platform-rooted / external-
 	// IdP proof and are how a workload obtains its *first* SVID, so they
@@ -151,7 +171,7 @@ func (s *Server) Handler() http.Handler {
 	// requiring an Omega client SVID here would break the bootstrap
 	// chicken-and-egg the trust-model design (#83) calls out. They derive
 	// identity from validated input, never a caller-asserted spiffe_id.
-	handle("POST /v1/attest/k8s", leaderOnly(s.attestK8s))
+	handle("POST /v1/attest/k8s", issuingOnly(leaderOnly(s.attestK8s)))
 	handle("GET /v1/bundle", s.getBundle)
 	handle("GET /v1/spiffe-bundle", s.getSPIFFEBundle)
 	handle("POST /access/v1/evaluation", gated(s.evaluateAccess))
@@ -165,9 +185,9 @@ func (s *Server) Handler() http.Handler {
 	// served by followers), hence requireSPIFFEAuth alone, not gated.
 	handle("GET /v1/audit", s.requireSPIFFEAuth(s.listAudit))
 	handle("GET /v1/audit/verify", s.requireSPIFFEAuth(s.verifyAudit))
-	handle("POST /v1/svid/jwt", gated(s.issueJWTSVID))
-	handle("POST /v1/token/exchange", gated(s.tokenExchange))
-	handle("POST /v1/oidc/exchange", leaderOnly(s.exchangeOIDC))
+	handle("POST /v1/svid/jwt", issuingOnly(gated(s.issueJWTSVID)))
+	handle("POST /v1/token/exchange", issuingOnly(gated(s.tokenExchange)))
+	handle("POST /v1/oidc/exchange", issuingOnly(leaderOnly(s.exchangeOIDC)))
 	handle("GET /v1/jwt/bundle", s.getJWTBundle)
 	handle("GET /v1/federation/bundles", s.getFederationBundles)
 	handle("GET /.well-known/openid-configuration", s.getOIDCDiscovery)

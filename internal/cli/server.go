@@ -93,6 +93,7 @@ func newServerCommand() *cobra.Command {
 		auditOTLPHeaders        []string
 		oidcIdPs                []string
 		identitySource          string
+		identitySourceBundle    string
 		caBackend               string
 		caVaultPKIAddr          string
 		caVaultPKIToken         string
@@ -144,55 +145,72 @@ func newServerCommand() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "omega server: WARN audit chain is UNKEYED (SHA-256); set --audit-hmac-key-file to make it tamper-resistant (H1)\n")
 			}
 
+			var ca identity.Authority
 			switch identity.SourceKind(strings.TrimSpace(identitySource)) {
 			case identity.SourceBuiltIn:
-				// Omega issues its own SVIDs; the CA backend that signs
-				// them is selected by --ca-backend below.
+				// Omega issues its own SVIDs; --ca-backend selects the CA
+				// backend that signs them.
+				caCfg := identity.Config{
+					Kind:        identity.Kind(strings.TrimSpace(caBackend)),
+					TrustDomain: trustDomain,
+					Issuer:      strings.TrimSpace(issuerURL),
+					Dir:         filepath.Join(dataDir, "ca"),
+				}
+				if caCfg.Kind == identity.KindVaultPKI {
+					token, err := resolveVaultToken(caVaultPKIToken, caVaultPKITokenFile)
+					if err != nil {
+						return fmt.Errorf("ca-vault-pki-token: %w", err)
+					}
+					caCfg.VaultPKIAddr = strings.TrimSpace(caVaultPKIAddr)
+					caCfg.VaultPKIToken = token
+					caCfg.VaultPKIMount = strings.TrimSpace(caVaultPKIMount)
+					caCfg.VaultPKIRole = strings.TrimSpace(caVaultPKIRole)
+					caCfg.VaultPKICACertFile = strings.TrimSpace(caVaultPKICACertFile)
+				}
+				if caCfg.Kind == identity.KindStepCA {
+					if caStepCAKeyFile == "" {
+						return errors.New("--ca-step-ca-provisioner-key-file is required when --ca-backend=step-ca")
+					}
+					// #nosec G304 -- caStepCAKeyFile is operator-supplied via --ca-step-ca-provisioner-key-file, not user input.
+					keyPEM, err := os.ReadFile(caStepCAKeyFile)
+					if err != nil {
+						return fmt.Errorf("ca-step-ca-provisioner-key-file: %w", err)
+					}
+					caCfg.StepCAURL = strings.TrimSpace(caStepCAURL)
+					caCfg.StepCAProvisionerName = strings.TrimSpace(caStepCAProvisioner)
+					caCfg.StepCAProvisionerKeyPEM = keyPEM
+					caCfg.StepCACACertFile = strings.TrimSpace(caStepCACACertFile)
+				}
+				ca, err = identity.New(caCfg)
+				if err != nil {
+					return fmt.Errorf("ca: %w", err)
+				}
+				if caCfg.Kind == identity.KindDisk || caCfg.Kind == "" {
+					// identity.New treats an empty Kind as the disk default
+					// (case "", KindDisk), so the warning must cover both.
+					fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki or step-ca for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
+				}
 			case identity.SourceSPIREUpstream:
-				return fmt.Errorf("--identity-source=%s is not implemented yet; only %s is supported today", identity.SourceSPIREUpstream, identity.SourceBuiltIn)
+				// Omega consumes identities minted by an upstream SPIFFE
+				// trust domain and runs no local CA: the issuance routes
+				// report 501, and Omega serves the upstream trust bundle plus
+				// the authorization + audit layer over upstream-issued SVIDs.
+				bundlePath := strings.TrimSpace(identitySourceBundle)
+				if bundlePath == "" {
+					return errors.New("--identity-source-bundle is required when --identity-source=spire-upstream")
+				}
+				// #nosec G304 -- bundlePath is operator-supplied via --identity-source-bundle, not user input.
+				bundlePEM, rerr := os.ReadFile(bundlePath)
+				if rerr != nil {
+					return fmt.Errorf("identity-source-bundle: %w", rerr)
+				}
+				ca, err = identity.NewUpstreamSource(strings.TrimSpace(trustDomain), bundlePEM)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "omega server: identity-source=spire-upstream trust-domain=%s bundle=%s (issuance disabled; serving authz + audit over upstream-issued SVIDs)\n", ca.TrustDomain(), bundlePath)
 			default:
-				return fmt.Errorf("--identity-source=%q is not recognised (supported: %s)", identitySource, identity.SourceBuiltIn)
-			}
-
-			caCfg := identity.Config{
-				Kind:        identity.Kind(strings.TrimSpace(caBackend)),
-				TrustDomain: trustDomain,
-				Issuer:      strings.TrimSpace(issuerURL),
-				Dir:         filepath.Join(dataDir, "ca"),
-			}
-			if caCfg.Kind == identity.KindVaultPKI {
-				token, err := resolveVaultToken(caVaultPKIToken, caVaultPKITokenFile)
-				if err != nil {
-					return fmt.Errorf("ca-vault-pki-token: %w", err)
-				}
-				caCfg.VaultPKIAddr = strings.TrimSpace(caVaultPKIAddr)
-				caCfg.VaultPKIToken = token
-				caCfg.VaultPKIMount = strings.TrimSpace(caVaultPKIMount)
-				caCfg.VaultPKIRole = strings.TrimSpace(caVaultPKIRole)
-				caCfg.VaultPKICACertFile = strings.TrimSpace(caVaultPKICACertFile)
-			}
-			if caCfg.Kind == identity.KindStepCA {
-				if caStepCAKeyFile == "" {
-					return errors.New("--ca-step-ca-provisioner-key-file is required when --ca-backend=step-ca")
-				}
-				// #nosec G304 -- caStepCAKeyFile is operator-supplied via --ca-step-ca-provisioner-key-file, not user input.
-				keyPEM, err := os.ReadFile(caStepCAKeyFile)
-				if err != nil {
-					return fmt.Errorf("ca-step-ca-provisioner-key-file: %w", err)
-				}
-				caCfg.StepCAURL = strings.TrimSpace(caStepCAURL)
-				caCfg.StepCAProvisionerName = strings.TrimSpace(caStepCAProvisioner)
-				caCfg.StepCAProvisionerKeyPEM = keyPEM
-				caCfg.StepCACACertFile = strings.TrimSpace(caStepCACACertFile)
-			}
-			ca, err := identity.New(caCfg)
-			if err != nil {
-				return fmt.Errorf("ca: %w", err)
-			}
-			if caCfg.Kind == identity.KindDisk || caCfg.Kind == "" {
-				// identity.New treats an empty Kind as the disk default
-				// (case "", KindDisk), so the warning must cover both.
-				fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki or step-ca for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
+				return fmt.Errorf("--identity-source=%q is not recognised (supported: %s, %s)", identitySource, identity.SourceBuiltIn, identity.SourceSPIREUpstream)
 			}
 
 			pdp := policy.New()
@@ -440,7 +458,9 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&haPollEvery, "ha-poll-interval", time.Second,
 		"how often a follower retries to acquire the advisory lock.")
 	cmd.Flags().StringVar(&identitySource, "identity-source", "built-in",
-		"where SPIFFE identities come from. 'built-in' (default) means omega issues its own SVIDs via the --ca-backend CA. 'spire-upstream' (consume identities minted by an upstream SPIRE/Istio trust domain) is reserved and not implemented yet.")
+		"where SPIFFE identities come from. 'built-in' (default) means omega issues its own SVIDs via the --ca-backend CA. 'spire-upstream' means omega consumes identities minted by an upstream SPIRE/Istio trust domain (no local CA; issuance routes return 501) and serves only the authz + audit layer; it requires --identity-source-bundle and --trust-domain set to the upstream domain.")
+	cmd.Flags().StringVar(&identitySourceBundle, "identity-source-bundle", "",
+		"path to the upstream trust domain's X.509 bundle (PEM), e.g. the SPIRE/Istio root. Required when --identity-source=spire-upstream; this is the same trust material an operator wires into --client-ca.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
 		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT. For all non-disk backends the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005).")
 	cmd.Flags().StringVar(&caVaultPKIAddr, "ca-vault-pki-addr", "",
