@@ -35,9 +35,9 @@ type upstreamSource struct {
 }
 
 // emptyJWKS is the JWT bundle served in spire-upstream mode until upstream
-// JWT-SVID authorities are consumed. Precomputed so JWTBundle does not
-// allocate per call.
-var emptyJWKS = []byte(`{"keys":[]}`)
+// JWT-SVID authorities are consumed. A const string (not a package-level
+// []byte) so the shared value cannot be mutated by a caller.
+const emptyJWKS = `{"keys":[]}`
 
 // NewUpstreamSource builds a non-issuing Source for trustDomain whose
 // X.509 trust bundle is the PEM in x509BundlePEM (the upstream SPIRE /
@@ -63,7 +63,7 @@ func NewUpstreamSource(trustDomain, issuerURL string, x509BundlePEM []byte) (Sou
 	if !hasCA {
 		return nil, errors.New("identity: upstream bundle contained no CA certificate (a trust bundle must hold trust anchors)")
 	}
-	return upstreamSource{td: td, issuerURL: issuer, x509Bundle: append([]byte(nil), x509BundlePEM...)}, nil
+	return &upstreamSource{td: td, issuerURL: issuer, x509Bundle: append([]byte(nil), x509BundlePEM...)}, nil
 }
 
 // validateCABundle scans the CERTIFICATE blocks in pemBytes. It fails
@@ -92,34 +92,34 @@ func validateCABundle(pemBytes []byte) (hasCA bool, err error) {
 	return hasCA, nil
 }
 
-func (u upstreamSource) SourceKind() SourceKind            { return SourceSPIREUpstream }
-func (u upstreamSource) TrustDomain() spiffeid.TrustDomain { return u.td }
-func (u upstreamSource) BundlePEM() []byte                 { return u.x509Bundle }
-func (u upstreamSource) IssuerURL() string                 { return u.issuerURL }
+func (u *upstreamSource) SourceKind() SourceKind            { return SourceSPIREUpstream }
+func (u *upstreamSource) TrustDomain() spiffeid.TrustDomain { return u.td }
+func (u *upstreamSource) BundlePEM() []byte                 { return u.x509Bundle }
+func (u *upstreamSource) IssuerURL() string                 { return u.issuerURL }
 
 // JWTBundle returns an empty JWKS so the combined SPIFFE bundle document
 // stays well-formed; consuming upstream JWT-SVID authorities is a
 // follow-up.
-func (u upstreamSource) JWTBundle() ([]byte, error) { return emptyJWKS, nil }
+func (u *upstreamSource) JWTBundle() ([]byte, error) { return []byte(emptyJWKS), nil }
 
-func (u upstreamSource) IssueSVID(spiffeid.ID, *x509.CertificateRequest) (*SVID, error) {
+func (u *upstreamSource) IssueSVID(spiffeid.ID, *x509.CertificateRequest) (*SVID, error) {
 	return nil, ErrIssuanceUnsupported
 }
 
-func (u upstreamSource) IssueJWTSVID(spiffeid.ID, []string, time.Duration, map[string]any) (*JWTSVID, error) {
+func (u *upstreamSource) IssueJWTSVID(spiffeid.ID, []string, time.Duration, map[string]any) (*JWTSVID, error) {
 	return nil, ErrIssuanceUnsupported
 }
 
-func (u upstreamSource) JWTKeyID() (string, error) { return "", ErrIssuanceUnsupported }
+func (u *upstreamSource) JWTKeyID() (string, error) { return "", ErrIssuanceUnsupported }
 
-func (u upstreamSource) ValidateJWTSVID(string, string) (spiffeid.ID, error) {
+func (u *upstreamSource) ValidateJWTSVID(string, string) (spiffeid.ID, error) {
 	return spiffeid.ID{}, ErrIssuanceUnsupported
 }
 
-func (u upstreamSource) ValidatePresentedCertBinding(string, string, *x509.Certificate) (spiffeid.ID, error) {
+func (u *upstreamSource) ValidatePresentedCertBinding(string, string, *x509.Certificate) (spiffeid.ID, error) {
 	return spiffeid.ID{}, ErrIssuanceUnsupported
 }
 
-func (u upstreamSource) ParseJWTSVIDClaims(string) (spiffeid.ID, map[string]any, error) {
+func (u *upstreamSource) ParseJWTSVIDClaims(string) (spiffeid.ID, map[string]any, error) {
 	return spiffeid.ID{}, nil, ErrIssuanceUnsupported
 }
