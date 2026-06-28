@@ -74,6 +74,10 @@ func TestNewUpstreamSourceRejectsBadInput(t *testing.T) {
 	if _, err := identity.NewUpstreamSource("upstream.example", "", leafCertPEM(t)); err == nil {
 		t.Fatal("expected error for a leaf-only bundle (a trust bundle must hold CA anchors)")
 	}
+	malformed := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("garbage")})
+	if _, err := identity.NewUpstreamSource("upstream.example", "", malformed); err == nil {
+		t.Fatal("expected error for a bundle with a malformed CERTIFICATE block (must fail closed)")
+	}
 }
 
 // leafCertPEM returns a self-signed PEM certificate with IsCA=false, so it

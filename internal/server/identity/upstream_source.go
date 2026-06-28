@@ -56,16 +56,22 @@ func NewUpstreamSource(trustDomain, issuerURL string, x509BundlePEM []byte) (Sou
 	if err != nil {
 		return nil, err
 	}
-	if !hasCACertificate(x509BundlePEM) {
+	hasCA, err := validateCABundle(x509BundlePEM)
+	if err != nil {
+		return nil, err
+	}
+	if !hasCA {
 		return nil, errors.New("identity: upstream bundle contained no CA certificate (a trust bundle must hold trust anchors)")
 	}
 	return upstreamSource{td: td, issuerURL: issuer, x509Bundle: append([]byte(nil), x509BundlePEM...)}, nil
 }
 
-// hasCACertificate reports whether pemBytes holds at least one parseable
-// X.509 CA certificate. A trust bundle is a set of trust anchors, so a
-// PEM carrying only leaf certificates is rejected.
-func hasCACertificate(pemBytes []byte) bool {
+// validateCABundle scans the CERTIFICATE blocks in pemBytes. It fails
+// closed on a malformed CERTIFICATE block - a corrupt trust anchor in a
+// security-critical bundle should surface at startup, not be silently
+// dropped - and reports whether at least one parseable CA certificate
+// (a trust anchor) is present.
+func validateCABundle(pemBytes []byte) (hasCA bool, err error) {
 	for rest := pemBytes; len(rest) > 0; {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
@@ -75,11 +81,15 @@ func hasCACertificate(pemBytes []byte) bool {
 		if block.Type != "CERTIFICATE" {
 			continue
 		}
-		if cert, err := x509.ParseCertificate(block.Bytes); err == nil && cert.IsCA {
-			return true
+		cert, perr := x509.ParseCertificate(block.Bytes)
+		if perr != nil {
+			return false, fmt.Errorf("identity: upstream bundle has a malformed CERTIFICATE block: %w", perr)
+		}
+		if cert.IsCA {
+			hasCA = true
 		}
 	}
-	return false
+	return hasCA, nil
 }
 
 func (u upstreamSource) SourceKind() SourceKind            { return SourceSPIREUpstream }
