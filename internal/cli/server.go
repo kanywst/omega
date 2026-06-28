@@ -92,6 +92,7 @@ func newServerCommand() *cobra.Command {
 		auditOTLPInsecure       bool
 		auditOTLPHeaders        []string
 		oidcIdPs                []string
+		identitySource          string
 		caBackend               string
 		caVaultPKIAddr          string
 		caVaultPKIToken         string
@@ -143,6 +144,16 @@ func newServerCommand() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "omega server: WARN audit chain is UNKEYED (SHA-256); set --audit-hmac-key-file to make it tamper-resistant (H1)\n")
 			}
 
+			switch identity.SourceKind(strings.TrimSpace(identitySource)) {
+			case identity.SourceBuiltIn:
+				// Omega issues its own SVIDs; the CA backend that signs
+				// them is selected by --ca-backend below.
+			case identity.SourceSPIREUpstream:
+				return fmt.Errorf("--identity-source=%s is not implemented yet; only %s is supported today", identity.SourceSPIREUpstream, identity.SourceBuiltIn)
+			default:
+				return fmt.Errorf("--identity-source=%q is not recognised (supported: %s)", identitySource, identity.SourceBuiltIn)
+			}
+
 			caCfg := identity.Config{
 				Kind:        identity.Kind(strings.TrimSpace(caBackend)),
 				TrustDomain: trustDomain,
@@ -177,6 +188,9 @@ func newServerCommand() *cobra.Command {
 			ca, err := identity.New(caCfg)
 			if err != nil {
 				return fmt.Errorf("ca: %w", err)
+			}
+			if caCfg.Kind == identity.KindDisk {
+				fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki or step-ca for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
 			}
 
 			pdp := policy.New()
@@ -423,6 +437,8 @@ func newServerCommand() *cobra.Command {
 			"0 (default) uses Omega's reserved key; override if you run multiple Omega clusters on one Postgres.")
 	cmd.Flags().DurationVar(&haPollEvery, "ha-poll-interval", time.Second,
 		"how often a follower retries to acquire the advisory lock.")
+	cmd.Flags().StringVar(&identitySource, "identity-source", "built-in",
+		"where SPIFFE identities come from. 'built-in' (default) means omega issues its own SVIDs via the --ca-backend CA. 'spire-upstream' (consume identities minted by an upstream SPIRE/Istio trust domain) is reserved and not implemented yet.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
 		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT. For all non-disk backends the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005).")
 	cmd.Flags().StringVar(&caVaultPKIAddr, "ca-vault-pki-addr", "",

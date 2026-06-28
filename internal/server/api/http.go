@@ -37,7 +37,7 @@ var tracer = tracing.Tracer("github.com/kanywst/omega/internal/server/api")
 
 type Server struct {
 	store                   *storage.Store
-	ca                      identity.Authority
+	ca                      identity.Source
 	policy                  *policy.Engine
 	federation              *federation.Registry
 	enforceExchangePolicy   bool
@@ -48,8 +48,12 @@ type Server struct {
 	requireAuth             bool
 }
 
+// NewServer takes an issuing Authority for backward compatibility and
+// adapts it to the identity-source seam via identity.AsSource, so an
+// upstream-SPIFFE Source can be wired in later without touching the
+// handlers, which only ever call the embedded Authority method set.
 func NewServer(store *storage.Store, ca identity.Authority, pdp *policy.Engine) *Server {
-	return &Server{store: store, ca: ca, policy: pdp}
+	return &Server{store: store, ca: identity.AsSource(ca), policy: pdp}
 }
 
 // WithFederation wires a federation registry into the server. Passing
