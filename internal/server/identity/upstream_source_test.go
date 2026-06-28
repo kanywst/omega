@@ -45,6 +45,14 @@ func TestNewUpstreamSourceServesUpstreamTrust(t *testing.T) {
 	if string(src.BundlePEM()) != string(bundle) {
 		t.Fatal("BundlePEM() did not return the upstream bundle verbatim")
 	}
+	// Mutating the returned slice must not corrupt the stored trust anchors.
+	got := src.BundlePEM()
+	if len(got) > 0 {
+		got[0] ^= 0xff
+	}
+	if string(src.BundlePEM()) != string(bundle) {
+		t.Fatal("BundlePEM() exposed the internal slice; a caller mutated the stored bundle")
+	}
 }
 
 func TestUpstreamSourceRefusesIssuance(t *testing.T) {

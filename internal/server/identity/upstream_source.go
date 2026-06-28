@@ -94,8 +94,11 @@ func validateCABundle(pemBytes []byte) (hasCA bool, err error) {
 
 func (u *upstreamSource) SourceKind() SourceKind            { return SourceSPIREUpstream }
 func (u *upstreamSource) TrustDomain() spiffeid.TrustDomain { return u.td }
-func (u *upstreamSource) BundlePEM() []byte                 { return u.x509Bundle }
 func (u *upstreamSource) IssuerURL() string                 { return u.issuerURL }
+
+// BundlePEM returns a copy of the trust anchors so a caller cannot mutate
+// the stored bundle through the returned slice.
+func (u *upstreamSource) BundlePEM() []byte { return append([]byte(nil), u.x509Bundle...) }
 
 // JWTBundle returns an empty JWKS so the combined SPIFFE bundle document
 // stays well-formed; consuming upstream JWT-SVID authorities is a
