@@ -189,7 +189,9 @@ func newServerCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("ca: %w", err)
 			}
-			if caCfg.Kind == identity.KindDisk {
+			if caCfg.Kind == identity.KindDisk || caCfg.Kind == "" {
+				// identity.New treats an empty Kind as the disk default
+				// (case "", KindDisk), so the warning must cover both.
 				fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki or step-ca for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
 			}
 
