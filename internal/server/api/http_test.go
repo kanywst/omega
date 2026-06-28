@@ -74,7 +74,7 @@ func TestSpireUpstreamDisablesIssuance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upstream ca: %v", err)
 	}
-	src, err := identity.NewUpstreamSource("upstream.example", upstreamCA.BundlePEM())
+	src, err := identity.NewUpstreamSource("upstream.example", "", upstreamCA.BundlePEM())
 	if err != nil {
 		t.Fatalf("NewUpstreamSource: %v", err)
 	}

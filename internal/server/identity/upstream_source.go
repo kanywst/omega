@@ -30,23 +30,35 @@ var ErrIssuanceUnsupported = errors.New("identity: omega is in spire-upstream mo
 // JWT-SVID validation is a follow-up.
 type upstreamSource struct {
 	td         spiffeid.TrustDomain
+	issuerURL  string
 	x509Bundle []byte
 }
+
+// emptyJWKS is the JWT bundle served in spire-upstream mode until upstream
+// JWT-SVID authorities are consumed. Precomputed so JWTBundle does not
+// allocate per call.
+var emptyJWKS = []byte(`{"keys":[]}`)
 
 // NewUpstreamSource builds a non-issuing Source for trustDomain whose
 // X.509 trust bundle is the PEM in x509BundlePEM (the upstream SPIRE /
 // Istio root, the same material an operator would wire into --client-ca).
-// It validates that the trust domain parses and the bundle contains at
-// least one certificate.
-func NewUpstreamSource(trustDomain string, x509BundlePEM []byte) (Source, error) {
+// issuerURL is the OIDC issuer advertised at /.well-known/openid-configuration
+// (empty disables discovery). It validates that the trust domain parses,
+// the issuer URL normalizes, and the bundle contains at least one
+// certificate.
+func NewUpstreamSource(trustDomain, issuerURL string, x509BundlePEM []byte) (Source, error) {
 	td, err := spiffeid.TrustDomainFromString(trustDomain)
 	if err != nil {
 		return nil, fmt.Errorf("identity: upstream trust domain: %w", err)
 	}
+	issuer, err := normalizeIssuerURL(issuerURL)
+	if err != nil {
+		return nil, err
+	}
 	if !hasCertificate(x509BundlePEM) {
 		return nil, errors.New("identity: upstream bundle contained no PEM CERTIFICATE block")
 	}
-	return upstreamSource{td: td, x509Bundle: x509BundlePEM}, nil
+	return upstreamSource{td: td, issuerURL: issuer, x509Bundle: x509BundlePEM}, nil
 }
 
 // hasCertificate reports whether pemBytes holds at least one parseable
@@ -71,12 +83,12 @@ func hasCertificate(pemBytes []byte) bool {
 func (u upstreamSource) SourceKind() SourceKind            { return SourceSPIREUpstream }
 func (u upstreamSource) TrustDomain() spiffeid.TrustDomain { return u.td }
 func (u upstreamSource) BundlePEM() []byte                 { return u.x509Bundle }
-func (u upstreamSource) IssuerURL() string                 { return "" }
+func (u upstreamSource) IssuerURL() string                 { return u.issuerURL }
 
 // JWTBundle returns an empty JWKS so the combined SPIFFE bundle document
 // stays well-formed; consuming upstream JWT-SVID authorities is a
 // follow-up.
-func (u upstreamSource) JWTBundle() ([]byte, error) { return []byte(`{"keys":[]}`), nil }
+func (u upstreamSource) JWTBundle() ([]byte, error) { return emptyJWKS, nil }
 
 func (u upstreamSource) IssueSVID(spiffeid.ID, *x509.CertificateRequest) (*SVID, error) {
 	return nil, ErrIssuanceUnsupported

@@ -22,12 +22,15 @@ func upstreamBundle(t *testing.T) []byte {
 func TestNewUpstreamSourceServesUpstreamTrust(t *testing.T) {
 	bundle := upstreamBundle(t)
 
-	src, err := identity.NewUpstreamSource("upstream.example", bundle)
+	src, err := identity.NewUpstreamSource("upstream.example", "https://issuer.example", bundle)
 	if err != nil {
 		t.Fatalf("NewUpstreamSource: %v", err)
 	}
 	if got := src.SourceKind(); got != identity.SourceSPIREUpstream {
 		t.Fatalf("SourceKind() = %q, want %q", got, identity.SourceSPIREUpstream)
+	}
+	if got := src.IssuerURL(); got != "https://issuer.example" {
+		t.Fatalf("IssuerURL() = %q, want https://issuer.example", got)
 	}
 	if src.TrustDomain().Name() != "upstream.example" {
 		t.Fatalf("TrustDomain() = %q, want upstream.example", src.TrustDomain().Name())
@@ -38,7 +41,7 @@ func TestNewUpstreamSourceServesUpstreamTrust(t *testing.T) {
 }
 
 func TestUpstreamSourceRefusesIssuance(t *testing.T) {
-	src, err := identity.NewUpstreamSource("upstream.example", upstreamBundle(t))
+	src, err := identity.NewUpstreamSource("upstream.example", "", upstreamBundle(t))
 	if err != nil {
 		t.Fatalf("NewUpstreamSource: %v", err)
 	}
@@ -55,10 +58,10 @@ func TestUpstreamSourceRefusesIssuance(t *testing.T) {
 }
 
 func TestNewUpstreamSourceRejectsBadInput(t *testing.T) {
-	if _, err := identity.NewUpstreamSource("upstream.example", []byte("not a pem")); err == nil {
+	if _, err := identity.NewUpstreamSource("upstream.example", "", []byte("not a pem")); err == nil {
 		t.Fatal("expected error for a bundle with no CERTIFICATE block")
 	}
-	if _, err := identity.NewUpstreamSource("", upstreamBundle(t)); err == nil {
+	if _, err := identity.NewUpstreamSource("", "", upstreamBundle(t)); err == nil {
 		t.Fatal("expected error for an empty trust domain")
 	}
 }

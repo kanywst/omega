@@ -204,7 +204,7 @@ func newServerCommand() *cobra.Command {
 				if rerr != nil {
 					return fmt.Errorf("identity-source-bundle: %w", rerr)
 				}
-				ca, err = identity.NewUpstreamSource(strings.TrimSpace(trustDomain), bundlePEM)
+				ca, err = identity.NewUpstreamSource(strings.TrimSpace(trustDomain), strings.TrimSpace(issuerURL), bundlePEM)
 				if err != nil {
 					return err
 				}
