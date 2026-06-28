@@ -50,6 +50,11 @@ func NewBuiltInSource(a Authority) Source {
 // otherwise wraps it as the built-in source. It lets call sites keep
 // passing a bare Authority while the server depends on the Source seam.
 func AsSource(a Authority) Source {
+	if a == nil {
+		// Keep the nil interface nil; wrapping it would make the
+		// returned Source non-nil while its embedded Authority panics.
+		return nil
+	}
 	if s, ok := a.(Source); ok {
 		return s
 	}

@@ -34,3 +34,9 @@ func TestAsSourceIsIdempotent(t *testing.T) {
 		t.Fatal("AsSource re-wrapped an existing Source instead of returning it unchanged")
 	}
 }
+
+func TestAsSourceNilStaysNil(t *testing.T) {
+	if identity.AsSource(nil) != nil {
+		t.Fatal("AsSource(nil) must return a nil Source interface, not a non-nil wrapper around a nil Authority")
+	}
+}
