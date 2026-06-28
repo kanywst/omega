@@ -41,7 +41,8 @@ over the AuthZEN wire, rather than the binary.
 ## Decision
 
 `omega` embeds exactly one policy engine in-process - Cedar, per
-ADR 0001 - and will not embed a second. Plurality of policy engines
+[ADR 0001](0001-cedar-as-default-pdp.md) - and will not embed a second.
+Plurality of policy engines
 is a property of the AuthZEN ecosystem and the surrounding
 portfolio, realized across separate components that interoperate
 over the AuthZEN wire, not inside the `omega` binary:
@@ -53,7 +54,8 @@ over the AuthZEN wire, not inside the `omega` binary:
 - `spiffe-compliance-checker` - the conformance/lint layer that
   proves the pieces of the line actually speak AuthZEN.
 
-External AuthZEN-speaking PDPs remain swappable per ADR 0001, but as
+External AuthZEN-speaking PDPs remain swappable per
+[ADR 0001](0001-cedar-as-default-pdp.md), but as
 out-of-process peers behind the bridge - not as engines compiled
 into `omega`.
 
