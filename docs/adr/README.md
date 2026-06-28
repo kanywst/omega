@@ -63,3 +63,4 @@ index to avoid collisions.
 | [0003](0003-short-lived-svids-no-revocation.md) | Short-lived SVIDs instead of CRL / OCSP | Accepted |
 | [0004](0004-single-binary-three-roles.md) | Single binary with three runtime roles | Accepted |
 | [0005](0005-ca-plugin-architecture.md) | Authority interface as the CA backend plugin seam | Accepted |
+| [0006](0006-policy-engine-plurality-at-the-portfolio-line.md) | Policy-engine plurality lives at the portfolio line, not in-process | Accepted |
