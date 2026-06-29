@@ -147,7 +147,14 @@ func newServerCommand() *cobra.Command {
 			}
 
 			var ca identity.Authority
-			switch identity.SourceKind(strings.TrimSpace(identitySource)) {
+			sourceKind := identity.SourceKind(strings.TrimSpace(identitySource))
+			// --identity-source-jwt-bundle only has meaning in spire-upstream
+			// mode; reject it elsewhere rather than silently ignoring it and
+			// letting an operator believe the upstream JWKS was loaded.
+			if sourceKind != identity.SourceSPIREUpstream && strings.TrimSpace(identitySourceJWTBundle) != "" {
+				return errors.New("--identity-source-jwt-bundle is only valid when --identity-source=spire-upstream")
+			}
+			switch sourceKind {
 			case identity.SourceBuiltIn:
 				// Omega issues its own SVIDs; --ca-backend selects the CA
 				// backend that signs them.

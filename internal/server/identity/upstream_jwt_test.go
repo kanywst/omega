@@ -137,15 +137,18 @@ func TestUpstreamSourceRejectsSubjectOutsideTrustDomain(t *testing.T) {
 
 func TestNewUpstreamSourceWithJWTRejectsBadJWKS(t *testing.T) {
 	bundle := upstreamBundle(t)
+	x, y := validP256XY(t)
 
 	cases := map[string][]byte{
 		"not json":        []byte("{not json"),
 		"no usable keys":  []byte(`{"keys":[]}`),
 		"unsupported kty": []byte(`{"keys":[{"kty":"RSA","kid":"a","n":"x","e":"AQAB"}]}`),
-		"missing kid":     []byte(`{"keys":[{"kty":"EC","crv":"P-256","x":"AA","y":"AA"}]}`),
 		"bad coordinate":  []byte(`{"keys":[{"kty":"EC","crv":"P-256","kid":"a","x":"!!","y":"!!"}]}`),
 		"off curve":       []byte(`{"keys":[{"kty":"EC","crv":"P-256","kid":"a","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","y":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}`),
-		"encryption key":  []byte(`{"keys":[{"kty":"EC","crv":"P-256","use":"enc","kid":"a","x":"AA","y":"AA"}]}`),
+		// Valid P-256 coordinates so the failure is tied to the intended
+		// rule, not to point decoding failing first.
+		"missing kid":            fmt.Appendf(nil, `{"keys":[{"kty":"EC","crv":"P-256","x":%q,"y":%q}]}`, x, y),
+		"only an encryption key": fmt.Appendf(nil, `{"keys":[{"kty":"EC","crv":"P-256","use":"enc","kid":"a","x":%q,"y":%q}]}`, x, y),
 	}
 	for name, jwks := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -205,6 +208,24 @@ func ecSigningKey(t *testing.T, kid string) (*ecdsa.PrivateKey, []byte) {
 		base64.RawURLEncoding.EncodeToString(point[1:33]),
 		base64.RawURLEncoding.EncodeToString(point[33:65]))
 	return key, []byte(jwks)
+}
+
+// validP256XY returns base64url-encoded coordinates of a real P-256 point,
+// so a JWKS fixture fails on the rule under test rather than on point
+// decoding.
+func validP256XY(t *testing.T) (x, y string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	ecdhPub, err := key.PublicKey.ECDH()
+	if err != nil {
+		t.Fatalf("ecdh: %v", err)
+	}
+	point := ecdhPub.Bytes()
+	return base64.RawURLEncoding.EncodeToString(point[1:33]),
+		base64.RawURLEncoding.EncodeToString(point[33:65])
 }
 
 func signClaims(t *testing.T, key *ecdsa.PrivateKey, kid string, setKid bool, claims map[string]any) string {
@@ -275,11 +296,17 @@ func TestUpstreamSourceSkipsUnsupportedKeys(t *testing.T) {
 	if err := json.Unmarshal(ecJWKS, &set); err != nil {
 		t.Fatalf("unmarshal ec jwks: %v", err)
 	}
+	x, y := validP256XY(t)
 	mixed, err := json.Marshal(struct {
 		Keys []json.RawMessage `json:"keys"`
 	}{Keys: []json.RawMessage{
 		json.RawMessage(`{"kty":"RSA","kid":"rsa1","use":"sig","n":"x","e":"AQAB"}`),
 		json.RawMessage(`{"kty":"EC","crv":"P-384","kid":"ec384","x":"AA","y":"AA"}`),
+		// A P-256 key whose alg is a key-agreement alg, and one whose
+		// key_ops omit "verify": both must be skipped, not trusted as
+		// ES256 signers.
+		json.RawMessage(fmt.Sprintf(`{"kty":"EC","crv":"P-256","alg":"ECDH-ES","kid":"ecdh","x":%q,"y":%q}`, x, y)),
+		json.RawMessage(fmt.Sprintf(`{"kty":"EC","crv":"P-256","key_ops":["deriveKey"],"kid":"derive","x":%q,"y":%q}`, x, y)),
 		set.Keys[0],
 	}})
 	if err != nil {
@@ -329,5 +356,11 @@ func TestUpstreamSourceRejectsMalformedCertBinding(t *testing.T) {
 	// A cnf.x5t#S256 that is present but not a string must be rejected too.
 	if _, err := src.ValidatePresentedCertBinding(withCnf(map[string]any{"x5t#S256": 123}), "https://api.example.com", nil); err == nil {
 		t.Fatal("expected validation to fail for a non-string x5t#S256 claim")
+	}
+	// A cnf present with only an unsupported confirmation method (no
+	// x5t#S256) demands proof of possession this validator cannot enforce,
+	// so it must be rejected rather than accepted as a bearer token.
+	if _, err := src.ValidatePresentedCertBinding(withCnf(map[string]any{"jkt": "abc"}), "https://api.example.com", nil); err == nil {
+		t.Fatal("expected validation to fail for a cnf with no x5t#S256 binding")
 	}
 }
