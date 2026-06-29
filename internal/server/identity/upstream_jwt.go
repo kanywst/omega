@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
@@ -26,8 +27,10 @@ import (
 //
 // Only EC P-256 (ES256) keys are consumed, matching the rest of omega's
 // JWT-SVID path (issuance, the agent's local validator) and SPIRE / Istio
-// defaults. A JWKS carrying an unsupported key type is rejected so the
-// limitation surfaces at startup instead of as a later "unknown kid".
+// defaults. Keys that are structurally not ours - other key types, other
+// curves, non-signing usages, a non-ES256 alg, or key_ops without verify -
+// are skipped so a heterogeneous upstream JWKS stays usable as long as it
+// carries at least one EC P-256 signing key.
 func parseUpstreamJWKS(jwksJSON []byte) (map[string]*ecdsa.PublicKey, []byte, error) {
 	if len(jwksJSON) == 0 {
 		return nil, []byte(emptyJWKS), nil
@@ -35,12 +38,14 @@ func parseUpstreamJWKS(jwksJSON []byte) (map[string]*ecdsa.PublicKey, []byte, er
 
 	var raw struct {
 		Keys []struct {
-			Kty string `json:"kty"`
-			Crv string `json:"crv"`
-			Kid string `json:"kid"`
-			Use string `json:"use"`
-			X   string `json:"x"`
-			Y   string `json:"y"`
+			Kty    string   `json:"kty"`
+			Crv    string   `json:"crv"`
+			Kid    string   `json:"kid"`
+			Use    string   `json:"use"`
+			Alg    string   `json:"alg"`
+			KeyOps []string `json:"key_ops"`
+			X      string   `json:"x"`
+			Y      string   `json:"y"`
 		} `json:"keys"`
 	}
 	if err := json.Unmarshal(jwksJSON, &raw); err != nil {
@@ -59,6 +64,16 @@ func parseUpstreamJWKS(jwksJSON []byte) (map[string]*ecdsa.PublicKey, []byte, er
 			continue
 		}
 		if k.Use != "" && k.Use != "sig" {
+			continue
+		}
+		// A key whose advertised alg is not ES256, or whose key_ops omit
+		// "verify", is not a JWT-SVID signing key even though it is EC
+		// P-256: skip it rather than canonicalising it as an ES256 signer
+		// (e.g. an ECDH-ES key-agreement key must never verify signatures).
+		if k.Alg != "" && k.Alg != string(jose.ES256) {
+			continue
+		}
+		if len(k.KeyOps) > 0 && !slices.Contains(k.KeyOps, "verify") {
 			continue
 		}
 		// From here the key is a recognised EC P-256 signing key. One we
@@ -201,9 +216,11 @@ func (u *upstreamSource) ParseJWTSVIDClaims(token string) (spiffeid.ID, map[stri
 // ValidatePresentedCertBinding runs the normal upstream JWT-SVID validation
 // and, when the token carries an RFC 8705 cnf.x5t#S256 claim, verifies the
 // presented certificate's thumbprint matches. Tokens without a cnf claim
-// pass through so binding stays opt-in for the upstream issuer - but a cnf
-// claim that IS present yet malformed is rejected rather than skipped, so a
-// bad confirmation claim cannot silently bypass the binding check.
+// pass through so binding stays opt-in for the upstream issuer. A cnf claim
+// that IS present is fail-closed: a malformed cnf, or one whose confirmation
+// method is not the x5t#S256 this validator can enforce, is rejected rather
+// than accepted as a bearer token - the issuer demanded proof of possession
+// we cannot silently waive.
 func (u *upstreamSource) ValidatePresentedCertBinding(token, audience string, presented *x509.Certificate) (spiffeid.ID, error) {
 	id, raw, err := u.validateUpstreamJWT(token, &audience)
 	if err != nil {
@@ -217,9 +234,14 @@ func (u *upstreamSource) ValidatePresentedCertBinding(token, audience string, pr
 	if !ok {
 		return spiffeid.ID{}, errors.New("token cnf claim is malformed (not an object)")
 	}
+	// A cnf claim is the issuer demanding proof of possession. x5t#S256
+	// (RFC 8705 certificate binding) is the only method this validator can
+	// enforce; a cnf carrying some other method (e.g. DPoP jkt) cannot be
+	// proven here, so accepting the token as a bearer would bypass the
+	// binding the issuer required. Reject rather than fail open.
 	boundVal, present := cnf["x5t#S256"]
 	if !present {
-		return id, nil
+		return spiffeid.ID{}, errors.New("token cnf claim has no x5t#S256 binding (unsupported confirmation method)")
 	}
 	bound, ok := boundVal.(string)
 	if !ok || bound == "" {
