@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/cert-manager/cert-manager v1.20.3
-	github.com/cert-manager/issuer-lib v0.10.0
+	github.com/cert-manager/issuer-lib v0.11.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.23.2
@@ -82,7 +82,7 @@ require (
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
@@ -92,8 +92,8 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/apiextensions-apiserver v0.36.0 // indirect
-	k8s.io/component-base v0.36.0 // indirect
+	k8s.io/apiextensions-apiserver v0.36.2 // indirect
+	k8s.io/component-base v0.36.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 // indirect
