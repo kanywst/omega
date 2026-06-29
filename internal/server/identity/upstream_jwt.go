@@ -50,16 +50,22 @@ func parseUpstreamJWKS(jwksJSON []byte) (map[string]*ecdsa.PublicKey, []byte, er
 	keys := make(map[string]*ecdsa.PublicKey, len(raw.Keys))
 	canonical := make([]map[string]string, 0, len(raw.Keys))
 	for i, k := range raw.Keys {
+		// Ignore keys that are structurally not ours (RFC 7517 §5): other
+		// key types, other curves, or non-signing keys. A heterogeneous
+		// upstream JWKS - e.g. EC and RSA side by side during a key
+		// transition, or an "enc" key alongside the signing one - stays
+		// usable as long as it carries at least one EC P-256 signing key.
 		if k.Kty != "EC" || k.Crv != "P-256" {
-			return nil, nil, fmt.Errorf("identity: upstream JWKS key %d is %s/%s; only EC/P-256 (ES256) is supported", i, k.Kty, k.Crv)
+			continue
 		}
-		// "use" is optional in a JWK, but when present it must say "sig":
-		// an encryption key ("enc") must never verify signatures.
 		if k.Use != "" && k.Use != "sig" {
-			return nil, nil, fmt.Errorf("identity: upstream JWKS key %d has use %q; only \"sig\" keys verify signatures", i, k.Use)
+			continue
 		}
+		// From here the key is a recognised EC P-256 signing key. One we
+		// cannot consume is a corrupt trust anchor, not a foreign one, so
+		// fail closed rather than silently drop it.
 		if k.Kid == "" {
-			return nil, nil, fmt.Errorf("identity: upstream JWKS key %d has no kid (a kid is required to select the verification key)", i)
+			return nil, nil, fmt.Errorf("identity: upstream JWKS key %d is EC/P-256 but has no kid (a kid is required to select the verification key)", i)
 		}
 		if _, dup := keys[k.Kid]; dup {
 			return nil, nil, fmt.Errorf("identity: upstream JWKS has duplicate kid %q", k.Kid)
@@ -80,7 +86,7 @@ func parseUpstreamJWKS(jwksJSON []byte) (map[string]*ecdsa.PublicKey, []byte, er
 		})
 	}
 	if len(keys) == 0 {
-		return nil, nil, errors.New("identity: upstream JWKS contained no usable signing keys")
+		return nil, nil, errors.New("identity: upstream JWKS contained no usable EC P-256 signing keys")
 	}
 
 	out, err := json.Marshal(struct {
@@ -195,19 +201,29 @@ func (u *upstreamSource) ParseJWTSVIDClaims(token string) (spiffeid.ID, map[stri
 // ValidatePresentedCertBinding runs the normal upstream JWT-SVID validation
 // and, when the token carries an RFC 8705 cnf.x5t#S256 claim, verifies the
 // presented certificate's thumbprint matches. Tokens without a cnf claim
-// pass through so binding stays opt-in for the upstream issuer.
+// pass through so binding stays opt-in for the upstream issuer - but a cnf
+// claim that IS present yet malformed is rejected rather than skipped, so a
+// bad confirmation claim cannot silently bypass the binding check.
 func (u *upstreamSource) ValidatePresentedCertBinding(token, audience string, presented *x509.Certificate) (spiffeid.ID, error) {
 	id, raw, err := u.validateUpstreamJWT(token, &audience)
 	if err != nil {
 		return spiffeid.ID{}, err
 	}
-	cnf, ok := raw["cnf"].(map[string]any)
-	if !ok {
+	cnfVal, present := raw["cnf"]
+	if !present {
 		return id, nil
 	}
-	bound, ok := cnf["x5t#S256"].(string)
-	if !ok || bound == "" {
+	cnf, ok := cnfVal.(map[string]any)
+	if !ok {
+		return spiffeid.ID{}, errors.New("token cnf claim is malformed (not an object)")
+	}
+	boundVal, present := cnf["x5t#S256"]
+	if !present {
 		return id, nil
+	}
+	bound, ok := boundVal.(string)
+	if !ok || bound == "" {
+		return spiffeid.ID{}, errors.New("token cnf.x5t#S256 is malformed (not a non-empty string)")
 	}
 	if presented == nil {
 		return spiffeid.ID{}, errors.New("token is cert-bound but no certificate was presented")

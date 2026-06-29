@@ -261,3 +261,73 @@ func TestUpstreamSourceRejectsTokenMissingKidHeader(t *testing.T) {
 		t.Fatal("expected validation to fail for a token with no kid header")
 	}
 }
+
+func TestUpstreamSourceSkipsUnsupportedKeys(t *testing.T) {
+	const td = "upstream.example"
+	key, ecJWKS := ecSigningKey(t, "k1")
+
+	// A heterogeneous upstream JWKS: an RSA key and a P-384 key omega cannot
+	// consume, alongside the one EC P-256 signer it can. The unsupported keys
+	// are ignored (RFC 7517 §5) rather than failing the whole bundle.
+	var set struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(ecJWKS, &set); err != nil {
+		t.Fatalf("unmarshal ec jwks: %v", err)
+	}
+	mixed, err := json.Marshal(struct {
+		Keys []json.RawMessage `json:"keys"`
+	}{Keys: []json.RawMessage{
+		json.RawMessage(`{"kty":"RSA","kid":"rsa1","use":"sig","n":"x","e":"AQAB"}`),
+		json.RawMessage(`{"kty":"EC","crv":"P-384","kid":"ec384","x":"AA","y":"AA"}`),
+		set.Keys[0],
+	}})
+	if err != nil {
+		t.Fatalf("marshal mixed jwks: %v", err)
+	}
+
+	src, err := identity.NewUpstreamSourceWithJWT(td, "", upstreamBundle(t), mixed)
+	if err != nil {
+		t.Fatalf("NewUpstreamSourceWithJWT: %v", err)
+	}
+	served, _ := src.JWTBundle()
+	if n := keyCount(t, served); n != 1 {
+		t.Fatalf("served %d keys, want 1 (only the EC P-256 signer)", n)
+	}
+
+	tok := signClaims(t, key, "k1", true, map[string]any{
+		"sub": "spiffe://" + td + "/workload/web",
+		"aud": []string{"https://api.example.com"},
+		"exp": time.Now().Add(time.Minute).Unix(),
+	})
+	if _, err := src.ValidateJWTSVID(tok, "https://api.example.com"); err != nil {
+		t.Fatalf("ValidateJWTSVID after skipping unsupported keys: %v", err)
+	}
+}
+
+func TestUpstreamSourceRejectsMalformedCertBinding(t *testing.T) {
+	const td = "upstream.example"
+	key, jwks := ecSigningKey(t, "k1")
+	src, err := identity.NewUpstreamSourceWithJWT(td, "", upstreamBundle(t), jwks)
+	if err != nil {
+		t.Fatalf("NewUpstreamSourceWithJWT: %v", err)
+	}
+	withCnf := func(cnf any) string {
+		return signClaims(t, key, "k1", true, map[string]any{
+			"sub": "spiffe://" + td + "/workload/web",
+			"aud": []string{"https://api.example.com"},
+			"exp": time.Now().Add(time.Minute).Unix(),
+			"cnf": cnf,
+		})
+	}
+
+	// A cnf claim that is present but not an object must be rejected, not
+	// treated as "no binding".
+	if _, err := src.ValidatePresentedCertBinding(withCnf("malformed"), "https://api.example.com", nil); err == nil {
+		t.Fatal("expected validation to fail for a non-object cnf claim")
+	}
+	// A cnf.x5t#S256 that is present but not a string must be rejected too.
+	if _, err := src.ValidatePresentedCertBinding(withCnf(map[string]any{"x5t#S256": 123}), "https://api.example.com", nil); err == nil {
+		t.Fatal("expected validation to fail for a non-string x5t#S256 claim")
+	}
+}

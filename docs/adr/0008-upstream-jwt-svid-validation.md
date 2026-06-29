@@ -51,13 +51,20 @@ X.509 bundle is wired.
   X.509-only deployment gets a precise "not configured" signal instead
   of a misleading "issuance unsupported".
 
-The bundle is validated fail-closed at boot: a malformed JWKS, a key
-with a bad coordinate, an off-curve point, a missing `kid`, a duplicate
-`kid`, or an unsupported key type is a startup error, not a silently
-dropped trust anchor. Only EC P-256 (ES256) keys are consumed, matching
-Omega's existing JWT-SVID path — issuance, the agent's local validator —
-and the SPIRE / Istio defaults. The limitation surfaces at startup
-rather than later as an "unknown kid".
+Only EC P-256 (ES256) keys are consumed, matching Omega's existing
+JWT-SVID path — issuance, the agent's local validator — and the SPIRE /
+Istio defaults. Keys that are structurally not ours — other key types,
+other curves, or non-signing (`use` other than `sig`) keys — are ignored
+per RFC 7517 §5, so a heterogeneous upstream JWKS (mixed EC / RSA during
+a key transition, an encryption key beside the signer) stays usable as
+long as it carries at least one EC P-256 signing key. A bundle that
+yields no usable signing key fails at boot rather than serving an empty
+JWKS by surprise.
+
+A *recognised* EC P-256 signing key that cannot be consumed — a bad or
+off-curve coordinate, a missing `kid`, a duplicate `kid` — is a corrupt
+trust anchor, not a foreign one, and fails closed at boot rather than
+being silently dropped.
 
 The issuance posture from ADR 0007 is unchanged: this source still runs
 no CA, and the issuance / token-exchange routes still return **501**.
@@ -79,8 +86,10 @@ Harder:
 - The operator now supplies and rotates a second piece of upstream trust
   material (the JWKS) when they want JWT flows. Rotation is a file swap
   plus restart, the same lifecycle as the X.509 bundle.
-- Only EC P-256 is accepted. An upstream domain signing JWT-SVIDs with
-  RSA or another curve is rejected at boot until that support is added.
+- Only EC P-256 is consumed. An upstream domain whose JWT-SVIDs are
+  signed with RSA or another curve has those keys ignored, so those
+  tokens cannot be validated until that algorithm support is added — the
+  JWKS still loads as long as it also carries an EC P-256 signing key.
 
 New obligations:
 
