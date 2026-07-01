@@ -233,7 +233,11 @@ func CertThumbprintS256(cert *x509.Certificate) string {
 // X.509-SVID. It first runs the normal SPIFFE JWT-SVID validation, then
 // - if a cnf claim is present - verifies the thumbprint of presented
 // matches the bound thumbprint. Tokens without a cnf claim pass through
-// unchanged so binding remains opt-in for issuers.
+// unchanged so binding remains opt-in for issuers. A cnf claim that IS
+// present is fail-closed: a malformed cnf, or one whose confirmation
+// method is not the x5t#S256 this validator can enforce, is rejected
+// rather than accepted as a bearer token - the issuer demanded proof of
+// possession we cannot silently waive.
 func (a *localAuthority) ValidatePresentedCertBinding(token, audience string, presented *x509.Certificate) (spiffeid.ID, error) {
 	id, err := a.ValidateJWTSVID(token, audience)
 	if err != nil {
@@ -247,13 +251,21 @@ func (a *localAuthority) ValidatePresentedCertBinding(token, audience string, pr
 	if err := parsed.Claims(a.cert.PublicKey, &raw); err != nil {
 		return spiffeid.ID{}, fmt.Errorf("read claims: %w", err)
 	}
-	cnf, ok := raw["cnf"].(map[string]any)
-	if !ok {
+	cnfVal, present := raw["cnf"]
+	if !present {
 		return id, nil
 	}
-	bound, ok := cnf["x5t#S256"].(string)
+	cnf, ok := cnfVal.(map[string]any)
+	if !ok {
+		return spiffeid.ID{}, errors.New("token cnf claim is malformed (not an object)")
+	}
+	boundVal, present := cnf["x5t#S256"]
+	if !present {
+		return spiffeid.ID{}, errors.New("token cnf claim has no x5t#S256 binding (unsupported confirmation method)")
+	}
+	bound, ok := boundVal.(string)
 	if !ok || bound == "" {
-		return id, nil
+		return spiffeid.ID{}, errors.New("token cnf.x5t#S256 is malformed (not a non-empty string)")
 	}
 	if presented == nil {
 		return spiffeid.ID{}, errors.New("token is cert-bound but no certificate was presented")

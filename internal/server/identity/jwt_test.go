@@ -199,6 +199,32 @@ func TestValidatePresentedCertBindingNoCnfPasses(t *testing.T) {
 	}
 }
 
+func TestValidatePresentedCertBindingRejectsMalformedCnf(t *testing.T) {
+	a := newTestAuthority(t)
+	id := spiffeid.RequireFromString("spiffe://omega.local/example/web")
+
+	// cnf present but not an object: must be rejected, not treated as
+	// "no binding".
+	notObj, err := a.IssueJWTSVID(id, []string{"aud"}, time.Minute, map[string]any{"cnf": "malformed"})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := a.ValidatePresentedCertBinding(notObj.Token, "aud", nil); err == nil {
+		t.Fatal("expected failure for a non-object cnf claim")
+	}
+
+	// cnf present with only an unsupported confirmation method (no
+	// x5t#S256): the issuer demanded proof of possession this validator
+	// cannot enforce, so it must be rejected rather than accepted.
+	noX5t, err := a.IssueJWTSVID(id, []string{"aud"}, time.Minute, map[string]any{"cnf": map[string]any{"jkt": "abc"}})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := a.ValidatePresentedCertBinding(noX5t.Token, "aud", nil); err == nil {
+		t.Fatal("expected failure for a cnf with no x5t#S256 binding")
+	}
+}
+
 func TestJWTSVIDExtraClaims(t *testing.T) {
 	a := newTestAuthority(t)
 	id := spiffeid.RequireFromString("spiffe://omega.local/x")
