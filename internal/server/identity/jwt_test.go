@@ -223,6 +223,24 @@ func TestValidatePresentedCertBindingRejectsMalformedCnf(t *testing.T) {
 	if _, err := a.ValidatePresentedCertBinding(noX5t.Token, "aud", nil); err == nil {
 		t.Fatal("expected failure for a cnf with no x5t#S256 binding")
 	}
+
+	// cnf.x5t#S256 present but not a string: must be rejected.
+	nonStringX5t, err := a.IssueJWTSVID(id, []string{"aud"}, time.Minute, map[string]any{"cnf": map[string]any{"x5t#S256": 123}})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := a.ValidatePresentedCertBinding(nonStringX5t.Token, "aud", nil); err == nil {
+		t.Fatal("expected failure for a non-string x5t#S256 binding")
+	}
+
+	// cnf.x5t#S256 present but an empty string: must be rejected.
+	emptyX5t, err := a.IssueJWTSVID(id, []string{"aud"}, time.Minute, map[string]any{"cnf": map[string]any{"x5t#S256": ""}})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := a.ValidatePresentedCertBinding(emptyX5t.Token, "aud", nil); err == nil {
+		t.Fatal("expected failure for an empty x5t#S256 binding")
+	}
 }
 
 func TestJWTSVIDExtraClaims(t *testing.T) {
