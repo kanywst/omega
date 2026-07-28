@@ -27,7 +27,7 @@ jobs:
       # only patch tags exist (latest: v2.4.3, 2025-09-30). Pin to the
       # exact patch.
       - name: run scorecard
-        uses: ossf/scorecard-action@v2.4.3
+        uses: ossf/scorecard-action@v2.4.4
         with:
           results_file: results.sarif
           results_format: sarif
