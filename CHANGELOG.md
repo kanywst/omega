@@ -8,6 +8,79 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-01
+
+Repositions Omega as the authorization and audit layer over SPIFFE.
+The headline change is the **identity-source seam**: Omega can now
+consume identities minted by an upstream SPIRE / Istio trust domain
+instead of running its own CA, so an operator who already has SPIFFE
+gets the Cedar PDP and the audit chain without a second issuer. The
+built-in disk CA remains the default and is now labelled dev/eval-only
+at startup.
+
+### Added
+
+- **`--identity-source` seam** selecting where SPIFFE identities come
+  from: `built-in` (default, Omega issues via `--ca-backend`) or
+  `spire-upstream`. Recorded in
+  [ADR 0007](docs/adr/0007-pluggable-identity-source.md).
+- **`spire-upstream` identity source — non-issuing, validation-only.**
+  Omega consumes the upstream X.509 trust bundle from
+  `--identity-source-bundle` (a PEM file, no boot-time network
+  dependency), serves it at `/v1/bundle` and to federation peers, and
+  applies authorization + audit over upstream-issued SVIDs. It runs no
+  CA: every issuance / token-exchange route returns **501**.
+  `--trust-domain` must be set explicitly to the upstream domain rather
+  than defaulting.
+- **Upstream JWT-SVID validation.** The optional
+  `--identity-source-jwt-bundle` points at the upstream trust domain's
+  RFC 7517 JWKS; its signing keys are served at `/v1/jwt/bundle` so
+  agents validate upstream JWT-SVIDs locally, completing the SPIFFE
+  credential set under `spire-upstream`. EC P-256 (ES256) only, matching
+  Omega's existing JWT path and the SPIRE / Istio defaults. Omitting the
+  flag keeps upstream consumption X.509-only and returns a distinct
+  `ErrUpstreamJWTNotConfigured` instead of the issuance error. Recorded
+  in [ADR 0008](docs/adr/0008-upstream-jwt-svid-validation.md).
+- [ADR 0006](docs/adr/0006-policy-engine-plurality-at-the-portfolio-line.md)
+  recording that Omega stays Cedar-first with a single in-process engine,
+  and that policy-engine plurality lives at the portfolio line rather
+  than inside Omega.
+
+### Changed
+
+- README repositioned around the wedge — SPIFFE IDs as native AuthZEN
+  subjects with service / human / agent audit — instead of a
+  replace-everything framing, and notes that Omega can consume an
+  upstream SPIRE / Istio identity source.
+- `--ca-backend=disk` now prints a startup **WARNING** that a
+  self-signed root is for dev / eval only, pointing at `vault-pki`,
+  `step-ca`, or `--identity-source`.
+
+### Fixed
+
+- **`cnf` confirmation bindings fail closed.** A present-but-unenforceable
+  `cnf` is rejected in the built-in path rather than silently ignored, as
+  is a `cnf` that is malformed, non-string, empty, or missing
+  `x5t#S256` (RFC 8705).
+- **JWKS consumption hygiene.** Keys that are structurally foreign
+  (other `kty` / `crv`, `use` other than `sig`, `alg` other than ES256,
+  `key_ops` without `verify`) are skipped per RFC 7517 §5, while a
+  *recognised* EC P-256 signing key that is corrupt — bad or off-curve
+  coordinates, a missing `kid`, a duplicate `kid` — fails closed at boot
+  as a corrupt trust anchor. `exp` is required on presented tokens
+  (`iat` stays optional) and kid-less tokens are rejected.
+- **Upstream bundle validation.** The bundle must contain at least one CA
+  certificate, a malformed `CERTIFICATE` block fails closed at boot
+  instead of being silently dropped, and `BundlePEM` returns a defensive
+  copy so callers cannot mutate stored trust material.
+- `--issuer-url` is honoured in `spire-upstream` mode, so OIDC discovery
+  works when Omega is not the issuer.
+
+### Performance
+
+- Reading a `cnf` binding no longer re-verifies the signature that the
+  caller already checked.
+
 ## [0.1.0] - 2026-06-28
 
 First release under the `kanywst` org. Closes the three highest-severity
@@ -390,7 +463,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/kanywst/omega/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kanywst/omega/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/kanywst/omega/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/kanywst/omega/releases/tag/v0.0.1
