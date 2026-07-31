@@ -147,6 +147,11 @@ func newServerCommand() *cobra.Command {
 			}
 
 			var ca identity.Authority
+			// Paths to the upstream trust material, kept for the SIGHUP
+			// reload below: the upstream rotates its CA and signing key on
+			// its own schedule, so the files behind these flags change
+			// while omega is running. Empty outside spire-upstream mode.
+			var upstreamBundlePath, upstreamJWTBundlePath string
 			sourceKind := identity.SourceKind(strings.TrimSpace(identitySource))
 			// --identity-source-jwt-bundle only has meaning in spire-upstream
 			// mode; reject it elsewhere rather than silently ignoring it and
@@ -237,6 +242,8 @@ func newServerCommand() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("identity-source: %w", err)
 				}
+				upstreamBundlePath = bundlePath
+				upstreamJWTBundlePath = strings.TrimSpace(identitySourceJWTBundle)
 				fmt.Fprintf(os.Stderr, "omega server: identity-source=spire-upstream trust-domain=%s bundle=%s %s (issuance disabled; serving authz + audit over upstream-issued SVIDs)\n", ca.TrustDomain(), bundlePath, jwtMode)
 			default:
 				return fmt.Errorf("--identity-source=%q is not recognised (supported: %s, %s)", identitySource, identity.SourceBuiltIn, identity.SourceSPIREUpstream)
@@ -263,11 +270,14 @@ func newServerCommand() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			// SIGHUP re-reads the keyring so an operator can rotate keys
-			// (append a new active key, demote the old to retired)
-			// without restarting. Reload is atomic and refuses to drop
-			// the previously-active key.
-			if auditKeyring != nil && len(sighupSignals) > 0 {
+			// SIGHUP re-reads the rotatable on-disk material so an operator
+			// can follow a rotation without restarting: the audit keyring
+			// (append a new active key, demote the old to retired) and, in
+			// spire-upstream mode, the upstream trust bundle and JWKS.
+			// Both reloads are atomic and fail-closed — a bad file leaves
+			// the previous material installed.
+			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
+			if (auditKeyring != nil || reloadUpstream != nil) && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)
 				signal.Notify(hup, sighupSignals...)
 				go func() {
@@ -277,10 +287,15 @@ func newServerCommand() *cobra.Command {
 						case <-ctx.Done():
 							return
 						case <-hup:
-							if err := auditKeyring.Reload(); err != nil {
-								fmt.Fprintf(os.Stderr, "omega server: audit keyring reload failed: %v\n", err)
-							} else {
-								fmt.Fprintf(os.Stderr, "omega server: audit keyring reloaded\n")
+							if auditKeyring != nil {
+								if err := auditKeyring.Reload(); err != nil {
+									fmt.Fprintf(os.Stderr, "omega server: audit keyring reload failed: %v\n", err)
+								} else {
+									fmt.Fprintf(os.Stderr, "omega server: audit keyring reloaded\n")
+								}
+							}
+							if reloadUpstream != nil {
+								reloadUpstream()
 							}
 						}
 					}
@@ -489,9 +504,9 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&identitySource, "identity-source", "built-in",
 		"where SPIFFE identities come from. 'built-in' (default) means omega issues its own SVIDs via the --ca-backend CA. 'spire-upstream' means omega consumes identities minted by an upstream SPIRE/Istio trust domain (no local CA; issuance routes return 501) and serves only the authz + audit layer; it requires --identity-source-bundle and --trust-domain set to the upstream domain.")
 	cmd.Flags().StringVar(&identitySourceBundle, "identity-source-bundle", "",
-		"path to the upstream trust domain's X.509 bundle (PEM), e.g. the SPIRE/Istio root. Required when --identity-source=spire-upstream; this is the same trust material an operator wires into --client-ca.")
+		"path to the upstream trust domain's X.509 bundle (PEM), e.g. the SPIRE/Istio root. Required when --identity-source=spire-upstream; this is the same trust material an operator wires into --client-ca. SIGHUP re-reads it, so an upstream CA rotation can be followed without a restart; a file that fails validation leaves the previous anchors in place.")
 	cmd.Flags().StringVar(&identitySourceJWTBundle, "identity-source-jwt-bundle", "",
-		"path to the upstream trust domain's JWT bundle (JWKS, EC/P-256 keys). Optional with --identity-source=spire-upstream; when set, omega serves these keys at /v1/jwt/bundle so agents validate upstream JWT-SVIDs locally. Without it, upstream consumption is X.509-only.")
+		"path to the upstream trust domain's JWT bundle (JWKS, EC/P-256 keys). Optional with --identity-source=spire-upstream; when set, omega serves these keys at /v1/jwt/bundle so agents validate upstream JWT-SVIDs locally. Without it, upstream consumption is X.509-only. Re-read on SIGHUP together with --identity-source-bundle.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
 		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT. For all non-disk backends the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005).")
 	cmd.Flags().StringVar(&caVaultPKIAddr, "ca-vault-pki-addr", "",
@@ -604,6 +619,52 @@ func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error)
 		cfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 	return cfg, nil
+}
+
+// upstreamReloader returns the SIGHUP action that re-reads the upstream
+// trust material from disk and installs it, or nil when there is nothing
+// to reload — any source that is not a reloadable spire-upstream one.
+//
+// It re-reads on each signal rather than watching the files: an operator
+// rotating trust material swaps a file (often two, the bundle and the
+// JWKS), and the signal is where they assert the swap is complete.
+// Watching would race a half-written file and a two-file rotation that
+// is only half-applied.
+func upstreamReloader(ca identity.Authority, fed *federation.Registry, bundlePath, jwtBundlePath string) func() {
+	src, ok := ca.(identity.ReloadableSource)
+	if !ok || bundlePath == "" {
+		return nil
+	}
+	return func() {
+		// #nosec G304 -- bundlePath is operator-supplied via --identity-source-bundle, not user input.
+		bundlePEM, err := os.ReadFile(bundlePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "omega server: upstream bundle reload failed, keeping previous trust material: %v\n", err)
+			return
+		}
+		var jwtJWKS []byte
+		if jwtBundlePath != "" {
+			// #nosec G304 -- jwtBundlePath is operator-supplied via --identity-source-jwt-bundle, not user input.
+			jwtJWKS, err = os.ReadFile(jwtBundlePath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "omega server: upstream JWT bundle reload failed, keeping previous trust material: %v\n", err)
+				return
+			}
+		}
+		changed, err := src.Reload(bundlePEM, jwtJWKS)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "omega server: upstream trust material rejected, keeping previous: %v\n", err)
+			return
+		}
+		if !changed {
+			fmt.Fprintf(os.Stderr, "omega server: upstream trust material unchanged\n")
+			return
+		}
+		// NewRegistry snapshotted the bundle at boot, so federation peers
+		// would keep seeing the pre-rotation anchors without this.
+		fed.SetOwnBundle(src.BundlePEM())
+		fmt.Fprintf(os.Stderr, "omega server: upstream trust material reloaded (bundle=%s)\n", bundlePath)
+	}
 }
 
 // isPostgresDSN duplicates storage.isPostgresDSN so the CLI can decide

@@ -1,11 +1,13 @@
 package identity
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -38,9 +40,31 @@ var ErrUpstreamJWTNotConfigured = errors.New("identity: upstream JWT-SVID valida
 // presented token against them. Without an upstream JWKS (X.509-only
 // consumption) JWTBundle serves an empty JWKS and validation returns
 // ErrUpstreamJWTNotConfigured.
+// Upstream trust material rotates: SPIRE rolls its X.509 CA and its JWT
+// signing key on a schedule, so a bundle read once at boot goes stale
+// while the process is still running. Reload installs replacement
+// material without a restart; see ADR 0009.
 type upstreamSource struct {
-	td         spiffeid.TrustDomain
-	issuerURL  string
+	td        spiffeid.TrustDomain
+	issuerURL string
+
+	// trust is the current trust material. Reload swaps in a whole new
+	// snapshot, so readers on the request and validation paths observe a
+	// consistent bundle+JWKS pair without taking a lock and without ever
+	// seeing an X.509 bundle paired with the other generation's keys.
+	trust atomic.Pointer[upstreamTrust]
+
+	// seq counts installed generations of the trust material, starting at
+	// 1. It backs `spiffe_sequence`, which peers use to tell a changed
+	// bundle from a re-served one, so it advances only when the material
+	// actually differs.
+	seq atomic.Int64
+}
+
+// upstreamTrust is one immutable generation of upstream trust material.
+// Nothing mutates a snapshot after it is published; rotation replaces the
+// pointer instead.
+type upstreamTrust struct {
 	x509Bundle []byte
 
 	// jwtBundle is the canonical JWKS served at /v1/jwt/bundle: the
@@ -49,6 +73,37 @@ type upstreamSource struct {
 	// jwtKeys maps each upstream signing key's kid to its public key for
 	// JWT-SVID verification. nil / empty when no upstream JWKS was supplied.
 	jwtKeys map[string]*ecdsa.PublicKey
+}
+
+// newUpstreamTrust validates upstream trust material and returns it as a
+// snapshot. It is the single validation path shared by construction and
+// reload, so material rejected at boot is equally rejected at rotation.
+func newUpstreamTrust(x509BundlePEM, jwtJWKS []byte) (*upstreamTrust, error) {
+	hasCA, err := validateCABundle(x509BundlePEM)
+	if err != nil {
+		return nil, err
+	}
+	if !hasCA {
+		return nil, errors.New("identity: upstream bundle contained no CA certificate (a trust bundle must hold trust anchors)")
+	}
+	keys, canonicalJWKS, err := parseUpstreamJWKS(jwtJWKS)
+	if err != nil {
+		return nil, err
+	}
+	return &upstreamTrust{
+		x509Bundle: append([]byte(nil), x509BundlePEM...),
+		jwtBundle:  canonicalJWKS,
+		jwtKeys:    keys,
+	}, nil
+}
+
+// equal reports whether two snapshots carry the same trust material. The
+// JWKS side compares the canonical re-encoding, so a cosmetic difference
+// in the operator's file - key order, whitespace, a dropped foreign key -
+// is not mistaken for a rotation.
+func (t *upstreamTrust) equal(other *upstreamTrust) bool {
+	return bytes.Equal(t.x509Bundle, other.x509Bundle) &&
+		bytes.Equal(t.jwtBundle, other.jwtBundle)
 }
 
 // emptyJWKS is the JWT bundle served in spire-upstream mode when no
@@ -87,25 +142,42 @@ func NewUpstreamSourceWithJWT(trustDomain, issuerURL string, x509BundlePEM, jwtJ
 	if err != nil {
 		return nil, err
 	}
-	hasCA, err := validateCABundle(x509BundlePEM)
+	trust, err := newUpstreamTrust(x509BundlePEM, jwtJWKS)
 	if err != nil {
 		return nil, err
 	}
-	if !hasCA {
-		return nil, errors.New("identity: upstream bundle contained no CA certificate (a trust bundle must hold trust anchors)")
-	}
-	keys, canonicalJWKS, err := parseUpstreamJWKS(jwtJWKS)
-	if err != nil {
-		return nil, err
-	}
-	return &upstreamSource{
-		td:         td,
-		issuerURL:  issuer,
-		x509Bundle: append([]byte(nil), x509BundlePEM...),
-		jwtBundle:  canonicalJWKS,
-		jwtKeys:    keys,
-	}, nil
+	u := &upstreamSource{td: td, issuerURL: issuer}
+	u.trust.Store(trust)
+	u.seq.Store(1)
+	return u, nil
 }
+
+// Reload validates replacement upstream trust material and installs it
+// atomically, so an operator can follow an upstream CA or JWT signing-key
+// rotation without restarting Omega. It reports whether the material
+// actually changed; an unchanged reload is a no-op that does not advance
+// the bundle sequence.
+//
+// It is fail-closed in the strongest sense: the new material runs the
+// same validation as boot, and on any error the previous generation stays
+// installed. A rotation that would have replaced a good bundle with a
+// corrupt one leaves Omega serving the good one.
+func (u *upstreamSource) Reload(x509BundlePEM, jwtJWKS []byte) (bool, error) {
+	next, err := newUpstreamTrust(x509BundlePEM, jwtJWKS)
+	if err != nil {
+		return false, err
+	}
+	if current := u.trust.Load(); current != nil && current.equal(next) {
+		return false, nil
+	}
+	u.trust.Store(next)
+	u.seq.Add(1)
+	return true, nil
+}
+
+// BundleSequence reports the current generation of the trust material,
+// starting at 1 and advancing on every Reload that changed it.
+func (u *upstreamSource) BundleSequence() int64 { return u.seq.Load() }
 
 // validateCABundle scans the CERTIFICATE blocks in pemBytes. It fails
 // closed on a malformed CERTIFICATE block - a corrupt trust anchor in a
@@ -139,13 +211,15 @@ func (u *upstreamSource) IssuerURL() string                 { return u.issuerURL
 
 // BundlePEM returns a copy of the trust anchors so a caller cannot mutate
 // the stored bundle through the returned slice.
-func (u *upstreamSource) BundlePEM() []byte { return append([]byte(nil), u.x509Bundle...) }
+func (u *upstreamSource) BundlePEM() []byte {
+	return append([]byte(nil), u.trust.Load().x509Bundle...)
+}
 
 // JWTBundle returns a copy of the upstream JWKS (the upstream JWT signing
 // keys), or an empty JWKS when no upstream JWT bundle was supplied. The copy
 // keeps callers from mutating the stored bundle through the returned slice.
 func (u *upstreamSource) JWTBundle() ([]byte, error) {
-	return append([]byte(nil), u.jwtBundle...), nil
+	return append([]byte(nil), u.trust.Load().jwtBundle...), nil
 }
 
 func (u *upstreamSource) IssueSVID(spiffeid.ID, *x509.CertificateRequest) (*SVID, error) {

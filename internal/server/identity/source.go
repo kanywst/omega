@@ -33,6 +33,32 @@ type Source interface {
 	SourceKind() SourceKind
 }
 
+// ReloadableSource is a Source whose trust material can be replaced while
+// the process runs. It exists because a consumed upstream — SPIRE rotates
+// its X.509 CA and JWT signing key on a schedule — changes underneath a
+// bundle that was read once at boot. An issuing Source owns its own key
+// material and does not implement this.
+//
+// Callers should type-assert rather than depend on it: a built-in
+// Authority is legitimately not reloadable.
+type ReloadableSource interface {
+	Source
+
+	// Reload validates replacement trust material and installs it
+	// atomically, reporting whether it differed from what was already
+	// loaded. It is fail-closed: on error the previous material stays
+	// installed.
+	Reload(x509BundlePEM, jwtJWKS []byte) (bool, error)
+}
+
+// BundleSequencer reports a monotonically advancing generation number for
+// a Source's trust material, backing the SPIFFE `spiffe_sequence` field.
+// A Source that cannot change its material at runtime does not implement
+// it, and callers fall back to a fixed sequence.
+type BundleSequencer interface {
+	BundleSequence() int64
+}
+
 // builtinSource adapts an Authority (Omega-as-issuer) to the Source seam.
 type builtinSource struct {
 	Authority
