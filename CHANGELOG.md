@@ -18,12 +18,15 @@ image against a patched standard library.
 
 - **Rebuilt against Go 1.26.5 for
   [GO-2026-5856](https://pkg.go.dev/vuln/GO-2026-5856) (`crypto/tls`).**
-  0.2.0 pinned `go 1.26.4` in `go.mod`, and every workflow plus the
-  release image resolves its toolchain from that file, so the published
-  `ghcr.io/kanywst/omega:0.2.0` image carries the affected `crypto/tls`.
-  The vulnerability is reachable by symbol trace, not merely present in a
-  required module. Upgrading the toolchain is the whole fix — no Omega
-  source change was needed.
+  0.2.0 required `go 1.26.4` in `go.mod` with no `toolchain` directive, so
+  CI — which resolves the toolchain via `go-version-file: go.mod` —
+  built and scanned on exactly 1.26.4, and the vulnerability was
+  **reachable by symbol trace** rather than merely present in a required
+  module. The release image builds `FROM golang:1.26-alpine`, a floating
+  minor, so the standard library baked into `ghcr.io/kanywst/omega:0.2.0`
+  is whatever that tag resolved to at build time and was never pinned or
+  verified. Raising the requirement to 1.26.5 removes the ambiguity for
+  both. No Omega source change was needed.
 
 ### Changed
 
