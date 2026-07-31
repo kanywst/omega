@@ -12,8 +12,6 @@ import (
 	"github.com/kanywst/omega/internal/server/identity"
 )
 
-// reloadable asserts that a spire-upstream source exposes the reload seam,
-// failing the test rather than the type assertion at the call site.
 func reloadable(t *testing.T, src identity.Source) identity.ReloadableSource {
 	t.Helper()
 	r, ok := src.(identity.ReloadableSource)
@@ -32,11 +30,8 @@ func sequence(t *testing.T, src identity.Source) int64 {
 	return s.BundleSequence()
 }
 
-// TestUpstreamSourceReloadFollowsUpstreamRotation is the regression this
-// whole change exists for: SPIRE rotates its CA and JWT signing key on a
-// schedule, and before reload existed omega served the boot-time snapshot
-// forever, so a token minted by the post-rotation upstream failed with
-// "unknown kid" until someone restarted the process.
+// The regression this change exists for: before reload, a token minted by
+// the post-rotation upstream failed with "unknown kid" until restart.
 func TestUpstreamSourceReloadFollowsUpstreamRotation(t *testing.T) {
 	const td = "upstream.example"
 	const aud = "https://api.example.com"
@@ -94,10 +89,8 @@ func TestUpstreamSourceReloadFollowsUpstreamRotation(t *testing.T) {
 	}
 }
 
-// A rotation that cannot be validated must not disarm the source. Serving
-// no anchors, or half of a new generation, would break every workload
-// handshake - strictly worse than continuing to serve trust material that
-// is merely old.
+// A rotation that cannot be validated must not disarm the source: serving
+// no anchors breaks every handshake, which is worse than serving old ones.
 func TestUpstreamSourceReloadKeepsPreviousMaterialOnError(t *testing.T) {
 	const td = "upstream.example"
 	up := upstreamAuthority(t, td)
@@ -203,9 +196,7 @@ func TestUpstreamSourceReloadPreservesX509OnlyMode(t *testing.T) {
 	}
 }
 
-// A reload lands while requests are in flight. The race detector should
-// see no torn read, and no validation should observe an X.509 bundle
-// paired with the other generation's signing keys.
+// A reload lands while requests are in flight.
 func TestUpstreamSourceReloadIsSafeUnderConcurrentUse(t *testing.T) {
 	const td = "upstream.example"
 	const aud = "https://api.example.com"
@@ -224,12 +215,10 @@ func TestUpstreamSourceReloadIsSafeUnderConcurrentUse(t *testing.T) {
 		t.Fatalf("issue: %v", err)
 	}
 
-	// Reload alternates between two generations that both contain the
-	// original signer, so a reader pinning either generation must still
-	// validate the token - any failure means it saw a torn pair. The
-	// second generation is assembled into a fresh slice: localAuthority
-	// hands out its internal bundle, so appending to it in place could
-	// corrupt the fixture.
+	// Both generations keep the original signer, so a reader pinning
+	// either must still validate; a failure means it saw a torn pair.
+	// Built into a fresh slice because localAuthority hands out its
+	// internal bundle, which append could corrupt in place.
 	widened := make([]byte, 0, len(up.BundlePEM())+len(upstreamBundle(t)))
 	widened = append(widened, up.BundlePEM()...)
 	widened = append(widened, upstreamBundle(t)...)

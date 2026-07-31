@@ -12,9 +12,8 @@ import (
 	"github.com/kanywst/omega/internal/server/identity"
 )
 
-// upstreamFixture writes an upstream trust bundle + JWKS to disk and
-// returns the issuing authority behind them, standing in for the upstream
-// SPIRE that owns the material omega only consumes.
+// upstreamFixture writes a trust bundle + JWKS to disk and returns the
+// authority behind them, standing in for the upstream SPIRE.
 func upstreamFixture(t *testing.T, dir, name string) (identity.Authority, string, string) {
 	t.Helper()
 	auth, err := identity.LoadOrCreate(filepath.Join(dir, name+"-ca"), "upstream.example")
@@ -46,8 +45,8 @@ func newTestRegistry(t *testing.T, bundle []byte) *federation.Registry {
 	return fed
 }
 
-// The SIGHUP path has to re-read the files, not just re-install what it
-// already holds: the operator's rotation is a file swap on disk.
+// The SIGHUP path has to re-read from disk, since the rotation is a file
+// swap.
 func TestUpstreamReloaderPicksUpRotatedFiles(t *testing.T) {
 	dir := t.TempDir()
 	before, bundlePath, jwksPath := upstreamFixture(t, dir, "before")
@@ -84,13 +83,9 @@ func TestUpstreamReloaderPicksUpRotatedFiles(t *testing.T) {
 	if string(src.BundlePEM()) != string(after.BundlePEM()) {
 		t.Fatal("reload did not install the rotated bundle from disk")
 	}
-	// Federation peers must see the rotation too; the registry snapshotted
-	// the bundle when it was built.
 	if got := fed.Bundles()["upstream.example"]; string(got) != string(after.BundlePEM()) {
 		t.Fatal("federation registry still serves the pre-rotation anchors")
 	}
-	// A post-rotation token now validates, which is the operator-visible
-	// symptom that was broken before.
 	id := spiffeid.RequireFromString("spiffe://upstream.example/workload/web")
 	svid, err := after.IssueJWTSVID(id, []string{"https://api.example.com"}, time.Minute, nil)
 	if err != nil {
@@ -98,6 +93,25 @@ func TestUpstreamReloaderPicksUpRotatedFiles(t *testing.T) {
 	}
 	if _, err := src.ValidateJWTSVID(svid.Token, "https://api.example.com"); err != nil {
 		t.Fatalf("post-rotation token still rejected after reload: %v", err)
+	}
+}
+
+// An empty JWKS reads as "X.509-only" to the parser, so a truncated file
+// would silently drop the JWT path rather than fail the reload.
+func TestReadUpstreamMaterialRejectsEmptyJWKS(t *testing.T) {
+	dir := t.TempDir()
+	_, bundlePath, jwksPath := upstreamFixture(t, dir, "before")
+	for _, content := range []string{"", "   \n"} {
+		if err := os.WriteFile(jwksPath, []byte(content), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if _, _, err := readUpstreamMaterial(bundlePath, jwksPath); err == nil {
+			t.Fatalf("readUpstreamMaterial accepted an empty JWKS (%q)", content)
+		}
+	}
+	// With the flag unset an absent JWKS is the documented X.509-only mode.
+	if _, jwks, err := readUpstreamMaterial(bundlePath, ""); err != nil || jwks != nil {
+		t.Fatalf("X.509-only read: jwks=%v err=%v", jwks, err)
 	}
 }
 
