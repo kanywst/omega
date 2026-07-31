@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -219,23 +220,17 @@ func newServerCommand() *cobra.Command {
 				if !cmd.Flags().Changed("trust-domain") {
 					return errors.New("--trust-domain must be set to the upstream trust domain when --identity-source=spire-upstream")
 				}
-				// #nosec G304 -- bundlePath is operator-supplied via --identity-source-bundle, not user input.
-				bundlePEM, rerr := os.ReadFile(bundlePath)
-				if rerr != nil {
-					return fmt.Errorf("identity-source-bundle: %w", rerr)
-				}
 				// --identity-source-jwt-bundle is optional: with it Omega
 				// serves the upstream JWT signing keys at /v1/jwt/bundle so
 				// agents validate upstream JWT-SVIDs locally; without it
 				// upstream consumption stays X.509-only.
-				var jwtJWKS []byte
+				jwtPath := strings.TrimSpace(identitySourceJWTBundle)
+				bundlePEM, jwtJWKS, rerr := readUpstreamMaterial(bundlePath, jwtPath)
+				if rerr != nil {
+					return rerr
+				}
 				jwtMode := "x509-only"
-				if jwtPath := strings.TrimSpace(identitySourceJWTBundle); jwtPath != "" {
-					// #nosec G304 -- jwtPath is operator-supplied via --identity-source-jwt-bundle, not user input.
-					jwtJWKS, rerr = os.ReadFile(jwtPath)
-					if rerr != nil {
-						return fmt.Errorf("identity-source-jwt-bundle: %w", rerr)
-					}
+				if jwtPath != "" {
 					jwtMode = "jwt=" + jwtPath
 				}
 				ca, err = identity.NewUpstreamSourceWithJWT(strings.TrimSpace(trustDomain), strings.TrimSpace(issuerURL), bundlePEM, jwtJWKS)
@@ -621,35 +616,44 @@ func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error)
 	return cfg, nil
 }
 
-// upstreamReloader returns the SIGHUP action that re-reads the upstream
-// trust material from disk and installs it, or nil when there is nothing
-// to reload — any source that is not a reloadable spire-upstream one.
-//
-// It re-reads on each signal rather than watching the files: an operator
-// rotating trust material swaps a file (often two, the bundle and the
-// JWKS), and the signal is where they assert the swap is complete.
-// Watching would race a half-written file and a two-file rotation that
-// is only half-applied.
+// readUpstreamMaterial loads the upstream trust files. An empty JWKS is
+// rejected when the flag was set, because parseUpstreamJWKS reads "no
+// bytes" as X.509-only consumption — a truncated file would otherwise
+// silently drop the JWT path instead of failing.
+func readUpstreamMaterial(bundlePath, jwtBundlePath string) (bundlePEM, jwtJWKS []byte, err error) {
+	// #nosec G304 -- bundlePath is operator-supplied via --identity-source-bundle, not user input.
+	bundlePEM, err = os.ReadFile(bundlePath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity-source-bundle: %w", err)
+	}
+	if jwtBundlePath == "" {
+		return bundlePEM, nil, nil
+	}
+	// #nosec G304 -- jwtBundlePath is operator-supplied via --identity-source-jwt-bundle, not user input.
+	jwtJWKS, err = os.ReadFile(jwtBundlePath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity-source-jwt-bundle: %w", err)
+	}
+	if len(bytes.TrimSpace(jwtJWKS)) == 0 {
+		return nil, nil, fmt.Errorf("identity-source-jwt-bundle: %s is empty", jwtBundlePath)
+	}
+	return bundlePEM, jwtJWKS, nil
+}
+
+// upstreamReloader returns the SIGHUP action, or nil for a source with
+// nothing to re-read. It reads on each signal rather than watching the
+// files: the signal is where the operator asserts a swap — often of two
+// files — is complete, and watching would race a half-applied rotation.
 func upstreamReloader(ca identity.Authority, fed *federation.Registry, bundlePath, jwtBundlePath string) func() {
 	src, ok := ca.(identity.ReloadableSource)
 	if !ok || bundlePath == "" {
 		return nil
 	}
 	return func() {
-		// #nosec G304 -- bundlePath is operator-supplied via --identity-source-bundle, not user input.
-		bundlePEM, err := os.ReadFile(bundlePath)
+		bundlePEM, jwtJWKS, err := readUpstreamMaterial(bundlePath, jwtBundlePath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "omega server: upstream bundle reload failed, keeping previous trust material: %v\n", err)
+			fmt.Fprintf(os.Stderr, "omega server: upstream reload failed, keeping previous trust material: %v\n", err)
 			return
-		}
-		var jwtJWKS []byte
-		if jwtBundlePath != "" {
-			// #nosec G304 -- jwtBundlePath is operator-supplied via --identity-source-jwt-bundle, not user input.
-			jwtJWKS, err = os.ReadFile(jwtBundlePath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "omega server: upstream JWT bundle reload failed, keeping previous trust material: %v\n", err)
-				return
-			}
 		}
 		changed, err := src.Reload(bundlePEM, jwtJWKS)
 		if err != nil {
@@ -660,8 +664,6 @@ func upstreamReloader(ca identity.Authority, fed *federation.Registry, bundlePat
 			fmt.Fprintf(os.Stderr, "omega server: upstream trust material unchanged\n")
 			return
 		}
-		// NewRegistry snapshotted the bundle at boot, so federation peers
-		// would keep seeing the pre-rotation anchors without this.
 		fed.SetOwnBundle(src.BundlePEM())
 		fmt.Fprintf(os.Stderr, "omega server: upstream trust material reloaded (bundle=%s)\n", bundlePath)
 	}
