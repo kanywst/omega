@@ -82,6 +82,30 @@ func TestRegistryOwnOnly(t *testing.T) {
 	}
 }
 
+// The registry snapshots the local bundle at construction, so when the
+// identity source rotates its trust material at runtime the peers would
+// keep being served the pre-rotation anchors without SetOwnBundle.
+func TestRegistrySetOwnBundleServesRotatedAnchors(t *testing.T) {
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	rotatedPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA v2")
+	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
+	r := newRegistry(t, td, ownPEM, nil, time.Hour)
+
+	r.SetOwnBundle(rotatedPEM)
+
+	got := r.Bundles()
+	if string(got["omega.alpha"]) != string(rotatedPEM) {
+		t.Fatal("Bundles() still served the pre-rotation anchors after SetOwnBundle")
+	}
+
+	// The registry must not alias the caller's slice, or a later mutation
+	// of the source's buffer would silently rewrite the served bundle.
+	rotatedPEM[0] ^= 0xff
+	if string(r.Bundles()["omega.alpha"]) == string(rotatedPEM) {
+		t.Fatal("SetOwnBundle stored the caller's slice instead of a copy")
+	}
+}
+
 func TestRegistryFetchesPeerViaTDF(t *testing.T) {
 	peerTD := spiffeid.RequireTrustDomainFromString("omega.beta")
 	peerPEM, peerDER, peerCert := newSelfSignedCA(t, "Omega Beta CA")

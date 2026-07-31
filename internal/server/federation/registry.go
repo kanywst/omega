@@ -335,6 +335,17 @@ func (r *Registry) Bundles() map[string][]byte {
 	return out
 }
 
+// SetOwnBundle replaces the local trust bundle served to federation
+// peers. NewRegistry snapshots the bundle at construction, which goes
+// stale when the identity source's trust material rotates at runtime;
+// this lets the owner push the new anchors through without rebuilding
+// the registry and losing the peer bundles Run has collected.
+func (r *Registry) SetOwnBundle(bundle []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ownBundle = append([]byte(nil), bundle...)
+}
+
 // Peers returns the configured peer set (without bundle contents).
 // Useful for diagnostics endpoints.
 func (r *Registry) Peers() []PeerConfig {

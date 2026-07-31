@@ -150,7 +150,11 @@ func ecPublicKeyFromXY(x, y string) (*ecdsa.PublicKey, error) {
 // the raw claims. When no upstream JWKS was supplied it fails with
 // ErrUpstreamJWTNotConfigured.
 func (u *upstreamSource) validateUpstreamJWT(token string, aud *string) (spiffeid.ID, map[string]any, error) {
-	if len(u.jwtKeys) == 0 {
+	// Pin one generation of the trust material for the whole validation:
+	// a concurrent Reload must not let the kid lookup and the signature
+	// check land on different key sets.
+	trust := u.trust.Load()
+	if len(trust.jwtKeys) == 0 {
 		return spiffeid.ID{}, nil, ErrUpstreamJWTNotConfigured
 	}
 	parsed, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES256})
@@ -164,7 +168,7 @@ func (u *upstreamSource) validateUpstreamJWT(token string, aud *string) (spiffei
 	if kid == "" {
 		return spiffeid.ID{}, nil, errors.New("jwt has no kid header")
 	}
-	pub, ok := u.jwtKeys[kid]
+	pub, ok := trust.jwtKeys[kid]
 	if !ok {
 		return spiffeid.ID{}, nil, fmt.Errorf("jwt signed by unknown kid %q", kid)
 	}
