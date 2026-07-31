@@ -8,6 +8,34 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Runtime reload of upstream trust material (`spire-upstream`).**
+  `SIGHUP` now re-reads `--identity-source-bundle` and
+  `--identity-source-jwt-bundle` and installs them atomically, so an
+  upstream SPIRE / Istio CA or JWT signing-key rotation can be followed
+  without restarting the control plane. Reload runs the same validation
+  as boot and is fail-closed: a file that does not validate leaves the
+  previous anchors serving, because stale trust material beats none.
+  Recorded in
+  [ADR 0009](docs/adr/0009-upstream-trust-material-reload.md).
+
+### Fixed
+
+- **Upstream trust material no longer goes stale until restart.**
+  Previously both upstream bundles were read once at boot and held for
+  the process lifetime, while the upstream rotates on its own schedule.
+  Once the upstream root rolled, Omega served a bundle missing the new
+  anchor — and agents, which re-fetch from the control plane, cached that
+  staleness — so freshly-issued upstream SVIDs failed to verify and
+  rotated JWT keys produced "unknown kid". Nothing surfaced at boot or in
+  a health check.
+- `spiffe_sequence` in `GET /v1/spiffe-bundle` tracks the identity
+  source's trust-material generation instead of being hard-coded to `1`,
+  so federation peers can tell a rotated bundle from a re-served one. A
+  built-in issuing source still reports `1`, which is accurate for a
+  source that cannot rotate mid-process.
+
 ## [0.2.1] - 2026-08-01
 
 A maintenance release. Omega's own code is unchanged since 0.2.0; the

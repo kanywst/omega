@@ -66,3 +66,4 @@ index to avoid collisions.
 | [0006](0006-policy-engine-plurality-at-the-portfolio-line.md) | Policy-engine plurality lives at the portfolio line, not in-process | Accepted |
 | [0007](0007-pluggable-identity-source.md) | Pluggable identity source - issue or consume, never re-implement | Accepted |
 | [0008](0008-upstream-jwt-svid-validation.md) | Consume the upstream JWKS to validate upstream JWT-SVIDs | Accepted |
+| [0009](0009-upstream-trust-material-reload.md) | Reload upstream trust material on SIGHUP | Accepted |
