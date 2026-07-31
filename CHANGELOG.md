@@ -8,6 +8,28 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-01
+
+A maintenance release. Omega's own code is unchanged since 0.2.0; the
+reason to upgrade is the Go toolchain bump, which rebuilds the published
+image against a patched standard library.
+
+### Security
+
+- **Rebuilt against Go 1.26.5 for
+  [GO-2026-5856](https://pkg.go.dev/vuln/GO-2026-5856) (`crypto/tls`).**
+  0.2.0 pinned `go 1.26.4` in `go.mod`, and every workflow plus the
+  release image resolves its toolchain from that file, so the published
+  `ghcr.io/kanywst/omega:0.2.0` image carries the affected `crypto/tls`.
+  The vulnerability is reachable by symbol trace, not merely present in a
+  required module. Upgrading the toolchain is the whole fix — no Omega
+  source change was needed.
+
+### Changed
+
+- Routine dependency updates across Go modules, the `ui/` npm tree, and
+  GitHub Actions.
+
 ## [0.2.0] - 2026-07-01
 
 Repositions Omega as the authorization and audit layer over SPIFFE.
@@ -463,7 +485,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/kanywst/omega/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/kanywst/omega/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kanywst/omega/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/kanywst/omega/compare/v0.0.1...v0.0.2
