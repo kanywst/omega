@@ -1223,17 +1223,23 @@ const defaultSPIFFEBundleRefreshHint = 5 * time.Minute
 // pair of `/v1/bundle` (PEM) + `/v1/jwt/bundle` (JWKS) for SPIFFE-
 // native consumers.
 //
-// `spiffe_sequence` is fixed to 1 today; omega does not yet rotate the
-// X.509 root or the JWT signing key at runtime, so the bundle is in
-// fact monotonic-at-one for the lifetime of a server process. A real
-// counter lands with key rotation.
+// `spiffe_sequence` tracks the identity source's trust-material
+// generation when the source can rotate at runtime (spire-upstream,
+// where a SIGHUP reload installs new upstream anchors). A source that
+// cannot change its material while the process runs stays fixed at 1,
+// which is accurate rather than merely a placeholder: the bundle really
+// is monotonic-at-one for that process's lifetime.
 func (s *Server) getSPIFFEBundle(w http.ResponseWriter, _ *http.Request) {
 	hint := s.spiffeBundleRefreshHint
 	if hint <= 0 {
 		hint = defaultSPIFFEBundleRefreshHint
 	}
+	var seq int64 = 1
+	if seqr, ok := s.ca.(identity.BundleSequencer); ok {
+		seq = seqr.BundleSequence()
+	}
 	raw, err := identity.BuildSPIFFEBundle(s.ca, identity.SPIFFEBundleOptions{
-		Sequence:    1,
+		Sequence:    seq,
 		RefreshHint: hint,
 	})
 	if err != nil {

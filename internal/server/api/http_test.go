@@ -1158,6 +1158,107 @@ func TestSPIFFEBundleReturnsTDFDocument(t *testing.T) {
 	}
 }
 
+// A federation peer decides whether to re-read a bundle by comparing
+// spiffe_sequence, so a runtime rotation has to be visible there and not
+// only in the anchors themselves.
+func TestSPIFFEBundleSequenceAdvancesOnUpstreamReload(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	before, err := identity.LoadOrCreate(filepath.Join(dir, "upstream"), "upstream.example")
+	if err != nil {
+		t.Fatalf("upstream ca: %v", err)
+	}
+	jwks, err := before.JWTBundle()
+	if err != nil {
+		t.Fatalf("upstream JWTBundle: %v", err)
+	}
+	src, err := identity.NewUpstreamSourceWithJWT("upstream.example", "", before.BundlePEM(), jwks)
+	if err != nil {
+		t.Fatalf("NewUpstreamSourceWithJWT: %v", err)
+	}
+	srv := httptest.NewServer(api.NewServer(store, src, policy.New()).Handler())
+	t.Cleanup(srv.Close)
+
+	readSequence := func() int64 {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/v1/spiffe-bundle")
+		if err != nil {
+			t.Fatalf("get spiffe-bundle: %v", err)
+		}
+		defer resp.Body.Close()
+		var doc struct {
+			Sequence int64 `json:"spiffe_sequence"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return doc.Sequence
+	}
+
+	if got := readSequence(); got != 1 {
+		t.Fatalf("initial spiffe_sequence = %d, want 1", got)
+	}
+
+	after, err := identity.LoadOrCreate(filepath.Join(dir, "upstream-v2"), "upstream.example")
+	if err != nil {
+		t.Fatalf("rotated upstream ca: %v", err)
+	}
+	rotatedJWKS, err := after.JWTBundle()
+	if err != nil {
+		t.Fatalf("rotated JWTBundle: %v", err)
+	}
+	reloader, ok := src.(identity.ReloadableSource)
+	if !ok {
+		t.Fatalf("upstream source is not reloadable (%T)", src)
+	}
+	if _, err := reloader.Reload(after.BundlePEM(), rotatedJWKS); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if got := readSequence(); got != 2 {
+		t.Fatalf("spiffe_sequence = %d after a rotation, want 2", got)
+	}
+
+	// The served anchors follow the rotation too, not just the counter.
+	resp, err := http.Get(srv.URL + "/v1/bundle")
+	if err != nil {
+		t.Fatalf("get bundle: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	if string(body) != string(after.BundlePEM()) {
+		t.Fatal("GET /v1/bundle still served the pre-rotation anchors")
+	}
+}
+
+// An issuing source cannot rotate its material mid-process, so its
+// sequence is a truthful constant rather than a placeholder.
+func TestSPIFFEBundleSequenceIsFixedForBuiltInSource(t *testing.T) {
+	srv := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/v1/spiffe-bundle")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var doc struct {
+		Sequence int64 `json:"spiffe_sequence"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if doc.Sequence != 1 {
+		t.Fatalf("spiffe_sequence = %d for a built-in source, want 1", doc.Sequence)
+	}
+}
+
 func TestAuthzenDiscoveryReturns404WhenIssuerNotConfigured(t *testing.T) {
 	srv := newTestServer(t)
 	resp, err := http.Get(srv.URL + "/.well-known/authzen-configuration")
