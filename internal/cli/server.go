@@ -413,7 +413,7 @@ func newServerCommand() *cobra.Command {
 			if requireAuth {
 				fmt.Fprintf(os.Stderr, "omega server: require-auth=true (mTLS-authenticated callers; cross-identity SVID issuance denied)\n")
 			} else {
-				fmt.Fprintf(os.Stderr, "omega server: WARNING require-auth=false: POST /v1/svid trusts the caller-asserted spiffe_id, so any client that reaches the listener can mint an SVID for any identity (open CA). Set --require-auth=true with mTLS to close this.\n")
+				fmt.Fprintf(os.Stderr, "omega server: WARNING require-auth=false: POST /v1/svid trusts the caller-asserted spiffe_id, so any client that reaches the listener can mint an SVID for any identity (open CA). Set --require-auth=true with mTLS to close this (see docs/threat-model.md S3).\n")
 			}
 
 			srv := &http.Server{
@@ -569,7 +569,7 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&clientCAFile, "client-ca", "",
 		"PEM CA bundle used to require and verify client certificates (mutual TLS). When set, the listener rejects any client whose certificate does not chain to this bundle. Requires --tls-cert/--tls-key. Empty (default) disables client-cert verification.")
 	cmd.Flags().BoolVar(&requireAuth, "require-auth", false,
-		"require an authenticated caller on every write / PDP / issuance endpoint: the request must arrive over mTLS with a verified client certificate carrying a spiffe:// URI SAN, and SVID issuance is bound to that caller (self-renewal only; minting a different identity is denied). Default false keeps today's open, unauthenticated behaviour. Requires --client-ca. Public reads (/healthz, /v1/leader, GET /v1/bundle, GET /v1/domains) and the attestation enrollment paths stay reachable.")
+		"require an authenticated caller on every write / PDP / issuance endpoint: the request must arrive over mTLS with a verified client certificate carrying a spiffe:// URI SAN, and SVID issuance is bound to that caller (self-renewal only; minting a different identity is denied). Default false keeps today's open, unauthenticated behaviour. Requires --client-ca. Public reads (/healthz, /v1/leader, GET /v1/bundle, GET /v1/domains) and the attestation enrollment paths stay reachable. See docs/threat-model.md (S3).")
 
 	return cmd
 }
