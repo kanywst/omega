@@ -96,15 +96,20 @@ the bootstrap orphan commit.
   manifest, not the index, so resolve that digest first and verify it
   directly — `cosign verify-attestation` has no `--platform` flag:
 
-  ```text
-  crane digest --platform linux/amd64 ghcr.io/kanywst/omega:X.Y.Z
-  crane digest --platform linux/arm64 ghcr.io/kanywst/omega:X.Y.Z
+  There is one SBOM per architecture, so this runs **twice** — once
+  per digest. Verifying only one arch leaves the other unchecked:
 
-  cosign verify-attestation \
-    --type spdxjson \
-    --certificate-identity-regexp '^https://github\.com/kanywst/omega/\.github/workflows/ci\.yml@refs/tags/v' \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    ghcr.io/kanywst/omega@<per-arch-digest>
+  ```text
+  AMD=$(crane digest --platform linux/amd64 ghcr.io/kanywst/omega:X.Y.Z)
+  ARM=$(crane digest --platform linux/arm64 ghcr.io/kanywst/omega:X.Y.Z)
+
+  for DIGEST in "$AMD" "$ARM"; do
+    cosign verify-attestation \
+      --type spdxjson \
+      --certificate-identity-regexp '^https://github\.com/kanywst/omega/\.github/workflows/ci\.yml@refs/tags/v' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      "ghcr.io/kanywst/omega@$DIGEST"
+  done
   ```
 
   Without `crane`, read the digests straight out of the index:
@@ -129,17 +134,44 @@ the bootstrap orphan commit.
   `owner/repo/path` form; a bare `--workflow ci.yml` is not a `gh
   attestation verify` flag:
 
+  Verify the **index digest**, not the tag. The attestation subject is
+  `steps.build.outputs.digest`, which at tag time is the multi-arch
+  index; a tag is a mutable ref, so pinning the digest is what actually
+  ties the provenance to the artefact you shipped:
+
   ```text
-  gh attestation verify oci://ghcr.io/kanywst/omega:X.Y.Z \
+  INDEX=$(crane digest ghcr.io/kanywst/omega:X.Y.Z)   # index, not per-arch
+
+  gh auth status                                      # preflight
+  gh attestation verify "oci://ghcr.io/kanywst/omega@$INDEX" \
     --repo kanywst/omega \
     --signer-workflow kanywst/omega/.github/workflows/ci.yml
   ```
 
-  This reads GitHub's attestation store, so the `gh` token needs
-  `read:packages`; without it the command fails with "the provided
-  token was denied access" even though the attestation is present.
-  GHCR's referrers API does not enumerate these attestations, so an
-  empty referrers list is not evidence that provenance is missing.
+  Without `crane`, the index digest is the `Docker-Content-Digest`
+  header on a HEAD of the manifest, requested with the index media
+  type. The `Accept` header is required, not decorative: without it
+  GHCR answers `404 MANIFEST_UNKNOWN` — *"OCI index found, but Accept
+  header does not support OCI indexes"* — which looks like a missing
+  image rather than a malformed request:
+
+  ```text
+  curl -sI https://ghcr.io/v2/kanywst/omega/manifests/X.Y.Z \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'Accept: application/vnd.oci.image.index.v1+json' \
+    | grep -i docker-content-digest
+  ```
+
+  Two access notes. This command reads GitHub's attestation store,
+  which is **not** the registry: the token `gh` uses is not the one
+  that authenticated the `docker` / `cosign` pulls above, so registry
+  access alone is not enough. It needs a classic PAT with
+  `read:packages`, or a fine-grained token with `attestations:read`.
+  Without it the command fails with "the provided token was denied
+  access", which reads like a missing attestation rather than a local
+  credential gap. Separately, GHCR's referrers API does not enumerate
+  these attestations, so an empty referrers list is not evidence that
+  provenance is missing either.
 
 - A draft GitHub Release with the relevant `CHANGELOG.md` excerpt is
   prepared and reviewed by another maintainer before publishing.
