@@ -122,14 +122,41 @@ and asks for an SVID belonging to a different workload.
 An attacker on the network impersonates `omega server` (or a
 federation peer) and serves forged bundles.
 
-- Mitigation today: federation bundle exchange runs over plain HTTP
-  by default. **TLS termination is the deployment's responsibility.**
-  Omega's `--http-addr` listener does not bring its own TLS; users
-  who care about S2 must front the server with mTLS (mesh, ingress,
-  or a TLS-terminating reverse proxy).
-- Residual risk: deployments that expose `omega server` directly on
-  the network without TLS allow this attack at the federation layer.
-  The operator is expected to know.
+- Mitigation: the listener serves TLS when `--tls-cert` / `--tls-key`
+  are set, and `--client-ca` additionally requires and verifies client
+  certificates (mutual TLS), so a workload or peer can authenticate the
+  control plane rather than trusting the network. Federation fetches
+  verify the peer's bundle endpoint — see T3.
+- Residual risk: **both are opt-in and default to off.** A deployment
+  that leaves them unset serves plaintext HTTP and is exposed to this
+  attack exactly as before; the operator is expected to know. Fronting
+  the server with a TLS-terminating mesh, ingress, or reverse proxy
+  remains a valid alternative.
+
+### S3 — Minting an SVID for an identity you are not entitled to
+
+A client that can reach the control-plane listener posts a CSR to
+`POST /v1/svid` asserting any `spiffe_id` it likes, and receives a
+valid SVID for another workload's identity — the control plane as an
+open CA. This is the threat the startup warning names.
+
+- Mitigation: `--require-auth` binds every write / PDP / issuance
+  endpoint to the caller's verified SPIFFE client SVID and refuses to
+  mint an SVID for a different identity (self-renewal only). It
+  requires `--client-ca`, so the caller is authenticated by mutual TLS
+  before the binding is applied. Enrollment paths that must stay open
+  to unauthenticated callers are attested instead: `POST
+  /v1/attest/k8s` verifies a projected ServiceAccount token against
+  the Kubernetes `TokenReview` API and derives the SPIFFE ID from the
+  verified claims rather than from the request.
+- Residual risk: **`--require-auth` defaults to false**, which
+  preserves the original open behaviour, so a deployment that has not
+  set it hands out any identity to anyone who can open a socket. Omega
+  prints a warning at startup in that configuration. Reaching the
+  listener is therefore part of the trust boundary until the flag is
+  set — bind to loopback or a private network in the meantime.
+- Out-of-tree mitigation: restrict who can reach `--http-addr` at the
+  network layer (NetworkPolicy, security group, mesh authorization).
 
 ### T1 — Tampering with the audit log
 
@@ -141,15 +168,23 @@ hide an authorization decision or an SVID issuance.
   prev_hash)`. `GET /v1/audit/verify` walks the chain from genesis;
   the response includes `first_bad_seq`, the lowest sequence at which
   the chain breaks.
-- The hash chain is *tamper-evident*, not tamper-resistant: an
-  attacker with database write access can compute new hashes, but
-  must rewrite every subsequent row to keep the chain valid, and
-  any external verifier with a previously-published hash anchor will
-  detect the rewrite.
+- Mitigation: `--audit-hmac-key-file` keys the chain with
+  HMAC-SHA-256 from a rotatable keyring (`SIGHUP` reload, per-row
+  `key_id`), which makes it tamper-**resistant**: an attacker with
+  database write access cannot recompute valid hashes without the key,
+  which does not live in the database. `GET /v1/audit/verify` also
+  detects tail truncation and forged key downgrades against an
+  optional `(expected_head, expected_count)` anchor.
+- Residual risk: **the key is opt-in.** Without it the chain falls
+  back to unkeyed SHA-256, which is tamper-*evident* only — an
+  attacker with database write access can rewrite every subsequent row
+  to keep the chain valid, and only an external verifier holding a
+  previously-published anchor will detect it. Keeping the key file
+  readable by the same host that holds the database collapses the
+  distinction, so store it outside `--data-dir` and out of DB backups.
 - Out-of-tree mitigation: forward the audit log to a write-once
   store (S3 Object Lock, Splunk Indexer with frozen retention, etc.)
-  via `audit.Pump`'s webhook forwarder. OTLP forwarder is on the
-  roadmap.
+  via `audit.Pump`'s webhook or OTLP forwarder.
 
 ### T2 — Tampering with policy in the database
 
@@ -175,12 +210,20 @@ A federation peer (or someone impersonating one) advertises a
 modified trust bundle so SVIDs from the attacker's domain are
 trusted.
 
-- Mitigation today: bundle exchange happens over `GET /v1/bundle`,
-  with a one-way pull and an exponential backoff retry. There is no
-  authentication of the peer at the application layer.
-- Residual risk: as with S2, the deployment is responsible for
-  authenticating the peer at the transport layer. Federation
-  partners that trust each other should pin TLS or mutual TLS.
+- Mitigation: `--federate-with` peers are fetched over HTTPS with
+  bundle-endpoint identity verification at the application layer.
+  `profile=https_web` (the default) verifies the endpoint against
+  web-PKI or an operator-supplied `endpoint_ca`; `profile=https_spiffe`
+  verifies the endpoint's X.509-SVID against a pinned
+  `endpoint_spiffe_id`, chaining to an operator-seeded
+  `endpoint_bundle` so the control-plane link does not depend on
+  web-PKI at all. Each peer gets its own verifying client, and a peer
+  whose endpoint fails verification is not merged into the bundle map.
+- Residual risk: plaintext `http://` peers remain reachable through
+  the explicit `--federation-allow-insecure` escape hatch, and those
+  fetches are unverified. Under `https_web` the trust decision is only
+  as good as the web-PKI roots in play; `https_spiffe` avoids that at
+  the cost of seeding the peer's bundle out of band.
 
 ### R1 — Repudiating an authorization decision
 
