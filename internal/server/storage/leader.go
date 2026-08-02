@@ -65,7 +65,7 @@ func (s *Store) SetLeaderForTest(enabled, isLeader bool) {
 //
 // The election goroutine takes one dedicated *sql.Conn out of the pool
 // so the lock is held at session scope (Postgres advisory locks are
-// session-scoped, not transaction-scoped). When the connection drops - 
+// session-scoped, not transaction-scoped). When the connection drops -
 // process crash, Postgres restart, network blip - the lock is released
 // by the server and another replica will pick it up on its next poll.
 //

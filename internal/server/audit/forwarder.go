@@ -7,7 +7,7 @@
 // Delivery semantics: at-least-once. Each forwarder owns a watermark
 // row in the audit_forward_state table; the watermark only advances
 // after the sink has acknowledged the batch. A crash between forward
-// and watermark write redelivers the same events on the next start - 
+// and watermark write redelivers the same events on the next start -
 // receivers should de-duplicate on AuditEvent.Hash, which is stable
 // across redeliveries.
 //
