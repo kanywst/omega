@@ -157,9 +157,15 @@ done
 # A rotation that lands a corrupt file must not disarm the control
 # plane: serving no anchors breaks every handshake, which is strictly
 # worse than serving anchors that are merely old.
-echo "[demo] SIGHUP with a corrupt bundle (fail-closed)"
+# The corrupt bundle is staged alongside a *valid* generation-b JWKS,
+# so the rejection has something good to be tempted by. A reload that
+# installed inputs one at a time would leave generation b's signing keys
+# behind while the anchors stayed at a; the kid assertion below is what
+# makes this an atomicity test rather than a bundle-only one.
+echo "[demo] SIGHUP with a corrupt bundle beside a valid new JWKS (fail-closed)"
 printf -- '-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydA==\n-----END CERTIFICATE-----\n' \
 	>"$DEMO_DIR/live-bundle.pem"
+cp "$DEMO_DIR/jwks-b.json" "$DEMO_DIR/live-jwks.json"
 kill -HUP "$SERVER_PID"
 wait_for_log "keeping previous" "$DEMO_DIR/server.log"
 curl -fsS "http://127.0.0.1:$SERVER_PORT/v1/bundle" >"$DEMO_DIR/served.pem"
@@ -168,11 +174,12 @@ if ! cmp -s "$DEMO_DIR/served.pem" "$DEMO_DIR/bundle-a.pem"; then
 	exit 1
 fi
 echo "[demo]   ok: still serving generation a after a rejected reload"
+assert_eq "rejected reload kept generation a signing keys" \
+	"$(curl -fsS "http://127.0.0.1:$SERVER_PORT/v1/jwt/bundle" | kids)" "$KIDS_A"
 assert_eq "spiffe_sequence did not advance" "$(sequence)" "1"
 
 echo "[demo] rotating the upstream to generation b, then SIGHUP"
 cp "$DEMO_DIR/bundle-b.pem" "$DEMO_DIR/live-bundle.pem"
-cp "$DEMO_DIR/jwks-b.json" "$DEMO_DIR/live-jwks.json"
 kill -HUP "$SERVER_PID"
 wait_for_log "trust material reloaded" "$DEMO_DIR/server.log"
 
