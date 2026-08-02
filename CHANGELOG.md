@@ -8,6 +8,14 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-03
+
+Makes upstream consumption correct over time rather than only at boot.
+`spire-upstream` deployments can now follow an upstream SPIRE / Istio
+CA or signing-key rotation with a signal instead of a restart, which
+closes a failure that was silent, delayed, and fanned out to every
+agent.
+
 ### Added
 
 - **Runtime reload of upstream trust material (`spire-upstream`).**
@@ -35,6 +43,28 @@ changes (see [SECURITY.md](SECURITY.md)).
   so federation peers can tell a rotated bundle from a re-served one. A
   built-in issuing source still reports `1`, which is accurate for a
   source that cannot rotate mid-process.
+- An empty `--identity-source-jwt-bundle` no longer parses as
+  "X.509-only". A truncated or emptied JWKS file used to load cleanly
+  and leave the source with no signing keys, contradicting the
+  `jwt=<path>` startup line at boot and silently downgrading an
+  established JWT deployment on reload.
+- The startup open-CA warning and the `--require-auth` help pointed at
+  a design document that is not in the repo. They now reference
+  [`docs/threat-model.md`](docs/threat-model.md) S3.
+
+### Documentation
+
+- `docs/threat-model.md` reflects the mitigations that shipped in
+  0.1.0. S2 (control-plane TLS / mTLS), T1 (HMAC-keyed audit chain),
+  and T3 (federation bundle-endpoint verification) had all been
+  described as unmitigated or as the deployment's responsibility, which
+  under-claimed the posture by a release. Adds S3 for the open-CA
+  threat, which had no entry despite being what the startup warning is
+  about. Every entry keeps a residual-risk line, because the three
+  mitigations are opt-in and default to off.
+- `examples/spire-upstream/` covers the consuming path end to end and
+  runs in the CI examples matrix: non-issuing posture (501), JWKS
+  service, a fail-closed rejected reload, and a real rotation.
 
 ## [0.2.1] - 2026-08-01
 
@@ -516,7 +546,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/kanywst/omega/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/kanywst/omega/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/kanywst/omega/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kanywst/omega/compare/v0.0.2...v0.1.0
