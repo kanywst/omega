@@ -101,6 +101,34 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Fatalf("timeout waiting for: %s", msg)
 }
 
+// waitForWatermark polls the forwarder watermark until it reaches want.
+//
+// The pump forwards a batch and only *then* writes the watermark, so
+// waiting on the forwarder's view and reading the store in the next
+// statement races that second write. On an unloaded machine the write
+// always wins; under CI contention the read can land first, and the
+// test's own cleanup then cancels the context out from under the
+// pending write ("watermark write failed ... context canceled").
+// Polling keeps the assertion just as strong - the watermark still has
+// to reach want before the deadline - without depending on that timing.
+func waitForWatermark(t *testing.T, ctx context.Context, store *storage.Store, name string, want int64) {
+	t.Helper()
+	var got int64
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var err error
+		got, err = store.AuditForwardSeq(ctx, name)
+		if err != nil {
+			t.Fatalf("read seq: %v", err)
+		}
+		if got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("watermark = %d, want %d", got, want)
+}
+
 func TestPumpDeliversAndAdvancesWatermark(t *testing.T) {
 	store := openPumpStore(t)
 	appendN(t, store, 3)
@@ -113,22 +141,13 @@ func TestPumpDeliversAndAdvancesWatermark(t *testing.T) {
 	waitFor(t, func() bool { return len(fwd.seenSeqs()) >= 3 }, "first 3 events delivered")
 
 	// Watermark must advance to the highest delivered seq.
-	got, err := store.AuditForwardSeq(ctx, "test")
-	if err != nil {
-		t.Fatalf("read seq: %v", err)
-	}
-	if got != 3 {
-		t.Errorf("watermark = %d, want 3", got)
-	}
+	waitForWatermark(t, ctx, store, "test", 3)
 
 	// New events should be picked up on the next tick.
 	appendN(t, store, 2)
 	waitFor(t, func() bool { return len(fwd.seenSeqs()) >= 5 }, "next 2 events delivered")
 
-	got, _ = store.AuditForwardSeq(ctx, "test")
-	if got != 5 {
-		t.Errorf("watermark after second batch = %d, want 5", got)
-	}
+	waitForWatermark(t, ctx, store, "test", 5)
 }
 
 func TestPumpRetriesOnForwarderError(t *testing.T) {
@@ -144,13 +163,7 @@ func TestPumpRetriesOnForwarderError(t *testing.T) {
 	// the same seqs (1, 2). Watermark must not have advanced during failures.
 	waitFor(t, func() bool { return len(fwd.seenSeqs()) >= 2 }, "events delivered after retry")
 
-	got, err := store.AuditForwardSeq(ctx, "test")
-	if err != nil {
-		t.Fatalf("read seq: %v", err)
-	}
-	if got != 2 {
-		t.Errorf("watermark = %d, want 2", got)
-	}
+	waitForWatermark(t, ctx, store, "test", 2)
 
 	// Make sure the same seqs were the ones delivered (no events skipped).
 	seqs := fwd.seenSeqs()
