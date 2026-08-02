@@ -92,36 +92,54 @@ the bootstrap orphan commit.
   ```
 
 - A per-platform SPDX SBOM is attached to each architecture's
-  manifest as a cosign attestation. `--platform` selects the
-  architecture; verify each:
+  manifest as a cosign attestation. The SBOM hangs off the per-arch
+  manifest, not the index, so resolve that digest first and verify it
+  directly — `cosign verify-attestation` has no `--platform` flag:
 
   ```text
-  cosign verify-attestation \
-    --platform linux/amd64 \
-    --type spdxjson \
-    --certificate-identity-regexp '^https://github\.com/kanywst/omega/\.github/workflows/ci\.yml@refs/tags/v' \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    ghcr.io/kanywst/omega:X.Y.Z
+  crane digest --platform linux/amd64 ghcr.io/kanywst/omega:X.Y.Z
+  crane digest --platform linux/arm64 ghcr.io/kanywst/omega:X.Y.Z
 
   cosign verify-attestation \
-    --platform linux/arm64 \
     --type spdxjson \
     --certificate-identity-regexp '^https://github\.com/kanywst/omega/\.github/workflows/ci\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    ghcr.io/kanywst/omega:X.Y.Z
+    ghcr.io/kanywst/omega@<per-arch-digest>
+  ```
+
+  Without `crane`, read the digests straight out of the index:
+
+  ```text
+  TOKEN=$(curl -s 'https://ghcr.io/token?scope=repository:kanywst/omega:pull&service=ghcr.io' \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
+  curl -s https://ghcr.io/v2/kanywst/omega/manifests/X.Y.Z \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'Accept: application/vnd.oci.image.index.v1+json' \
+    | python3 -c 'import sys,json
+  for m in json.load(sys.stdin)["manifests"]:
+      p = m.get("platform", {})
+      if p.get("os") == "linux": print(p["architecture"], m["digest"])'
   ```
 
   The amd64 SBOM is also published as a build artefact named
   `omega-sbom-linux-amd64.spdx.json`; arm64 likewise.
 
 - The SLSA Build Level 3 provenance attestation is reachable through
-  `gh`:
+  `gh`. The flag is `--signer-workflow` and it takes the full
+  `owner/repo/path` form; a bare `--workflow ci.yml` is not a `gh
+  attestation verify` flag:
 
   ```text
   gh attestation verify oci://ghcr.io/kanywst/omega:X.Y.Z \
     --repo kanywst/omega \
-    --workflow ci.yml
+    --signer-workflow kanywst/omega/.github/workflows/ci.yml
   ```
+
+  This reads GitHub's attestation store, so the `gh` token needs
+  `read:packages`; without it the command fails with "the provided
+  token was denied access" even though the attestation is present.
+  GHCR's referrers API does not enumerate these attestations, so an
+  empty referrers list is not evidence that provenance is missing.
 
 - A draft GitHub Release with the relevant `CHANGELOG.md` excerpt is
   prepared and reviewed by another maintainer before publishing.
