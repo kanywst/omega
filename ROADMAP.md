@@ -34,16 +34,20 @@ release as features are ready rather than on a fixed cadence; see
 
 ## Next (3-6 months)
 
-- Runtime key rotation for the disk authority, with the
-  `spiffe_sequence` envelope field in the TDF bundle finally
-  incrementing on each rotation. Today the bundle is
-  monotonic-at-one for the lifetime of a server process.
+- Runtime key rotation for the **issuing** authorities. The
+  consuming side landed in
+  [ADR 0009](docs/adr/0009-upstream-trust-material-reload.md):
+  `--identity-source=spire-upstream` follows an upstream CA / JWKS
+  rotation on `SIGHUP` and increments the `spiffe_sequence` envelope
+  field. When omega is the issuer the bundle is still
+  monotonic-at-one for the lifetime of a server process, so the disk
+  authority cannot roll its own root without a restart.
 - SPIFFE CSI driver integration so workloads can mount SVIDs as a
   volume instead of dialing the agent's Unix socket.
 - step-ca and Vault PKI rotation handling (today they serve a
   stale bundle on transient errors; rotation-aware short-circuit
-  via `spiffe_sequence` comparison waits on the rotation work
-  above).
+  via `spiffe_sequence` comparison waits on the issuing-side
+  rotation work above).
 
 ## Later (6-12 months)
 
