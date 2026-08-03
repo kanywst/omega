@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/cedar-policy/cedar-go v1.8.0
-	github.com/cert-manager/cert-manager v1.21.0
+	github.com/cert-manager/cert-manager v1.21.1
 	github.com/cert-manager/issuer-lib v0.11.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/lib/pq v1.12.3
@@ -20,12 +20,12 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0
 	go.opentelemetry.io/proto/otlp v1.11.0
 	golang.org/x/sys v0.47.0
-	google.golang.org/grpc v1.82.1
+	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	k8s.io/api v0.36.3
 	k8s.io/apimachinery v0.36.3
 	k8s.io/client-go v0.36.3
-	modernc.org/sqlite v1.54.0
+	modernc.org/sqlite v1.55.0
 	sigs.k8s.io/controller-runtime v0.24.1
 )
 
