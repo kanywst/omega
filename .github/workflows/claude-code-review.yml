@@ -1,0 +1,89 @@
+name: Claude code review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+# A rapid re-push should supersede the in-flight review rather than post twice.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # Advisory, not a gate. A reviewer that cannot reach the API (expired token, empty
+    # credit balance, provider outage) says nothing about the change under review, so it
+    # must not be what blocks a merge. Read the job log when the review is missing.
+    continue-on-error: true
+    # Dependabot bumps are lockfile-only, so reviewing them just burns tokens.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    steps:
+      # Keeps the job green (and silent) until the token is added to the repo secrets,
+      # instead of turning every PR red with an auth failure. A pull request from a fork
+      # cannot see the secret either, so this covers that case too.
+      - name: Check for a token
+        id: key
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: echo "present=${CLAUDE_CODE_OAUTH_TOKEN:+true}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.key.outputs.present == 'true'
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        if: steps.key.outputs.present == 'true'
+        with:
+          # `claude setup-token` issues an OAuth token (sk-ant-oat01-...) that runs on the
+          # Claude subscription. It is not an API key and is rejected by the x-api-key
+          # header, so it has to go through this input rather than anthropic_api_key.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. The PR branch is already checked out in the working
+            directory.
+
+            Omega is a single Go binary that puts an authorization and audit layer on top of SPIFFE
+            identity: X.509-SVID and JWT-SVID issuance, a Workload API socket, an OpenID AuthZEN 1.0
+            PDP backed by Cedar, trust-bundle federation, and a hash-chained audit log. It also ships
+            a Kubernetes operator with an OmegaDomain CRD and a cert-manager Issuer, a Helm chart
+            under charts/, and a dashboard under ui/. Code lives in internal/{agent,cli,operator,
+            server}.
+
+            Focus on:
+            - The audit log is tamper-evident because each entry chains to the hash of the previous
+              one. Anything that writes, reorders, backfills or prunes entries has to keep that chain
+              verifiable. A break makes the whole log worthless, not just the affected entry.
+            - SVID validation is a trust boundary. Look for a signature, expiry, trust domain or
+              audience check that is skipped, that passes on empty input, or whose error is
+              swallowed. Federation is the sharper case: accepting a bundle from the wrong trust
+              domain hands an attacker an identity.
+            - AuthZEN 1.0 is a Final Specification. Request and response shapes have to match the
+              spec text rather than be invented or renamed for convenience.
+            - A Cedar policy that fails to compile or evaluate must deny, never fall through to
+              allow.
+            - The CRD, its generated deepcopy, the Helm chart and the docs have to move together. A
+              field added in one and missing in another is a silent break at install time.
+            - Apache-2.0 with no CLA is a deliberate position, so flag a new dependency under a
+              copyleft or source-available licence.
+
+            Report only what you can point at in the diff. Do not restate what the change
+            does, do not praise it, and skip nits that golangci-lint would already catch. If the
+            change looks sound, say so in one line rather than inventing findings.
+
+            Use `gh pr comment` for top-level feedback.
+            Use `mcp__github_inline_comment__create_inline_comment` (with `confirmed: true`)
+            to point at specific lines.
+            Only post GitHub comments, do not return the review as a message.
+
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
