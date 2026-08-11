@@ -26,9 +26,15 @@ jobs:
     # A pull request from a fork gets no secrets, so the job would fail on
     # authentication rather than say anything useful. Drafts are skipped until
     # they are marked ready, which is what the ready_for_review trigger is for.
+    #
+    # Dependabot is skipped for the same reason as a fork: a run it triggers
+    # reads Dependabot secrets, not Actions secrets, so the token is empty no
+    # matter what is configured here. A version bump is also the diff this
+    # review has least to say about.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.draft == false
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
