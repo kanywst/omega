@@ -8,6 +8,12 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-18
+
+A maintenance release. Omega's own code is unchanged since 0.3.0; the
+reason to upgrade is the Go toolchain bump, which rebuilds the published
+image against a patched standard library.
+
 ### Security
 
 - **Raised the Go requirement to 1.26.6** for
@@ -570,7 +576,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/kanywst/omega/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/kanywst/omega/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/kanywst/omega/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/kanywst/omega/compare/v0.1.0...v0.2.0
