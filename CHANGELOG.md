@@ -8,6 +8,21 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Security
+
+- **Raised the Go requirement to 1.26.6** for
+  [GO-2026-6218](https://pkg.go.dev/vuln/GO-2026-6218) (`net/url`),
+  [GO-2026-6091](https://pkg.go.dev/vuln/GO-2026-6091)
+  (`html/template`),
+  [GO-2026-6090](https://pkg.go.dev/vuln/GO-2026-6090) (`crypto/tls`),
+  [GO-2026-6089](https://pkg.go.dev/vuln/GO-2026-6089) and
+  [GO-2026-5026](https://pkg.go.dev/vuln/GO-2026-5026) (`net/http`), and
+  [GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972)
+  (`encoding/asn1`). All six were reachable by symbol trace from Omega
+  code — TLS handshakes, the HTTP surface, and CSR parsing in the
+  cert-manager issuer — under the 1.26.5 toolchain that CI resolves from
+  `go.mod`. No Omega source change was needed.
+
 ## [0.3.0] - 2026-08-03
 
 Makes upstream consumption correct over time rather than only at boot.
