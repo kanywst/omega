@@ -22,6 +22,15 @@ changes (see [SECURITY.md](SECURITY.md)).
   code — TLS handshakes, the HTTP surface, and CSR parsing in the
   cert-manager issuer — under the 1.26.5 toolchain that CI resolves from
   `go.mod`. No Omega source change was needed.
+- **Pinned the builder image to `golang:1.26.6-alpine`.** Every
+  `Dockerfile` built from `golang:1.26-alpine`, a floating minor, so the
+  standard library baked into a published image was whatever that tag
+  resolved to at build time — never pinned and never verified, which
+  0.2.1 called out and did not fix. `go.mod` constrains what the
+  toolchain must be *at least*; it does not make the image reproducible.
+  Pinning the exact patch makes "which standard library is in this
+  binary" answerable from the tree. Dependabot already watches all four
+  Docker directories, so the pin stays current.
 
 ## [0.3.0] - 2026-08-03
 
