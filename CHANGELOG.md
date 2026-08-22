@@ -8,6 +8,31 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Live upstream trust material over the SPIFFE Workload API
+  (`spire-upstream`).** `--identity-source-workload-api` points Omega at
+  the upstream's Workload API endpoint (for example a SPIRE agent's
+  socket) instead of at files on disk, so a CA or JWT signing-key
+  rotation is followed with no operator in the loop and no `SIGHUP`.
+  0.3.0 made the source rotatable but left the operator to supply the
+  new bytes, which in practice means a per-deployment sidecar that
+  watches SPIRE, writes two files, and signals Omega — and reintroduces
+  the same silent staleness when it stops running.
+
+  The file transport stays the default and unchanged; the two are
+  mutually exclusive and exactly one is required, so a rotation cannot
+  be applied to a transport that is being shadowed. Fetched material
+  goes through the same reload path, so validation, atomic generation
+  swap, `spiffe_sequence`, and the fail-closed rule are shared. Omega
+  consumes bundles only (`FetchX509Bundles` / `FetchJWTBundles`), never
+  an SVID of its own, and must be an attested workload of the endpoint.
+  `--identity-source-workload-api-jwt` opts into following the upstream
+  JWKS as well; it is off by default because Omega consumes only EC
+  P-256 (ES256) signing keys. Recorded in
+  [ADR 0010](docs/adr/0010-live-upstream-trust-material.md), demonstrated
+  in [`examples/spire-upstream-live`](examples/spire-upstream-live/).
+
 ## [0.3.1] - 2026-08-18
 
 A maintenance release. Omega's own code is unchanged since 0.3.0; the
