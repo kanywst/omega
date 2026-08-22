@@ -8,6 +8,12 @@ name: Claude review
 # branch, so a pull request cannot rewrite its own reviewer. The cost is that
 # any change to this file, including the one that added it, goes unreviewed by
 # Claude until it is merged.
+#
+# "It does not gate" is about findings, not about delivery. A run that reviews
+# and then cannot post what it found is indistinguishable from a clean diff,
+# and the check is green either way. The last step here fails when that
+# happens, for the same reason the token check fails rather than reviewing
+# nothing quietly.
 
 on:
   pull_request:
@@ -40,6 +46,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      # The delivery check reads the pull request's conversation comments,
+      # which GitHub serves from the issues endpoint.
+      issues: read
       # Required by the action's default GitHub App authentication.
       id-token: write
     steps:
@@ -60,7 +69,15 @@ jobs:
             exit 1
           fi
 
+      # Anything the review posts has to be newer than this, or it is a
+      # leftover from an earlier push and says nothing about this diff. Two
+      # minutes of slack absorbs clock skew between the runner and the API.
+      - name: Mark the start of this review
+        id: started
+        run: echo "at=$(date -u -d '-2 minutes' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1
+        id: claude
         with:
           # A subscription token, not an API key: runs against the Claude plan
           # instead of API credits. Generate it with `claude setup-token`.
@@ -107,5 +124,43 @@ jobs:
             `file:line`. If the diff is clean against all of the above, say so
             in one line rather than manufacturing nits.
 
+            Write the summary to a file and post it with
+            `gh pr comment --body-file <path>`. A body built inline from a
+            heredoc or a command substitution does not match the allowlist and
+            is refused, which loses the whole review.
+
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Write,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+
+      # A review that found nothing still says so in one line, so nothing
+      # posted means nothing was delivered. Two of the three runs on #136 went
+      # that way: the model reviewed for two minutes, hit a denied tool call on
+      # the way to posting, and the job went green with the pull request
+      # unreviewed. Write is allowed above so a long summary can go to a file
+      # and out through `gh pr comment --body-file`, which is the shape the
+      # allowlist matches.
+      - name: Fail on a review that was not delivered
+        if: always() && steps.claude.outputs.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SINCE: ${{ steps.started.outputs.at }}
+          # The action's default bot_name, which this workflow does not override.
+          BOT: claude[bot]
+        run: |
+          set -euo pipefail
+          fresh() {
+            gh api --paginate "$1" --jq \
+              "[.[] | select(.user.login == \"$BOT\") | select((.$2 // \"\") >= \"$SINCE\")] | length" |
+              awk '{ n += $1 } END { print n + 0 }'
+          }
+          summary=$(fresh "repos/$REPO/issues/$PR/comments" updated_at)
+          inline=$(fresh "repos/$REPO/pulls/$PR/comments" updated_at)
+          reviews=$(fresh "repos/$REPO/pulls/$PR/reviews" submitted_at)
+          total=$((summary + inline + reviews))
+          echo "posted since $SINCE: $summary summary, $inline inline, $reviews review(s)"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::The review ran but posted nothing, so this pull request is unreviewed despite a green check. The usual cause is a denied tool call on the way to posting; widen --allowedTools above."
+            exit 1
+          fi
