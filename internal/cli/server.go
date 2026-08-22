@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -96,6 +97,8 @@ func newServerCommand() *cobra.Command {
 		identitySource          string
 		identitySourceBundle    string
 		identitySourceJWTBundle string
+		identitySourceWLAPI     string
+		identitySourceWLAPIJWT  bool
 		caBackend               string
 		caVaultPKIAddr          string
 		caVaultPKIToken         string
@@ -131,6 +134,11 @@ func newServerCommand() *cobra.Command {
 			}
 			defer store.Close()
 
+			// Ahead of the identity source: a live upstream feed opens a
+			// long-running watch during setup.
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
 			// H1: key the audit hash chain with HMAC so a DB-only
 			// attacker cannot forge or truncate it. Opt-in: without the
 			// flag the chain stays unkeyed (legacy SHA-256) so existing
@@ -153,12 +161,23 @@ func newServerCommand() *cobra.Command {
 			// its own schedule, so the files behind these flags change
 			// while omega is running. Empty outside spire-upstream mode.
 			var upstreamBundlePath, upstreamJWTBundlePath string
+			// Non-nil only when the upstream is followed over the Workload
+			// API instead of read from files.
+			var upstreamFeed *identity.UpstreamWorkloadAPI
 			sourceKind := identity.SourceKind(strings.TrimSpace(identitySource))
-			// --identity-source-jwt-bundle only has meaning in spire-upstream
-			// mode; reject it elsewhere rather than silently ignoring it and
-			// letting an operator believe the upstream JWKS was loaded.
-			if sourceKind != identity.SourceSPIREUpstream && strings.TrimSpace(identitySourceJWTBundle) != "" {
-				return errors.New("--identity-source-jwt-bundle is only valid when --identity-source=spire-upstream")
+			// The upstream-only flags have no meaning elsewhere; reject them
+			// rather than silently ignoring them and letting an operator
+			// believe the upstream material was loaded.
+			if sourceKind != identity.SourceSPIREUpstream {
+				if strings.TrimSpace(identitySourceJWTBundle) != "" {
+					return errors.New("--identity-source-jwt-bundle is only valid when --identity-source=spire-upstream")
+				}
+				if strings.TrimSpace(identitySourceWLAPI) != "" {
+					return errors.New("--identity-source-workload-api is only valid when --identity-source=spire-upstream")
+				}
+			}
+			if identitySourceWLAPIJWT && strings.TrimSpace(identitySourceWLAPI) == "" {
+				return errors.New("--identity-source-workload-api-jwt requires --identity-source-workload-api")
 			}
 			switch sourceKind {
 			case identity.SourceBuiltIn:
@@ -210,8 +229,15 @@ func newServerCommand() *cobra.Command {
 				// report 501, and Omega serves the upstream trust bundle plus
 				// the authorization + audit layer over upstream-issued SVIDs.
 				bundlePath := strings.TrimSpace(identitySourceBundle)
-				if bundlePath == "" {
-					return errors.New("--identity-source-bundle is required when --identity-source=spire-upstream")
+				socketAddr := strings.TrimSpace(identitySourceWLAPI)
+				// Two transports for the same material: allowing both would
+				// let one shadow the other, so a rotation applied to the
+				// wrong one looks like it did nothing.
+				switch {
+				case bundlePath == "" && socketAddr == "":
+					return errors.New("--identity-source-bundle or --identity-source-workload-api is required when --identity-source=spire-upstream")
+				case bundlePath != "" && socketAddr != "":
+					return errors.New("--identity-source-bundle and --identity-source-workload-api are two transports for the same trust material; set exactly one")
 				}
 				// --trust-domain defaults to omega.local; in spire-upstream
 				// mode it must name the upstream domain, so require it to be
@@ -220,26 +246,56 @@ func newServerCommand() *cobra.Command {
 				if !cmd.Flags().Changed("trust-domain") {
 					return errors.New("--trust-domain must be set to the upstream trust domain when --identity-source=spire-upstream")
 				}
-				// --identity-source-jwt-bundle is optional: with it Omega
-				// serves the upstream JWT signing keys at /v1/jwt/bundle so
-				// agents validate upstream JWT-SVIDs locally; without it
-				// upstream consumption stays X.509-only.
-				jwtPath := strings.TrimSpace(identitySourceJWTBundle)
-				bundlePEM, jwtJWKS, rerr := readUpstreamMaterial(bundlePath, jwtPath)
-				if rerr != nil {
-					return rerr
-				}
-				jwtMode := "x509-only"
-				if jwtPath != "" {
-					jwtMode = "jwt=" + jwtPath
+				var (
+					bundlePEM, jwtJWKS []byte
+					jwtMode            = "x509-only"
+					transport          string
+				)
+				if socketAddr != "" {
+					if strings.TrimSpace(identitySourceJWTBundle) != "" {
+						return errors.New("--identity-source-jwt-bundle is a file transport and cannot be combined with --identity-source-workload-api; use --identity-source-workload-api-jwt")
+					}
+					td, terr := spiffeid.TrustDomainFromString(strings.TrimSpace(trustDomain))
+					if terr != nil {
+						return fmt.Errorf("identity-source: upstream trust domain: %w", terr)
+					}
+					upstreamFeed, err = identity.DialUpstreamWorkloadAPI(ctx, identity.UpstreamWorkloadAPIConfig{
+						Addr:        socketAddr,
+						TrustDomain: td,
+						ConsumeJWT:  identitySourceWLAPIJWT,
+						Logf:        func(format string, args ...any) { fmt.Fprintf(os.Stderr, "omega server: "+format+"\n", args...) },
+					})
+					if err != nil {
+						return err
+					}
+					defer upstreamFeed.Close()
+					bundlePEM, jwtJWKS = upstreamFeed.Material()
+					if identitySourceWLAPIJWT {
+						jwtMode = "jwt=workload-api"
+					}
+					transport = "workload-api=" + socketAddr
+				} else {
+					// --identity-source-jwt-bundle is optional: with it Omega
+					// serves the upstream JWT signing keys at /v1/jwt/bundle so
+					// agents validate upstream JWT-SVIDs locally; without it
+					// upstream consumption stays X.509-only.
+					jwtPath := strings.TrimSpace(identitySourceJWTBundle)
+					bundlePEM, jwtJWKS, err = readUpstreamMaterial(bundlePath, jwtPath)
+					if err != nil {
+						return err
+					}
+					if jwtPath != "" {
+						jwtMode = "jwt=" + jwtPath
+					}
+					upstreamBundlePath = bundlePath
+					upstreamJWTBundlePath = jwtPath
+					transport = "bundle=" + bundlePath
 				}
 				ca, err = identity.NewUpstreamSourceWithJWT(strings.TrimSpace(trustDomain), strings.TrimSpace(issuerURL), bundlePEM, jwtJWKS)
 				if err != nil {
 					return fmt.Errorf("identity-source: %w", err)
 				}
-				upstreamBundlePath = bundlePath
-				upstreamJWTBundlePath = strings.TrimSpace(identitySourceJWTBundle)
-				fmt.Fprintf(os.Stderr, "omega server: identity-source=spire-upstream trust-domain=%s bundle=%s %s (issuance disabled; serving authz + audit over upstream-issued SVIDs)\n", ca.TrustDomain(), bundlePath, jwtMode)
+				fmt.Fprintf(os.Stderr, "omega server: identity-source=spire-upstream trust-domain=%s %s %s (issuance disabled; serving authz + audit over upstream-issued SVIDs)\n", ca.TrustDomain(), transport, jwtMode)
 			default:
 				return fmt.Errorf("--identity-source=%q is not recognised (supported: %s, %s)", identitySource, identity.SourceBuiltIn, identity.SourceSPIREUpstream)
 			}
@@ -261,9 +317,6 @@ func newServerCommand() *cobra.Command {
 			}
 
 			metrics.SetBuildInfo(version.Version)
-
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
 
 			// SIGHUP re-reads the rotatable on-disk material so an operator
 			// can follow a rotation without restarting: the audit keyring
@@ -311,6 +364,14 @@ func newServerCommand() *cobra.Command {
 			}
 
 			go fed.Run(ctx)
+
+			if upstreamFeed != nil {
+				if src, ok := ca.(identity.ReloadableSource); ok {
+					go upstreamFeed.Run(ctx, src, func() { fed.SetOwnBundle(src.BundlePEM()) })
+				} else {
+					fmt.Fprintf(os.Stderr, "omega server: WARN the upstream workload API feed is connected but the identity source cannot reload; trust material is frozen at boot\n")
+				}
+			}
 
 			if strings.TrimSpace(webhookURL) != "" {
 				fwd, err := audit.NewWebhookForwarder(audit.WebhookConfig{
@@ -499,9 +560,13 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&identitySource, "identity-source", "built-in",
 		"where SPIFFE identities come from. 'built-in' (default) means omega issues its own SVIDs via the --ca-backend CA. 'spire-upstream' means omega consumes identities minted by an upstream SPIRE/Istio trust domain (no local CA; issuance routes return 501) and serves only the authz + audit layer; it requires --identity-source-bundle and --trust-domain set to the upstream domain.")
 	cmd.Flags().StringVar(&identitySourceBundle, "identity-source-bundle", "",
-		"path to the upstream trust domain's X.509 bundle (PEM), e.g. the SPIRE/Istio root. Required when --identity-source=spire-upstream; this is the same trust material an operator wires into --client-ca. SIGHUP re-reads it, so an upstream CA rotation can be followed without a restart; a file that fails validation leaves the previous anchors in place.")
+		"path to the upstream trust domain's X.509 bundle (PEM), e.g. the SPIRE/Istio root. One of this or --identity-source-workload-api is required when --identity-source=spire-upstream; this is the same trust material an operator wires into --client-ca. SIGHUP re-reads it, so an upstream CA rotation can be followed without a restart; a file that fails validation leaves the previous anchors in place.")
 	cmd.Flags().StringVar(&identitySourceJWTBundle, "identity-source-jwt-bundle", "",
-		"path to the upstream trust domain's JWT bundle (JWKS, EC/P-256 keys). Optional with --identity-source=spire-upstream; when set, omega serves these keys at /v1/jwt/bundle so agents validate upstream JWT-SVIDs locally. Without it, upstream consumption is X.509-only. Re-read on SIGHUP together with --identity-source-bundle.")
+		"path to the upstream trust domain's JWT bundle (JWKS, EC/P-256 keys). Optional with --identity-source-bundle; when set, omega serves these keys at /v1/jwt/bundle so agents validate upstream JWT-SVIDs locally. Without it, upstream consumption is X.509-only. Re-read on SIGHUP together with --identity-source-bundle.")
+	cmd.Flags().StringVar(&identitySourceWLAPI, "identity-source-workload-api", "",
+		"SPIFFE Workload API endpoint to follow the upstream trust bundle from, e.g. unix:///run/spire/sockets/agent.sock. The live alternative to --identity-source-bundle when --identity-source=spire-upstream: the upstream pushes its current anchors and every later rotation, so no file has to be kept in sync and no SIGHUP is involved. Omega must be an attested workload of that endpoint.")
+	cmd.Flags().BoolVar(&identitySourceWLAPIJWT, "identity-source-workload-api-jwt", false,
+		"also follow the upstream JWT bundle over --identity-source-workload-api, serving those keys at /v1/jwt/bundle. Off by default because omega consumes only EC P-256 (ES256) signing keys: an upstream whose JWT key is RSA has no usable key and startup fails closed rather than serving an empty JWKS.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
 		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT. For all non-disk backends the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005).")
 	cmd.Flags().StringVar(&caVaultPKIAddr, "ca-vault-pki-addr", "",
