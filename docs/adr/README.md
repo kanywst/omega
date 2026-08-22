@@ -67,3 +67,4 @@ index to avoid collisions.
 | [0007](0007-pluggable-identity-source.md) | Pluggable identity source - issue or consume, never re-implement | Accepted |
 | [0008](0008-upstream-jwt-svid-validation.md) | Consume the upstream JWKS to validate upstream JWT-SVIDs | Accepted |
 | [0009](0009-upstream-trust-material-reload.md) | Reload upstream trust material on SIGHUP | Accepted |
+| [0010](0010-live-upstream-trust-material.md) | Follow upstream trust material over the SPIFFE Workload API | Accepted |
