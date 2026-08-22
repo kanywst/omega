@@ -23,7 +23,7 @@ What Omega ships today:
 
 - **One binary**: `omega server`, `omega agent`, `omega <CRUD>`. One install, one upgrade path
 - **SPIFFE-native**: X.509-SVID and JWT-SVID, Workload API over a Unix socket
-- **Pluggable identity source**: issue your own SVIDs (built-in CA) or **consume identities from an upstream SPIRE / Istio trust domain** (`--identity-source=spire-upstream`), with full authorization and audit over upstream X.509- and JWT-SVIDs and upstream rotations picked up on `SIGHUP`
+- **Pluggable identity source**: issue your own SVIDs (built-in CA) or **consume identities from an upstream SPIRE / Istio trust domain** (`--identity-source=spire-upstream`), with full authorization and audit over upstream X.509- and JWT-SVIDs and upstream rotations followed live over the SPIFFE Workload API (or on `SIGHUP` when the bundle comes from a file)
 - **AuthZEN 1.0 PDP**: Cedar embedded by default
 - **SPIFFE federation**: trust-bundle exchange via `--federate-with`
 - **K8s integration**: `OmegaDomain` CRD and a cert-manager `Issuer` / `ClusterIssuer`

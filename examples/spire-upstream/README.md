@@ -95,8 +95,14 @@ behaves — non-issuing, JWKS-serving, rotation-following, fail-closed —
 against material shaped like an upstream's. Wiring to a live SPIRE is a
 deployment concern; the flags are the same either way.
 
-Reload is deliberately operator-driven: omega does not watch the files
-or fetch from the upstream's bundle endpoint, because that would add the
-runtime network dependency on the upstream that ADR 0007 avoided. The
-signal is where the operator asserts a swap — often of two files — is
-complete.
+Reload on this transport is deliberately operator-driven: omega does not
+watch the files, because the signal is where the operator asserts a swap
+— often of two files — is complete, and watching would race a
+half-applied rotation.
+
+Omega can instead follow the upstream's SPIFFE Workload API socket, where
+a rotation needs no operator at all; see
+[examples/spire-upstream-live](../spire-upstream-live/) and
+[ADR 0010](../../docs/adr/0010-live-upstream-trust-material.md). The file
+transport stays the default because it adds no runtime dependency on the
+upstream.
