@@ -70,6 +70,8 @@ omega server \
   --identity-source-workload-api-jwt
 ```
 
+The address must be `unix://`. A network endpoint is dialled without transport security, so anything on the path could hand omega its trust anchors; see [ADR 0010](../../docs/adr/0010-live-upstream-trust-material.md).
+
 Two deployment facts this demo does not cover:
 
 - **omega must be an attested workload of that agent.** SPIRE answers the Workload API only for callers it can attest, so the control-plane process needs a registration entry (typically a `unix:uid:` or `k8s:` selector). Without one, startup fails with a `PermissionDenied` from the socket.

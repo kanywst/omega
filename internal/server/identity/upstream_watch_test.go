@@ -11,6 +11,8 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -100,11 +102,18 @@ func (f *fakeWorkloadAPI) FetchJWTBundles(_ *workloadpb.JWTBundlesRequest, strea
 	}
 }
 
-// TCP rather than a unix socket: a temp dir can exceed the ~100 byte
-// sockaddr path limit.
 func startFakeWorkloadAPI(t *testing.T, fake *fakeWorkloadAPI) string {
 	t.Helper()
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	// os.MkdirTemp rather than t.TempDir: these test names are long enough
+	// that t.TempDir's path plus a socket name can pass the ~104 byte
+	// sockaddr limit on macOS.
+	dir, err := os.MkdirTemp("", "omega-wl")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "a.sock")
+	lis, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -112,7 +121,7 @@ func startFakeWorkloadAPI(t *testing.T, fake *fakeWorkloadAPI) string {
 	workloadpb.RegisterSpiffeWorkloadAPIServer(srv, fake)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
-	return "tcp://" + lis.Addr().String()
+	return "unix://" + socket
 }
 
 // upstreamGeneration mints one generation in the shapes the Workload API
@@ -370,9 +379,35 @@ func TestUpstreamWorkloadAPIRejectsAMissingTrustDomain(t *testing.T) {
 
 func TestDialUpstreamWorkloadAPIRequiresATrustDomain(t *testing.T) {
 	_, err := identity.DialUpstreamWorkloadAPI(context.Background(), identity.UpstreamWorkloadAPIConfig{
-		Addr: "tcp://127.0.0.1:1",
+		Addr: "unix:///nonexistent/agent.sock",
 	})
 	if err == nil {
 		t.Fatal("expected a zero trust domain to be rejected")
+	}
+}
+
+// go-spiffe dials tcp://<any ip> with no transport security and no server
+// authentication, and what comes back becomes omega's entire root of
+// trust. Refuse the scheme rather than bootstrap trust anchors over an
+// unauthenticated channel.
+func TestDialUpstreamWorkloadAPIRejectsNonUnixSchemes(t *testing.T) {
+	for _, addr := range []string{
+		"tcp://127.0.0.1:8081",
+		"tcp://198.51.100.7:8081",
+		"http://spire.example:8081",
+		"/run/spire/sockets/agent.sock",
+	} {
+		t.Run(addr, func(t *testing.T) {
+			_, err := identity.DialUpstreamWorkloadAPI(context.Background(), identity.UpstreamWorkloadAPIConfig{
+				Addr:        addr,
+				TrustDomain: spiffeid.RequireTrustDomainFromString("upstream.example"),
+			})
+			if err == nil {
+				t.Fatalf("expected %q to be rejected", addr)
+			}
+			if !strings.Contains(err.Error(), "unix://") {
+				t.Fatalf("error should name the required scheme, got: %v", err)
+			}
+		})
 	}
 }

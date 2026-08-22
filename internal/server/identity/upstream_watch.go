@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
@@ -66,11 +67,31 @@ type UpstreamWorkloadAPI struct {
 	updated chan struct{}
 }
 
+// requireUnixAddr rejects every scheme but unix. go-spiffe will happily
+// dial tcp://<any-ip>:<port> with no transport security and no server
+// authentication, and what arrives over it becomes Omega's entire root of
+// trust. The Workload API's security model is kernel-enforced peer
+// credentials over a local socket; the rest of the codebase pins unix://
+// itself rather than letting a caller pick (internal/cli/svid.go).
+func requireUnixAddr(addr string) error {
+	u, err := url.Parse(addr)
+	if err != nil {
+		return fmt.Errorf("identity: upstream workload API address %q is not a valid URI: %w", addr, err)
+	}
+	if u.Scheme != "unix" {
+		return fmt.Errorf("identity: upstream workload API address must use the unix:// scheme, got %q; a network endpoint is dialled without transport security, so Omega would bootstrap its trust anchors over an unauthenticated channel", addr)
+	}
+	return nil
+}
+
 // DialUpstreamWorkloadAPI connects to cfg.Addr and fetches the current
 // trust material for cfg.TrustDomain, blocking until it has it.
 func DialUpstreamWorkloadAPI(ctx context.Context, cfg UpstreamWorkloadAPIConfig) (_ *UpstreamWorkloadAPI, err error) {
 	if cfg.TrustDomain.IsZero() {
 		return nil, errors.New("identity: upstream workload API needs the upstream trust domain")
+	}
+	if err := requireUnixAddr(cfg.Addr); err != nil {
+		return nil, err
 	}
 	timeout := cfg.DialTimeout
 	if timeout <= 0 {
