@@ -132,6 +132,18 @@ jobs:
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Write,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
 
+      # The gate below keys off the action's conclusion output. Print what it
+      # was, so a run that gates when it should not - or does not when it
+      # should - can be diagnosed from the log rather than by guessing.
+      - name: Report the review outcome
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.claude.outputs.conclusion }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          echo "action conclusion: '${CONCLUSION}'"
+          echo "execution file:    '${EXECUTION_FILE}'"
+
       # A review that found nothing still says so in one line, so nothing
       # posted means nothing was delivered. Two of the three runs on #136 went
       # that way: the model reviewed for two minutes, hit a denied tool call on
