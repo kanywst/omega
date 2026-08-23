@@ -7,7 +7,7 @@ Omega consuming a **real SPIRE deployment**: upstream `spire-server` and `spire-
 `make demo`:
 
 1. starts `spire-server`, then bootstraps `spire-agent` against the server's trust bundle and a join token minted from the running server;
-2. registers omega as a workload — `spiffe://upstream.demo/omega`, selected by the container label — because without an entry the agent does not answer it;
+2. registers omega as a workload — `spiffe://upstream.demo/omega`, selected by `unix:path:/usr/local/bin/omega` — because without an entry the agent does not answer it;
 3. starts `omega server --identity-source-workload-api unix:///run/spire/sockets/agent.sock --identity-source-workload-api-jwt` and asserts `/v1/bundle` holds exactly the anchors `spire-server bundle show` reports, and `/v1/jwt/bundle` carries SPIRE's signing key;
 4. asserts `POST /v1/svid`, `/v1/svid/jwt`, and `/v1/token/exchange` all return **501**;
 5. rotates SPIRE's X.509 CA with `localauthority x509 prepare` + `activate`, asserts the prepared authority really became the active one, and then asserts omega's anchors follow with nothing signalling it;
@@ -63,8 +63,11 @@ Three things the mock could not have taught, all now visible in `compose.yaml` a
 
 - **`jwt_key_type = "ec-p256"` on the server.** SPIRE's JWT signing key follows `ca_key_type`, and omega consumes only EC P-256 (ES256) signing keys. On an RSA upstream, `--identity-source-workload-api-jwt` has no usable key and startup fails closed. This is the one place a real deployment has to meet omega halfway.
 - **omega needs a registration entry.** The agent answers the Workload API only for callers it can attest. Without an entry omega gets `PermissionDenied` and does not start, which is the correct behaviour and worth seeing once.
-- **The agent needs the host PID namespace.** The workload attestors resolve a caller from the pid `SO_PEERCRED` reports, which only means something in a namespace the agent can see. Without it every call fails with `could not resolve caller information` — the agent is answering, it just cannot tell who is asking.
+- **The agent needs the host PID namespace.** The workload attestor resolves a caller from the pid `SO_PEERCRED` reports, which only means something in a namespace the agent can see. Without it every call fails with `could not resolve caller information` — the agent is answering, it just cannot tell who is asking.
+- **`discover_workload_path = true` on the unix attestor.** Without it the attestor emits only `uid`, `gid`, and `supplementary_gid`, so the strongest available selector is `unix:uid:0` — satisfied by every root process on the node. With it the entry can name the binary, which is what this demo registers on.
 
 ## What this demo does not do
 
 The join-token node attestor and the root-run containers are demo shape, not deployment advice. A real deployment uses a platform node attestor (`k8s_psat`, `aws_iid`, `x509pop`), keeps the distroless users, and gives the agent socket a group omega can read rather than running omega as root. None of that changes the omega side: the flags are the same.
+
+What it deliberately does *not* do is mount the host Docker socket. The `docker` workload attestor would select omega by container label, which reads more naturally in a compose file, but it needs a handle on the host's Docker daemon inside the agent — and anything holding that socket is one `docker run --privileged` away from the host. The unix attestor gets a stronger selector here anyway, since it names the binary rather than a label the container declares about itself.
