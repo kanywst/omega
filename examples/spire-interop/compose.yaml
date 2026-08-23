@@ -50,9 +50,6 @@ services:
       - ./conf/agent.conf:/opt/spire/conf/agent/agent.conf:ro
       - ./run/bootstrap.crt:/opt/spire/conf/agent/bootstrap.crt:ro
       - agent-sockets:/run/spire/sockets
-      # The docker workload attestor identifies a calling container through
-      # the daemon, which is how omega is matched by label rather than by uid.
-      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/run/spire/sockets/agent.sock"]
       interval: 2s
@@ -68,8 +65,6 @@ services:
     # agent socket inside the shared volume without the demo having to manage
     # socket ownership. A real deployment sets the socket's group instead.
     user: "0:0"
-    labels:
-      io.omega.role: control-plane
     command:
       - server
       - --http-addr=0.0.0.0:8080

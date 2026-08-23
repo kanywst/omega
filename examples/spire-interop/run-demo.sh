@@ -124,7 +124,7 @@ echo "[demo] registering omega as a workload of that trust domain"
 spire_server entry create \
 	-parentID "spiffe://$TRUST_DOMAIN/spire/agent/join_token/$TOKEN" \
 	-spiffeID "spiffe://$TRUST_DOMAIN/omega" \
-	-selector "docker:label:io.omega.role:control-plane" >/dev/null
+	-selector "unix:path:/usr/local/bin/omega" >/dev/null
 
 echo "[demo] starting spire-agent"
 dc up -d spire-agent >/dev/null 2>&1
@@ -136,6 +136,13 @@ wait_url
 
 echo "[demo] omega serves SPIRE's trust anchors"
 SPIRE_ANCHORS="$(spire_anchors)"
+# anchors() yields an empty string when it finds no certificates, and two
+# empty strings compare equal. Without this the central assertion of the demo
+# would report ok having compared nothing.
+if [ -z "$SPIRE_ANCHORS" ]; then
+	echo "[demo] FAIL: spire-server bundle show produced no certificates"
+	exit 1
+fi
 assert_eq "/v1/bundle == spire-server bundle show" "$(omega_anchors)" "$SPIRE_ANCHORS"
 
 JWT_KIDS="$(curl -fsS "$OMEGA_URL/v1/jwt/bundle" | kids)"
