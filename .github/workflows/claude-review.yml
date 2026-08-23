@@ -144,13 +144,18 @@ jobs:
           echo "action conclusion: '${CONCLUSION}'"
           echo "execution file:    '${EXECUTION_FILE}'"
 
-      # A review that found nothing still says so in one line, so nothing
-      # posted means nothing was delivered. Two of the three runs on #136 went
-      # that way: the model reviewed for two minutes, hit a denied tool call on
-      # the way to posting, and the job went green with the pull request
+      # Two of the three runs on #136 reviewed for two minutes, hit a denied
+      # tool call on the way to posting, and went green with the pull request
       # unreviewed. Write is allowed above so a long summary can go to a file
       # and out through `gh pr comment --body-file`, which is the shape the
-      # allowlist matches.
+      # allowlist matches; this catches it when something is refused anyway.
+      #
+      # Silence on its own is not the signal. A follow-up push whose review had
+      # nothing to add to what is already on the pull request posts nothing and
+      # denies nothing, and that is fine. The failure is silence *with* a
+      # refusal behind it. An unreadable denial count is treated as a refusal,
+      # because the whole point is not to call a pull request reviewed on the
+      # strength of a green check.
       - name: Fail on a review that was not delivered
         if: always() && steps.claude.outputs.conclusion == 'success'
         env:
@@ -158,6 +163,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           SINCE: ${{ steps.started.outputs.at }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           # The action's default bot_name, which this workflow does not override.
           BOT: claude[bot]
         run: |
@@ -172,7 +178,19 @@ jobs:
           reviews=$(fresh "repos/$REPO/pulls/$PR/reviews" submitted_at)
           total=$((summary + inline + reviews))
           echo "posted since $SINCE: $summary summary, $inline inline, $reviews review(s)"
-          if [ "$total" -eq 0 ]; then
-            echo "::error::The review ran but posted nothing, so this pull request is unreviewed despite a green check. The usual cause is a denied tool call on the way to posting; widen --allowedTools above."
-            exit 1
+          if [ "$total" -gt 0 ]; then
+            exit 0
           fi
+
+          denials=unknown
+          if [ -n "${EXECUTION_FILE:-}" ] && [ -f "$EXECUTION_FILE" ]; then
+            denials=$(jq -r '[.. | objects | select(.type? == "result") | .permission_denials_count?]
+              | map(select(. != null)) | last // 0' "$EXECUTION_FILE" 2>/dev/null || echo unknown)
+          fi
+          echo "denied tool calls: $denials"
+          if [ "$denials" = "0" ]; then
+            echo "::notice::The review posted nothing and nothing was refused, so it had nothing to add to what is already on this pull request."
+            exit 0
+          fi
+          echo "::error::The review ran, was refused a tool call ($denials), and posted nothing, so this pull request is unreviewed despite a green check. Widen --allowedTools above."
+          exit 1
