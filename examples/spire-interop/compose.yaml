@@ -1,0 +1,93 @@
+# compose.yaml — omega consuming a real SPIRE deployment.
+#
+# spire-server issues, spire-agent serves the Workload API, and omega runs
+# with --identity-source-workload-api pointed at that agent's socket. Nothing
+# here is a stand-in: the images are upstream SPIRE, and the rotation the demo
+# drives is SPIRE's own localauthority command.
+#
+# The services come up in stages rather than all at once, because join-token
+# node attestation needs a token minted by a running server and omega needs a
+# registration entry before the agent will answer it. run-demo.sh drives that.
+
+name: omega-spire-interop
+
+services:
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:1.15.3
+    hostname: spire-server
+    # The SPIRE images are distroless and run as 1000:1000, and a fresh named
+    # volume is created root-owned, so the server cannot create its datastore.
+    # Root here for the same reason the repo's own compose.yaml overrides the
+    # distroless user: it is a demo stack, not a deployment.
+    user: "0:0"
+    command: ["-config", "/opt/spire/conf/server/server.conf"]
+    volumes:
+      - ./conf/server.conf:/opt/spire/conf/server/server.conf:ro
+      - spire-server-data:/opt/spire/data/server
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.15.3
+    hostname: spire-agent
+    user: "0:0"
+    # The workload attestors resolve a caller from the pid SO_PEERCRED reports,
+    # which is only meaningful in the namespace the agent can see. Without the
+    # host namespace every call fails with "could not resolve caller
+    # information" - the agent is answering, it just cannot tell who is asking.
+    pid: "host"
+    # The join token is minted from the running server, so it arrives as an
+    # environment variable rather than sitting in the config file.
+    command:
+      ["-config", "/opt/spire/conf/agent/agent.conf", "-joinToken", "${SPIRE_JOIN_TOKEN:-}"]
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    volumes:
+      - ./conf/agent.conf:/opt/spire/conf/agent/agent.conf:ro
+      - ./run/bootstrap.crt:/opt/spire/conf/agent/bootstrap.crt:ro
+      - agent-sockets:/run/spire/sockets
+      # The docker workload attestor identifies a calling container through
+      # the daemon, which is how omega is matched by label rather than by uid.
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/run/spire/sockets/agent.sock"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  omega:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: omega:dev
+    # The distroless image runs as 65532; root here so omega can open the
+    # agent socket inside the shared volume without the demo having to manage
+    # socket ownership. A real deployment sets the socket's group instead.
+    user: "0:0"
+    labels:
+      io.omega.role: control-plane
+    command:
+      - server
+      - --http-addr=0.0.0.0:8080
+      - --data-dir=/var/lib/omega
+      - --identity-source=spire-upstream
+      - --trust-domain=upstream.demo
+      - --identity-source-workload-api=unix:///run/spire/sockets/agent.sock
+      - --identity-source-workload-api-jwt
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+    volumes:
+      - agent-sockets:/run/spire/sockets:ro
+      - omega-data:/var/lib/omega
+    ports:
+      - "18894:8080"
+
+volumes:
+  spire-server-data:
+  agent-sockets:
+  omega-data:
