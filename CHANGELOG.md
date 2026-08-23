@@ -8,6 +8,16 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-23
+
+Finishes the thought 0.3.0 started. That release made a `spire-upstream`
+deployment able to *accept* new trust material at runtime; this one
+gives it somewhere to get that material from, so following an upstream
+SPIRE CA or signing-key rotation stops being an operator's errand.
+
+A minor rather than a patch: two `feat` commits, one new flag pair, no
+change to any existing default.
+
 ### Added
 
 - **Live upstream trust material over the SPIFFE Workload API
@@ -29,9 +39,29 @@ changes (see [SECURITY.md](SECURITY.md)).
   an SVID of its own, and must be an attested workload of the endpoint.
   `--identity-source-workload-api-jwt` opts into following the upstream
   JWKS as well; it is off by default because Omega consumes only EC
-  P-256 (ES256) signing keys. Recorded in
+  P-256 (ES256) signing keys.
+
+  The address must be `unix://`. go-spiffe will dial `tcp://` at any
+  address with no transport security and no server authentication, and
+  what arrives over that channel becomes Omega's entire root of trust —
+  a weaker boundary than the file transport, which at least needs local
+  write access. Recorded in
   [ADR 0010](docs/adr/0010-live-upstream-trust-material.md), demonstrated
   in [`examples/spire-upstream-live`](examples/spire-upstream-live/).
+
+### Documentation
+
+- [`examples/spire-interop`](examples/spire-interop/) runs the live
+  transport against upstream `spire-server` and `spire-agent` images —
+  join-token node attestation, a registration entry for Omega, and
+  SPIRE's own `localauthority` command rotating first the X.509 CA and
+  then the JWT signing key, with Omega following both unprompted. It
+  pins the three things a deployment has to get right and a mock cannot
+  teach: `jwt_key_type = "ec-p256"` on the SPIRE server, a registration
+  entry for the control plane, and a workload attestor that can resolve
+  the caller. [`examples/spire-upstream-live`](examples/spire-upstream-live/)
+  stays as the hermetic one that catches a Workload API client
+  regression in seconds. Both run in the CI examples matrix.
 
 ## [0.3.1] - 2026-08-18
 
@@ -601,7 +631,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kanywst/omega/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/kanywst/omega/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/kanywst/omega/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/kanywst/omega/compare/v0.2.0...v0.2.1
