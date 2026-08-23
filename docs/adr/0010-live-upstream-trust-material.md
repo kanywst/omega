@@ -40,7 +40,7 @@ Easier:
 Harder:
 
 - Omega gains a startup dependency on the Workload API endpoint when this transport is selected. That is the trade ADR 0009 declined by default, and is why this is a second transport rather than a replacement.
-- Omega must be an attested workload of that endpoint. Under SPIRE that means a registration entry for the control-plane process, which the file transport does not need.
+- Omega must be an attested workload of that endpoint. Under SPIRE that means a registration entry for the control-plane process, which the file transport does not need. [examples/spire-interop](../../examples/spire-interop/) runs that path against upstream SPIRE images, including the `jwt_key_type = "ec-p256"` the JWT half requires.
 - Two transports are two paths to keep tested. They converge at `Reload`, so the divergent surface is the fetch and the flag validation, both covered directly.
 
 New obligations:

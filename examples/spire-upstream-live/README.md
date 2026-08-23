@@ -72,7 +72,7 @@ omega server \
 
 The address must be `unix://`. A network endpoint is dialled without transport security, so anything on the path could hand omega its trust anchors; see [ADR 0010](../../docs/adr/0010-live-upstream-trust-material.md).
 
-Two deployment facts this demo does not cover:
+Two deployment facts this demo does not cover, both exercised against upstream SPIRE images in [examples/spire-interop](../spire-interop/):
 
 - **omega must be an attested workload of that agent.** SPIRE answers the Workload API only for callers it can attest, so the control-plane process needs a registration entry (typically a `unix:uid:` or `k8s:` selector). Without one, startup fails with a `PermissionDenied` from the socket.
 - **`--identity-source-workload-api-jwt` needs an EC P-256 JWT signing key upstream.** omega consumes only ES256 signing keys, so a SPIRE server configured with `jwt_key_type = "rsa-2048"` has no usable key and startup fails closed. Leave the flag off for X.509-only consumption, or set `jwt_key_type = "ec-p256"` on the SPIRE server.
@@ -81,4 +81,6 @@ Two deployment facts this demo does not cover:
 
 Same reason as [`mock-step-ca`](../ca-step-ca/mock-step-ca/) and the mock Vault: the demo stays hermetic and fast enough to run on every PR, and the assertions stay pointed at the omega side of the wire.
 
-The wire is not mocked. `mock-spire-agent` implements the upstream SPIFFE `SpiffeWorkloadAPI` service from the same protobuf definitions SPIRE serves, and enforces the `workload.spiffe.io: true` security header SPIRE requires, so a regression in omega's Workload API client trips this demo. It does not cover the SPIRE-specific deployment surface above: attestation, entry registration, and key-type configuration.
+The wire is not mocked. `mock-spire-agent` implements the upstream SPIFFE `SpiffeWorkloadAPI` service from the same protobuf definitions SPIRE serves, and enforces the `workload.spiffe.io: true` security header SPIRE requires, so a regression in omega's Workload API client trips this demo.
+
+What it cannot cover is the SPIRE-specific deployment surface — attestation, entry registration, key-type configuration — which is why [examples/spire-interop](../spire-interop/) exists alongside it and runs the same assertions against real `spire-server` and `spire-agent` images. This one stays because it is hermetic and finishes in seconds, so it is the demo that catches a Workload API client regression first.
