@@ -19,15 +19,15 @@
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
     "geist": "1.7.2",
-    "lucide-react": "1.31.0",
-    "next": "16.3.1",
+    "lucide-react": "1.33.0",
+    "next": "16.3.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "tailwind-merge": "3.6.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.8",
+    "@biomejs/biome": "2.5.10",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "26.2.0",
     "@types/react": "19.2.18",
