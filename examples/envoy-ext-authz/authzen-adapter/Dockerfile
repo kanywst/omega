@@ -3,7 +3,7 @@
 # Sidecar image for examples/envoy-ext-authz. Builds the AuthZEN bridge
 # that Envoy's ext_authz HTTP filter calls into.
 
-FROM golang:1.26.6-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
