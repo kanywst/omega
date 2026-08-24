@@ -3,7 +3,7 @@
 # Demo image for examples/hello-svid. Builds both server and client into
 # a single distroless image; compose / k8s pick the entrypoint per service.
 
-FROM golang:1.26.6-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
