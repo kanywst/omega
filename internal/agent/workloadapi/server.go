@@ -28,7 +28,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -105,8 +104,8 @@ type Server struct {
 // jwksSnapshot is the cached projection of `/v1/jwt/bundle`. raw is
 // what FetchJWTBundles streams back; keys is the parsed map used by
 // validateAgainstJWKS. Both are computed at fetch time so a hot
-// validation path does not re-parse JSON or rebuild big.Int curve
-// points on every RPC.
+// validation path does not re-parse JSON or re-derive curve points on
+// every RPC.
 type jwksSnapshot struct {
 	raw         []byte
 	keys        map[string]*ecdsa.PublicKey
@@ -578,10 +577,19 @@ func parseJWKS(raw []byte) (map[string]*ecdsa.PublicKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("jwk y: %w", err)
 		}
-		pub := &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     new(big.Int).SetBytes(xb),
-			Y:     new(big.Int).SetBytes(yb),
+		if len(xb) != 32 || len(yb) != 32 {
+			return nil, fmt.Errorf("jwk coordinates must be 32 bytes each (got x=%d, y=%d)", len(xb), len(yb))
+		}
+		// SEC 1 uncompressed encoding; ParseUncompressedPublicKey rejects
+		// points off the curve and the point at infinity, which the raw
+		// big.Int coordinate assignment this replaced never checked.
+		point := make([]byte, 0, 65)
+		point = append(point, 0x04)
+		point = append(point, xb...)
+		point = append(point, yb...)
+		pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+		if err != nil {
+			return nil, fmt.Errorf("jwk point is not on the P-256 curve: %w", err)
 		}
 		out[k.Kid] = pub
 	}

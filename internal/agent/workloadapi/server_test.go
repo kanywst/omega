@@ -7,7 +7,9 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -72,11 +74,28 @@ func newControlPlaneFixture(t *testing.T, jwks string, x509Bundle string) *contr
 	return cp
 }
 
-// A JWKS body with one ES256 key. Content is opaque to the cache
-// test; bytes only need to round-trip equal.
-const fixtureJWKS = `{"keys":[{"kty":"EC","crv":"P-256","kid":"test","x":"AAAA","y":"BBBB"}]}`
+// generateFixtureJWKS produces a JWKS body with one real ES256 key.
+// The cache tests only care that bytes round-trip equal, but parseJWKS
+// rejects points that are not on the P-256 curve, so the coordinates
+// have to come from an actual key rather than filler.
+func generateFixtureJWKS(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	// Bytes() is the SEC 1 uncompressed point: 0x04 || X || Y.
+	point, err := key.PublicKey.Bytes()
+	if err != nil {
+		t.Fatalf("encode public key: %v", err)
+	}
+	enc := base64.RawURLEncoding
+	return fmt.Sprintf(`{"keys":[{"kty":"EC","crv":"P-256","kid":"test","x":%q,"y":%q}]}`,
+		enc.EncodeToString(point[1:33]), enc.EncodeToString(point[33:65]))
+}
 
 func TestCachedFetchJWTBundle_CacheHitsAvoidHTTP(t *testing.T) {
+	fixtureJWKS := generateFixtureJWKS(t)
 	cp := newControlPlaneFixture(t, fixtureJWKS, generateFixtureBundlePEM(t))
 	s := NewServer(cp.server.URL, nil)
 
@@ -108,6 +127,7 @@ func TestCachedFetchJWTBundle_CacheHitsAvoidHTTP(t *testing.T) {
 }
 
 func TestCachedFetchJWTBundle_RefreshesAfterTTL(t *testing.T) {
+	fixtureJWKS := generateFixtureJWKS(t)
 	cp := newControlPlaneFixture(t, fixtureJWKS, generateFixtureBundlePEM(t))
 	s := NewServer(cp.server.URL, nil)
 

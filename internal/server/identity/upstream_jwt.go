@@ -1,7 +1,6 @@
 package identity
 
 import (
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
@@ -9,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"slices"
 	"time"
 
@@ -114,9 +112,10 @@ func parseUpstreamJWKS(jwksJSON []byte) (map[string]*ecdsa.PublicKey, []byte, er
 }
 
 // ecPublicKeyFromXY decodes a base64url EC point (x, y) into an ECDSA
-// public key, rejecting points that are not on the P-256 curve. The point
-// is round-tripped through crypto/ecdh, whose NewPublicKey enforces the
-// on-curve check.
+// public key, rejecting points that are not on the P-256 curve.
+// ParseUncompressedPublicKey performs the on-curve and point-at-infinity
+// checks itself, so the SEC 1 uncompressed encoding is the whole
+// validation step.
 func ecPublicKeyFromXY(x, y string) (*ecdsa.PublicKey, error) {
 	xb, err := base64.RawURLEncoding.DecodeString(x)
 	if err != nil {
@@ -129,18 +128,23 @@ func ecPublicKeyFromXY(x, y string) (*ecdsa.PublicKey, error) {
 	if len(xb) != 32 || len(yb) != 32 {
 		return nil, fmt.Errorf("jwk coordinates must be 32 bytes each (got x=%d, y=%d)", len(xb), len(yb))
 	}
+	pub, err := ecPublicKeyFromCoords(xb, yb)
+	if err != nil {
+		return nil, fmt.Errorf("jwk point is not on the P-256 curve: %w", err)
+	}
+	return pub, nil
+}
+
+// ecPublicKeyFromCoords assembles the SEC 1 uncompressed encoding of a
+// P-256 point and parses it. Callers must have length-checked the
+// coordinates; a short or long coordinate yields a malformed point that
+// the parser rejects rather than silently left-padding.
+func ecPublicKeyFromCoords(xb, yb []byte) (*ecdsa.PublicKey, error) {
 	point := make([]byte, 0, 65)
 	point = append(point, 0x04)
 	point = append(point, xb...)
 	point = append(point, yb...)
-	if _, err := ecdh.P256().NewPublicKey(point); err != nil {
-		return nil, fmt.Errorf("jwk point is not on the P-256 curve: %w", err)
-	}
-	return &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(xb),
-		Y:     new(big.Int).SetBytes(yb),
-	}, nil
+	return ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
 }
 
 // validateUpstreamJWT verifies token against the upstream signing keys: it
