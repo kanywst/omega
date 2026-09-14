@@ -181,15 +181,12 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: golangci-lint
-        # Upstream is built with Go 1.25 and refuses to load when go.mod
-        # targets Go 1.26 (golangci/golangci-lint#6272). Marked advisory
-        # at the step level so a failure surfaces as a warning instead
-        # of failing the job; remove this once upstream ships a Go 1.26
-        # build.
-        continue-on-error: true
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pinned rather than `latest`: this step is a hard gate, and a
+          # new upstream release adding a check would otherwise fail CI
+          # on a commit that changed nothing. Bump deliberately.
+          version: v2.13.2
 
   govulncheck:
     runs-on: ubuntu-latest
