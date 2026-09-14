@@ -2,8 +2,8 @@
 // for the examples/ca-vault-pki demo. It generates its own ECDSA
 // CA at startup and serves the two endpoints omega calls:
 //
-//   GET  /v1/<mount>/ca_chain
-//   POST /v1/<mount>/sign/<role>
+//	GET  /v1/<mount>/ca_chain
+//	POST /v1/<mount>/sign/<role>
 //
 // All requests must carry the configured X-Vault-Token header; any
 // other path returns 404. The point of a custom mock here (vs.
