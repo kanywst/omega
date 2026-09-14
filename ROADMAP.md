@@ -17,11 +17,11 @@ release as features are ready rather than on a fixed cadence; see
   has shipped (TokenReview-backed); the SPIRE-style "agent attests
   workloads by inspecting `/proc/<pid>/cgroup` then calling
   kube-apiserver" path is the remaining bit.
-- AuthZEN entity-store mode for Search. Today's
-  `POST /access/v1/search/{subject,resource,action}` requires an
-  explicit candidate list because Cedar has no global directory.
-  An opt-in in-process entity store would let the spec's pattern
-  shape return a full enumeration without leaving Cedar.
+- AuthZEN Search capability metadata (§9.1.2). Now that Search accepts
+  the spec's own request shape, the remaining gap on that surface is
+  `supported_capabilities`: omega declares no capability URNs, which is
+  also what blocks the `page.properties` extension point for sorting
+  and filtering.
 
 ## Next (3-6 months)
 
