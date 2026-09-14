@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -141,11 +140,18 @@ func (k *keyStore) refresh() error {
 		if err != nil {
 			return fmt.Errorf("decode y: %w", err)
 		}
-		out[j.Kid] = &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     new(big.Int).SetBytes(x),
-			Y:     new(big.Int).SetBytes(y),
+		if len(x) != 32 || len(y) != 32 {
+			return fmt.Errorf("jwk coordinates must be 32 bytes each (got x=%d, y=%d)", len(x), len(y))
 		}
+		point := make([]byte, 0, 65)
+		point = append(point, 0x04)
+		point = append(point, x...)
+		point = append(point, y...)
+		pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+		if err != nil {
+			return fmt.Errorf("jwk point is not on the P-256 curve: %w", err)
+		}
+		out[j.Kid] = pub
 	}
 	k.mu.Lock()
 	k.keys = out
