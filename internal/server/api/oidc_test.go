@@ -32,7 +32,7 @@ type idpFixture struct {
 	issuer string
 }
 
-func newIdPFixture(t *testing.T) *idpFixture {
+func newIDPFixture(t *testing.T) *idpFixture {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -85,7 +85,7 @@ func newOIDCTestServer(t *testing.T, idp *idpFixture, template string) (*httptes
 	if err != nil {
 		t.Fatalf("ca: %v", err)
 	}
-	reg, err := oidc.NewRegistry([]oidc.IdPConfig{{
+	reg, err := oidc.NewRegistry([]oidc.IDPConfig{{
 		Name:             "corp",
 		Issuer:           idp.issuer,
 		Audiences:        []string{"omega-test"},
@@ -115,7 +115,7 @@ func TestOIDCExchangeReturns404WhenRegistryUnset(t *testing.T) {
 }
 
 func TestOIDCExchangeIssuesSVIDFromValidIDToken(t *testing.T) {
-	idp := newIdPFixture(t)
+	idp := newIDPFixture(t)
 	srv, _ := newOIDCTestServer(t, idp,
 		"spiffe://omega.local/humans/{idp}/{preferred_username}")
 
@@ -153,8 +153,8 @@ func TestOIDCExchangeIssuesSVIDFromValidIDToken(t *testing.T) {
 	if out.TokenType != "Bearer" {
 		t.Errorf("token_type: got %q", out.TokenType)
 	}
-	if out.IdP != "corp" {
-		t.Errorf("idp: got %q", out.IdP)
+	if out.IDP != "corp" {
+		t.Errorf("idp: got %q", out.IDP)
 	}
 	if len(out.Audience) != 1 || out.Audience[0] != "target-api" {
 		t.Errorf("audience: %v", out.Audience)
@@ -165,7 +165,7 @@ func TestOIDCExchangeIssuesSVIDFromValidIDToken(t *testing.T) {
 }
 
 func TestOIDCExchangeRejectsUnknownIdP(t *testing.T) {
-	idp := newIdPFixture(t)
+	idp := newIDPFixture(t)
 	srv, _ := newOIDCTestServer(t, idp,
 		"spiffe://omega.local/humans/{sub}")
 	body, _ := json.Marshal(api.OIDCExchangeRequest{
@@ -184,7 +184,7 @@ func TestOIDCExchangeRejectsUnknownIdP(t *testing.T) {
 }
 
 func TestOIDCExchangeReturns401OnInvalidIDToken(t *testing.T) {
-	idp := newIdPFixture(t)
+	idp := newIDPFixture(t)
 	srv, store := newOIDCTestServer(t, idp,
 		"spiffe://omega.local/humans/{sub}")
 
@@ -223,7 +223,7 @@ func TestOIDCExchangeReturns401OnInvalidIDToken(t *testing.T) {
 }
 
 func TestOIDCExchangeRejectsTemplateOutOfTrustDomain(t *testing.T) {
-	idp := newIdPFixture(t)
+	idp := newIDPFixture(t)
 	srv, _ := newOIDCTestServer(t, idp,
 		"spiffe://other.example/humans/{sub}")
 	claims := map[string]any{

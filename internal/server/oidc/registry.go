@@ -27,13 +27,13 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 )
 
-// IdPConfig declares one upstream IdP that omega will accept tokens
+// IDPConfig declares one upstream IdP that omega will accept tokens
 // from. Name is the operator-facing handle used in
 // `POST /v1/oidc/exchange` requests; Issuer is the OIDC discovery
 // origin (its `/.well-known/openid-configuration` is fetched at
 // boot); Audiences are the values an incoming token's `aud` claim
 // must match.
-type IdPConfig struct {
+type IDPConfig struct {
 	Name      string
 	Issuer    string
 	Audiences []string
@@ -45,7 +45,7 @@ type IdPConfig struct {
 }
 
 // Validate returns nil iff the config is internally consistent.
-func (c IdPConfig) Validate() error {
+func (c IDPConfig) Validate() error {
 	if strings.TrimSpace(c.Name) == "" {
 		return errors.New("oidc: idp name is empty")
 	}
@@ -87,7 +87,7 @@ type Claims struct {
 	Raw         map[string]any
 	IssuedAt    time.Time
 	ExpiresAt   time.Time
-	IdPName     string // copied from IdPConfig.Name for downstream rendering
+	IDPName     string // copied from IDPConfig.Name for downstream rendering
 }
 
 // Registry is the omega-server's view of all configured IdPs.
@@ -101,7 +101,7 @@ type Registry struct {
 // lazy (first Validate call against an IdP triggers it) so server
 // startup does not depend on every configured IdP being reachable
 // at boot.
-func NewRegistry(configs []IdPConfig) (*Registry, error) {
+func NewRegistry(configs []IDPConfig) (*Registry, error) {
 	idps := make(map[string]*idpClient, len(configs))
 	for _, c := range configs {
 		if err := c.Validate(); err != nil {
@@ -110,7 +110,7 @@ func NewRegistry(configs []IdPConfig) (*Registry, error) {
 		if _, dup := idps[c.Name]; dup {
 			return nil, fmt.Errorf("oidc: duplicate idp name %q", c.Name)
 		}
-		idps[c.Name] = newIdPClient(c)
+		idps[c.Name] = newIDPClient(c)
 	}
 	return &Registry{idps: idps}, nil
 }
@@ -127,15 +127,15 @@ func (r *Registry) Names() []string {
 	return out
 }
 
-// ErrUnknownIdP is returned when the caller asks for an IdP that
+// ErrUnknownIDP is returned when the caller asks for an IdP that
 // was not configured at startup.
-var ErrUnknownIdP = errors.New("oidc: unknown idp")
+var ErrUnknownIDP = errors.New("oidc: unknown idp")
 
-// Lookup returns the IdPConfig for name or ErrUnknownIdP.
-func (r *Registry) Lookup(name string) (IdPConfig, error) {
+// Lookup returns the IDPConfig for name or ErrUnknownIDP.
+func (r *Registry) Lookup(name string) (IDPConfig, error) {
 	c, ok := r.idps[name]
 	if !ok {
-		return IdPConfig{}, fmt.Errorf("%w: %q", ErrUnknownIdP, name)
+		return IDPConfig{}, fmt.Errorf("%w: %q", ErrUnknownIDP, name)
 	}
 	return c.cfg, nil
 }
@@ -147,7 +147,7 @@ func (r *Registry) Lookup(name string) (IdPConfig, error) {
 func (r *Registry) Validate(ctx context.Context, idpName, idToken string) (*Claims, error) {
 	c, ok := r.idps[idpName]
 	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownIdP, idpName)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownIDP, idpName)
 	}
 	return c.validate(ctx, idToken)
 }
@@ -157,7 +157,7 @@ func (r *Registry) Validate(ctx context.Context, idpName, idToken string) (*Clai
 // is re-fetched when validation fails with an unknown `kid`, with a
 // short cooldown to prevent thrash against a misconfigured IdP.
 type idpClient struct {
-	cfg  IdPConfig
+	cfg  IDPConfig
 	http *http.Client
 
 	mu          sync.Mutex
@@ -166,7 +166,7 @@ type idpClient struct {
 	lastRefresh time.Time
 }
 
-func newIdPClient(cfg IdPConfig) *idpClient {
+func newIDPClient(cfg IDPConfig) *idpClient {
 	return &idpClient{
 		cfg:  cfg,
 		http: &http.Client{Timeout: 10 * time.Second},
@@ -322,7 +322,7 @@ func (c *idpClient) validate(ctx context.Context, idToken string) (*Claims, erro
 		Subject:  std.Subject,
 		Audience: []string(std.Audience),
 		Raw:      raw,
-		IdPName:  c.cfg.Name,
+		IDPName:  c.cfg.Name,
 	}
 	if std.IssuedAt != nil {
 		cl.IssuedAt = std.IssuedAt.Time()

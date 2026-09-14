@@ -19,11 +19,11 @@ import (
 	"github.com/kanywst/omega/internal/server/oidc"
 )
 
-// fakeIdP serves an OIDC discovery document and a JWKS that lets
+// fakeIDP serves an OIDC discovery document and a JWKS that lets
 // tests sign tokens with a known key. It is intentionally minimal:
 // no /token, no /authorize, no /userinfo - omega never calls those
 // endpoints, so a real IdP is overkill.
-type fakeIdP struct {
+type fakeIDP struct {
 	t         *testing.T
 	server    *httptest.Server
 	signer    jose.Signer
@@ -32,7 +32,7 @@ type fakeIdP struct {
 	issuer    string
 }
 
-func newFakeIdP(t *testing.T) *fakeIdP {
+func newFakeIDP(t *testing.T) *fakeIDP {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -48,7 +48,7 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 		t.Fatalf("new signer: %v", err)
 	}
 	pub := jose.JSONWebKey{Key: priv.Public(), KeyID: kid, Algorithm: string(jose.ES256), Use: "sig"}
-	idp := &fakeIdP{t: t, signer: signer, publicKey: pub, kid: kid}
+	idp := &fakeIDP{t: t, signer: signer, publicKey: pub, kid: kid}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -65,7 +65,7 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	return idp
 }
 
-func (i *fakeIdP) sign(t *testing.T, claims map[string]any) string {
+func (i *fakeIDP) sign(t *testing.T, claims map[string]any) string {
 	t.Helper()
 	raw, err := jwt.Signed(i.signer).Claims(claims).Serialize()
 	if err != nil {
@@ -74,7 +74,7 @@ func (i *fakeIdP) sign(t *testing.T, claims map[string]any) string {
 	return raw
 }
 
-func baseClaims(idp *fakeIdP, sub string) map[string]any {
+func baseClaims(idp *fakeIDP, sub string) map[string]any {
 	return map[string]any{
 		"iss": idp.issuer,
 		"sub": sub,
@@ -85,8 +85,8 @@ func baseClaims(idp *fakeIdP, sub string) map[string]any {
 }
 
 func TestRegistryValidatesGoodToken(t *testing.T) {
-	idp := newFakeIdP(t)
-	reg, err := oidc.NewRegistry([]oidc.IdPConfig{{
+	idp := newFakeIDP(t)
+	reg, err := oidc.NewRegistry([]oidc.IDPConfig{{
 		Name:             "corp",
 		Issuer:           idp.issuer,
 		Audiences:        []string{"omega-test"},
@@ -122,13 +122,13 @@ func TestRegistryRejectsUnknownIdP(t *testing.T) {
 	}
 	_, err = reg.Validate(context.Background(), "nope", "x.y.z")
 	if err == nil || !strings.Contains(err.Error(), "unknown idp") {
-		t.Fatalf("expected ErrUnknownIdP, got %v", err)
+		t.Fatalf("expected ErrUnknownIDP, got %v", err)
 	}
 }
 
 func TestRegistryRejectsWrongIssuer(t *testing.T) {
-	idp := newFakeIdP(t)
-	reg, _ := oidc.NewRegistry([]oidc.IdPConfig{{
+	idp := newFakeIDP(t)
+	reg, _ := oidc.NewRegistry([]oidc.IDPConfig{{
 		Name:             "corp",
 		Issuer:           idp.issuer,
 		Audiences:        []string{"omega-test"},
@@ -144,8 +144,8 @@ func TestRegistryRejectsWrongIssuer(t *testing.T) {
 }
 
 func TestRegistryRejectsWrongAudience(t *testing.T) {
-	idp := newFakeIdP(t)
-	reg, _ := oidc.NewRegistry([]oidc.IdPConfig{{
+	idp := newFakeIDP(t)
+	reg, _ := oidc.NewRegistry([]oidc.IDPConfig{{
 		Name:             "corp",
 		Issuer:           idp.issuer,
 		Audiences:        []string{"omega-test"},
@@ -161,8 +161,8 @@ func TestRegistryRejectsWrongAudience(t *testing.T) {
 }
 
 func TestRegistryRejectsExpiredToken(t *testing.T) {
-	idp := newFakeIdP(t)
-	reg, _ := oidc.NewRegistry([]oidc.IdPConfig{{
+	idp := newFakeIDP(t)
+	reg, _ := oidc.NewRegistry([]oidc.IDPConfig{{
 		Name:             "corp",
 		Issuer:           idp.issuer,
 		Audiences:        []string{"omega-test"},
@@ -180,9 +180,9 @@ func TestRegistryRejectsExpiredToken(t *testing.T) {
 func TestRegistryRejectsForeignSignature(t *testing.T) {
 	// Two IdPs with independent keys. A token from idpB presented as
 	// if it were from idpA must fail signature verification.
-	idpA := newFakeIdP(t)
-	idpB := newFakeIdP(t)
-	reg, _ := oidc.NewRegistry([]oidc.IdPConfig{{
+	idpA := newFakeIDP(t)
+	idpB := newFakeIDP(t)
+	reg, _ := oidc.NewRegistry([]oidc.IDPConfig{{
 		Name:             "corp",
 		Issuer:           idpA.issuer,
 		Audiences:        []string{"omega-test"},
@@ -200,18 +200,18 @@ func TestRegistryRejectsForeignSignature(t *testing.T) {
 func TestRegistryRejectsInvalidConfig(t *testing.T) {
 	cases := []struct {
 		name string
-		cfg  oidc.IdPConfig
+		cfg  oidc.IDPConfig
 	}{
-		{"empty name", oidc.IdPConfig{Issuer: "https://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
-		{"empty issuer", oidc.IdPConfig{Name: "x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
-		{"non-http issuer", oidc.IdPConfig{Name: "x", Issuer: "ftp://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
-		{"empty template", oidc.IdPConfig{Name: "x", Issuer: "https://x", Audiences: []string{"omega"}}},
-		{"missing audiences", oidc.IdPConfig{Name: "x", Issuer: "https://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
-		{"blank audience value", oidc.IdPConfig{Name: "x", Issuer: "https://x", Audiences: []string{"  "}, SPIFFEIDTemplate: "spiffe://x/{sub}"}},
+		{"empty name", oidc.IDPConfig{Issuer: "https://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
+		{"empty issuer", oidc.IDPConfig{Name: "x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
+		{"non-http issuer", oidc.IDPConfig{Name: "x", Issuer: "ftp://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
+		{"empty template", oidc.IDPConfig{Name: "x", Issuer: "https://x", Audiences: []string{"omega"}}},
+		{"missing audiences", oidc.IDPConfig{Name: "x", Issuer: "https://x", SPIFFEIDTemplate: "spiffe://x/{sub}"}},
+		{"blank audience value", oidc.IDPConfig{Name: "x", Issuer: "https://x", Audiences: []string{"  "}, SPIFFEIDTemplate: "spiffe://x/{sub}"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := oidc.NewRegistry([]oidc.IdPConfig{tc.cfg})
+			_, err := oidc.NewRegistry([]oidc.IDPConfig{tc.cfg})
 			if err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
@@ -224,7 +224,7 @@ func TestRegistryRejectsInvalidConfig(t *testing.T) {
 // party at the issuer would be accepted (confused deputy). Validate
 // must reject it with a clear message.
 func TestValidateRequiresAudiences(t *testing.T) {
-	err := oidc.IdPConfig{
+	err := oidc.IDPConfig{
 		Name:             "corp",
 		Issuer:           "https://corp.example",
 		SPIFFEIDTemplate: "spiffe://omega.local/humans/{sub}",
@@ -235,7 +235,7 @@ func TestValidateRequiresAudiences(t *testing.T) {
 }
 
 func TestRegistryRejectsDuplicateIdPName(t *testing.T) {
-	_, err := oidc.NewRegistry([]oidc.IdPConfig{
+	_, err := oidc.NewRegistry([]oidc.IDPConfig{
 		{Name: "x", Issuer: "https://a.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
 		{Name: "x", Issuer: "https://b.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
 	})
@@ -248,7 +248,7 @@ func TestRegistryNamesIsLexicographicallySorted(t *testing.T) {
 	// Register in non-alphabetical order; Names() must still come
 	// back sorted so loggers and tests see a stable listing across
 	// runs (Go map iteration is non-deterministic).
-	reg, _ := oidc.NewRegistry([]oidc.IdPConfig{
+	reg, _ := oidc.NewRegistry([]oidc.IDPConfig{
 		{Name: "okta", Issuer: "https://okta.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
 		{Name: "corp", Issuer: "https://corp.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
 		{Name: "google", Issuer: "https://google.example", Audiences: []string{"omega"}, SPIFFEIDTemplate: "spiffe://x/{sub}"},
@@ -268,7 +268,7 @@ func TestRegistryNamesIsLexicographicallySorted(t *testing.T) {
 func TestRenderSPIFFEIDExpandsPlaceholders(t *testing.T) {
 	got, err := oidc.RenderSPIFFEID(
 		"spiffe://omega.local/humans/{idp}/{preferred_username}",
-		&oidc.Claims{IdPName: "corp", PreferredUN: "alice"},
+		&oidc.Claims{IDPName: "corp", PreferredUN: "alice"},
 	)
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -295,7 +295,7 @@ func TestRenderSPIFFEIDRejectsEmptyClaimReferencedByTemplate(t *testing.T) {
 func TestRenderSPIFFEIDDoesNotRecursivelyExpandPlaceholdersInValues(t *testing.T) {
 	got, err := oidc.RenderSPIFFEID(
 		"spiffe://omega.local/humans/{idp}/{email}",
-		&oidc.Claims{IdPName: "corp", Email: "alice+{sub}@example.com"},
+		&oidc.Claims{IDPName: "corp", Email: "alice+{sub}@example.com"},
 	)
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -316,7 +316,7 @@ func TestRenderSPIFFEIDDoesNotRecursivelyExpandPlaceholdersInValues(t *testing.T
 func TestRenderSPIFFEIDRejectsPathInjectionInClaim(t *testing.T) {
 	_, err := oidc.RenderSPIFFEID(
 		"spiffe://omega.local/humans/{idp}/{name}",
-		&oidc.Claims{IdPName: "corp", Name: "admin/svc"},
+		&oidc.Claims{IDPName: "corp", Name: "admin/svc"},
 	)
 	if err == nil || !strings.Contains(err.Error(), "/") {
 		t.Fatalf("expected path-injection rejection, got %v", err)
@@ -326,7 +326,7 @@ func TestRenderSPIFFEIDRejectsPathInjectionInClaim(t *testing.T) {
 func TestRenderSPIFFEIDRejectsControlCharInClaim(t *testing.T) {
 	_, err := oidc.RenderSPIFFEID(
 		"spiffe://omega.local/humans/{idp}/{preferred_username}",
-		&oidc.Claims{IdPName: "corp", PreferredUN: "alice\nbob"},
+		&oidc.Claims{IDPName: "corp", PreferredUN: "alice\nbob"},
 	)
 	if err == nil {
 		t.Fatal("expected control-character rejection")
@@ -349,7 +349,7 @@ func TestRenderSPIFFEIDPassesThroughTemplateWithoutPlaceholders(t *testing.T) {
 // Surface-only sanity check: make sure the helper text in Lookup
 // stays readable; not testing functionality there.
 func TestRegistryLookupReturnsConfig(t *testing.T) {
-	reg, err := oidc.NewRegistry([]oidc.IdPConfig{{
+	reg, err := oidc.NewRegistry([]oidc.IDPConfig{{
 		Name:             "corp",
 		Issuer:           "https://corp.example",
 		Audiences:        []string{"omega"},
@@ -385,7 +385,7 @@ func TestRenderSPIFFEIDEmptyTemplateIsEmpty(t *testing.T) {
 // Smoke test using fmt to make sure the JWS we produce above looks
 // like a compact JWS at all (3 segments separated by dots).
 func TestFakeIdPSignsCompactJWS(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	tok := idp.sign(t, baseClaims(idp, "x"))
 	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {

@@ -34,7 +34,7 @@ func RenderSPIFFEID(template string, c *Claims) (string, error) {
 	// of the Replacer pairs below; keep them in sync.
 	checks := []struct{ placeholder, value string }{
 		{"{sub}", c.Subject},
-		{"{idp}", c.IdPName},
+		{"{idp}", c.IDPName},
 		{"{email}", c.Email},
 		{"{preferred_username}", c.PreferredUN},
 		{"{name}", c.Name},
@@ -52,7 +52,7 @@ func RenderSPIFFEID(template string, c *Claims) (string, error) {
 	}
 	return strings.NewReplacer(
 		"{sub}", c.Subject,
-		"{idp}", c.IdPName,
+		"{idp}", c.IDPName,
 		"{email}", c.Email,
 		"{preferred_username}", c.PreferredUN,
 		"{name}", c.Name,
