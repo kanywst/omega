@@ -3,9 +3,9 @@
 // pair at startup and serves the minimal OIDC surface omega
 // consumes:
 //
-//   GET  /.well-known/openid-configuration
-//   GET  /jwks.json
-//   POST /sign  -- demo-only helper: returns a freshly signed ID token
+//	GET  /.well-known/openid-configuration
+//	GET  /jwks.json
+//	POST /sign  -- demo-only helper: returns a freshly signed ID token
 //
 // The /sign endpoint is what makes this binary an "IdP that you can
 // drive from a shell script". A real IdP would issue tokens through

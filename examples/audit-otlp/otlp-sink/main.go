@@ -82,12 +82,12 @@ func main() {
 			for _, sl := range rl.GetScopeLogs() {
 				for _, rec := range sl.GetLogRecords() {
 					row := map[string]any{
-						"ts":             time.Unix(0, int64(rec.GetTimeUnixNano())).UTC().Format(time.RFC3339Nano), // #nosec G115 -- post-1970 nanoseconds fit int64
-						"severity":       rec.GetSeverityNumber().String(),
-						"severity_text":  rec.GetSeverityText(),
-						"body":           anyValue(rec.GetBody()),
-						"attributes":     flattenAttrs(rec.GetAttributes()),
-						"resource":       res,
+						"ts":            time.Unix(0, int64(rec.GetTimeUnixNano())).UTC().Format(time.RFC3339Nano), // #nosec G115 -- post-1970 nanoseconds fit int64
+						"severity":      rec.GetSeverityNumber().String(),
+						"severity_text": rec.GetSeverityText(),
+						"body":          anyValue(rec.GetBody()),
+						"attributes":    flattenAttrs(rec.GetAttributes()),
+						"resource":      res,
 					}
 					line, _ := json.Marshal(row)
 					_, _ = out.Write(append(line, '\n'))
@@ -137,4 +137,3 @@ func anyValue(v *commonpb.AnyValue) any {
 	}
 	return fmt.Sprintf("%v", v)
 }
-
