@@ -133,6 +133,58 @@ type EvalResponse struct {
 	Reasons  []string `json:"reasons,omitempty"`
 }
 
+// ActionEntityType is the Cedar entity type reserved for actions. An
+// AuthZEN action `{"name": "can_read"}` is `Action::"can_read"` to
+// Cedar, so action enumeration reads the same entity store as subject
+// and resource enumeration rather than a separate catalog.
+const ActionEntityType = "Action"
+
+// EntitiesOfType returns every entity of the given Cedar type held in
+// the static entity store loaded from `entities.json`, as AuthZEN
+// entities. Attributes are deliberately not projected: the caller is
+// enumerating a search space, and a Cedar Record does not round-trip
+// losslessly into the `properties` bag.
+//
+// The result is sorted by id so that paging over it is stable across
+// requests. Go map iteration is randomised, and an unstable order
+// would make an opaque page token meaningless: the same offset could
+// name a different entity on the next call, silently skipping and
+// repeating results.
+//
+// This is the whole search space. Omega does not enumerate principals
+// from SVID issuance history or resources from anywhere else, so an
+// entity the operator did not declare is not searchable - a bound this
+// is the only honest way to state, since the alternative is a short
+// result set that reads as "these are all of them".
+func (e *Engine) EntitiesOfType(typ string) []Entity {
+	e.mu.RLock()
+	ents := e.entities
+	e.mu.RUnlock()
+
+	out := make([]Entity, 0, len(ents))
+	for uid := range ents {
+		if string(uid.Type) != typ {
+			continue
+		}
+		out = append(out, Entity{Type: typ, ID: string(uid.ID)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// ActionNames returns the ids of every Action entity in the store, in
+// sorted order. Actions that appear only in a policy's action scope and
+// were never declared as entities are not returned; see EntitiesOfType
+// for why the store is treated as the whole search space.
+func (e *Engine) ActionNames() []string {
+	ents := e.EntitiesOfType(ActionEntityType)
+	out := make([]string, 0, len(ents))
+	for _, ent := range ents {
+		out = append(out, ent.ID)
+	}
+	return out
+}
+
 // Evaluate runs the request through the policy set and returns the
 // AuthZEN decision. Missing subject/resource type or id is treated as a
 // validation error rather than a silent deny.
