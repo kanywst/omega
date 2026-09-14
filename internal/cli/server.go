@@ -93,7 +93,7 @@ func newServerCommand() *cobra.Command {
 		auditOTLPEndpoint       string
 		auditOTLPInsecure       bool
 		auditOTLPHeaders        []string
-		oidcIdPs                []string
+		oidcIDPs                []string
 		identitySource          string
 		identitySourceBundle    string
 		identitySourceJWTBundle string
@@ -432,8 +432,8 @@ func newServerCommand() *cobra.Command {
 				WithSPIFFEBundleRefreshHint(spiffeBundleRefreshHint).
 				WithRequireAuth(requireAuth)
 
-			if len(oidcIdPs) > 0 {
-				cfgs, err := parseOIDCIdPFlags(oidcIdPs)
+			if len(oidcIDPs) > 0 {
+				cfgs, err := parseOIDCIDPFlags(oidcIDPs)
 				if err != nil {
 					return fmt.Errorf("oidc-idp: %w", err)
 				}
@@ -590,7 +590,7 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&caStepCACACertFile, "ca-step-ca-ca-cert", "",
 		"path to a PEM file with the step-ca server's TLS trust anchor(s). Empty falls back to the system trust store; production step-ca is almost always behind a private CA and must set this.")
 
-	cmd.Flags().StringArrayVar(&oidcIdPs, "oidc-idp", nil,
+	cmd.Flags().StringArrayVar(&oidcIDPs, "oidc-idp", nil,
 		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key is required and takes one or more values separated by ';'; it is the set of `aud` values an incoming ID token must match, so tokens minted for other relying parties at the same issuer are rejected. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")
 
 	cmd.Flags().BoolVar(&k8sAttestEnable, "k8s-attest", false,
@@ -779,7 +779,7 @@ func resolveVaultToken(literal, tokenFile string) (string, error) {
 	return strings.TrimSpace(literal), nil
 }
 
-// parseOIDCIdPFlags parses repeated --oidc-idp values. Each value is
+// parseOIDCIDPFlags parses repeated --oidc-idp values. Each value is
 // a comma-separated `key=value` list with keys `name`, `issuer`,
 // `audience` (repeatable inside the same value via `audience=a;b`),
 // and `template`. Missing required keys are a hard error so a
@@ -792,10 +792,10 @@ func resolveVaultToken(literal, tokenFile string) (string, error) {
 // the flag multiple times rather than smuggling commas inside one
 // invocation. A shlex-style escape grammar is on the roadmap if a
 // real use case turns up.
-func parseOIDCIdPFlags(specs []string) ([]oidcpkg.IdPConfig, error) {
-	out := make([]oidcpkg.IdPConfig, 0, len(specs))
+func parseOIDCIDPFlags(specs []string) ([]oidcpkg.IDPConfig, error) {
+	out := make([]oidcpkg.IDPConfig, 0, len(specs))
 	for _, s := range specs {
-		var cfg oidcpkg.IdPConfig
+		var cfg oidcpkg.IDPConfig
 		for _, kv := range strings.Split(s, ",") {
 			k, v, ok := strings.Cut(kv, "=")
 			if !ok {

@@ -35,7 +35,7 @@ type OIDCExchangeResponse struct {
 	Audience    []string `json:"audience"`
 	ExpiresIn   int      `json:"expires_in"`
 	KeyID       string   `json:"kid"`
-	IdP         string   `json:"idp"`
+	IDP         string   `json:"idp"`
 }
 
 // WithOIDCRegistry attaches the IdP registry. Passing nil leaves
@@ -70,7 +70,7 @@ func (s *Server) exchangeOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, err := s.oidc.Validate(r.Context(), req.IDP, req.IDToken)
 	if err != nil {
-		if errors.Is(err, oidc.ErrUnknownIdP) {
+		if errors.Is(err, oidc.ErrUnknownIDP) {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
@@ -126,7 +126,7 @@ func (s *Server) exchangeOIDC(w http.ResponseWriter, r *http.Request) {
 		"act": map[string]any{
 			"sub":  claims.Subject,
 			"iss":  claims.Issuer,
-			"idp":  claims.IdPName,
+			"idp":  claims.IDPName,
 			"kind": "oidc-idp",
 		},
 	}
@@ -141,7 +141,7 @@ func (s *Server) exchangeOIDC(w http.ResponseWriter, r *http.Request) {
 		Subject:  id.String(),
 		Decision: "ok",
 		Payload: mustJSON(map[string]any{
-			"idp":          claims.IdPName,
+			"idp":          claims.IDPName,
 			"upstream_sub": claims.Subject,
 			"upstream_iss": claims.Issuer,
 			"audience":     req.Audience,
@@ -156,6 +156,6 @@ func (s *Server) exchangeOIDC(w http.ResponseWriter, r *http.Request) {
 		Audience:    svid.Audience,
 		ExpiresIn:   int(ttl / time.Second),
 		KeyID:       svid.KeyID,
-		IdP:         claims.IdPName,
+		IDP:         claims.IDPName,
 	})
 }
