@@ -8,6 +8,79 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **AuthZEN entity-store mode for Search (`--authzen-search-entity-store`).**
+  `POST /access/v1/search/{subject,resource,action}` now accept the
+  spec's own request shape — the searched dimension carrying only a
+  type, or omitted entirely in the case of Action Search (§8.6.1) — and
+  resolve the search space from the Cedar entity store loaded out of
+  `--policy-dir/entities.json`. Through 0.4.0 the endpoints required a
+  caller-supplied candidate list, which kept them useful but meant a PEP
+  written against the spec got a 400.
+
+  Off by default, because switching it on makes `entities.json` the
+  definition of who exists: an identity it does not declare is invisible
+  to enumeration. That is a claim about a deployment's directory that
+  the operator should make deliberately rather than inherit. For the
+  same reason, enumerating a type the store has no entities of is a 400
+  rather than an empty `results` — the spec permits an empty result set,
+  but "no such type here" and "nothing you may touch" are different
+  answers and a PEP cannot tell them apart from `[]`.
+
+  Paging applies to the search space rather than to the matches, so each
+  request evaluates at most `MaxSearchCandidates` candidates no matter
+  how large the store is. The consequence a caller has to know about is
+  that a page may come back empty while later pages still hold results,
+  which is the loop `next_token` is specified to drive.
+
+  The candidate-list form is unchanged and still works with the flag
+  off.
+
+### Fixed
+
+- **Discovery advertised the Search endpoints under non-registered
+  names.** `/.well-known/authzen-configuration` emitted
+  `subject_search_endpoint` / `resource_search_endpoint` /
+  `action_search_endpoint`, where AuthZEN §9.1.1 registers
+  `search_subject_endpoint` / `search_resource_endpoint` /
+  `search_action_endpoint`. The spec notes that an absent parameter is
+  sufficient for a PEP to conclude the PDP cannot serve that API, so any
+  client that discovered its endpoints instead of hard-coding them saw a
+  PDP with no Search support at all.
+
+### Changed
+
+- **Search pagination now uses the spec's shape (BREAKING).** The `page`
+  object on a request is `{token, limit}` rather than `{size, offset}`,
+  and on a response `{next_token, count}` rather than
+  `{size, offset, next_token}`. `next_token` is always present and is
+  the empty string on the last page, per §8.2.2. Tokens are opaque and
+  carry a fingerprint of the request that minted them: §8.2 requires
+  every other field to be identical across a paginated sequence, and a
+  token replayed against a changed request is now a 400. The
+  fingerprint travels inside the token rather than in server-side state,
+  so any replica can serve the next page.
+
+  Callers that never sent a `page` object are unaffected.
+
+- **`total` is not emitted on Search responses.** Paging happens before
+  evaluation, so the number of matches across all pages is unknown when
+  a page is built; reporting the size of the search space under a key
+  the spec defines as the number of matching results would be a figure a
+  PEP renders in a progress bar and is wrong.
+
+### Documentation
+
+- [`docs/conformance-authzen.md`](docs/conformance-authzen.md) is
+  re-audited against the Final Specification's own section numbering.
+  The previous revision numbered against a pre-Final draft (Search was
+  cited as §5.3 where the Final text has §8), listed the three Search
+  endpoints as `deferred` and "404" in one table while another table on
+  the same page described them as shipped, and twice attributed to
+  "§5.3.2" a requirement that PDPs error when they cannot resolve a
+  search space — text that does not appear in the specification.
+
 ## [0.4.0] - 2026-08-23
 
 Finishes the thought 0.3.0 started. That release made a `spire-upstream`
