@@ -978,9 +978,9 @@ components:
         - policy_decision_point
         - access_evaluation_endpoint
         - access_evaluations_endpoint
-        - subject_search_endpoint
-        - resource_search_endpoint
-        - action_search_endpoint
+        - search_subject_endpoint
+        - search_resource_endpoint
+        - search_action_endpoint
       properties:
         policy_decision_point:
           type: string
@@ -994,52 +994,84 @@ components:
           type: string
           format: uri
           description: Absolute URL of the batch endpoint `POST /access/v1/evaluations`.
-        subject_search_endpoint:
+        search_subject_endpoint:
           type: string
           format: uri
           description: Absolute URL of `POST /access/v1/search/subject`.
-        resource_search_endpoint:
+        search_resource_endpoint:
           type: string
           format: uri
           description: Absolute URL of `POST /access/v1/search/resource`.
-        action_search_endpoint:
+        search_action_endpoint:
           type: string
           format: uri
           description: Absolute URL of `POST /access/v1/search/action`.
 
-    SearchPage:
+    SearchPageRequest:
       type: object
       additionalProperties: false
+      description: |
+        The `page` object on a Search request (AuthZEN 1.0 section
+        8.2.1).
       properties:
-        size:
+        token:
+          type: string
+          description: |
+            Opaque `next_token` from a previous response. Every other
+            field of the request must be identical to the request that
+            produced the token; omega returns 400 otherwise.
+        limit:
           type: integer
-          description: Page size echoed back (or selected by omega when omitted).
-        offset:
-          type: integer
-          description: Offset into the matched-candidate list.
+          minimum: 0
+          maximum: 100
+          description: |
+            Maximum number of candidates to evaluate in this page.
+            Clamped to 100 (`MaxSearchCandidates`), because each
+            candidate costs one PDP evaluation and one audit row.
+
+    SearchPageResponse:
+      type: object
+      additionalProperties: false
+      required: [next_token]
+      description: |
+        The `page` object on a Search response (AuthZEN 1.0 section
+        8.2.2). `total` is never emitted: paging is applied to the
+        search space before evaluation, so the number of matches across
+        all pages is not known when the page is built.
+      properties:
         next_token:
           type: string
           description: |
-            Opaque continuation token (`offset:N` today). Present
-            only when more matches remain.
+            Opaque continuation token. The empty string means this is
+            the last page.
+        count:
+          type: integer
+          description: Number of results in this page.
 
     SubjectSearchRequest:
       type: object
       additionalProperties: false
-      required: [subjects, action, resource]
+      required: [action, resource]
       properties:
         subjects:
           type: array
           maxItems: 100
           description: |
-            Caller-supplied candidate subjects to test. omega does not
-            enumerate principals on its own; the spec's §5.3.2 allows
-            the PDP to error when it cannot resolve the search space,
-            and a candidate list refines that contract into something
-            useful. Capped at 100 (`MaxSearchCandidates`) for the
-            same hash-chain-mutex reason as the batch endpoint.
+            Caller-supplied candidate subjects to test (an omega
+            extension, always available). Capped at 100
+            (`MaxSearchCandidates`) for the same hash-chain-mutex
+            reason as the batch endpoint.
           items:
             $ref: "#/components/schemas/EvalEntity"
+        subject:
+          allOf:
+            - $ref: "#/components/schemas/EvalEntity"
+          description: |
+            AuthZEN 1.0 section 8.4.1 pattern shape: only `type` is
+            read, and an `id` is ignored if present. Accepted only when
+            the server runs with `--authzen-search-entity-store`, in
+            which case the search space is every entity of that type in
+            the Cedar entity store. Supply either this or `subjects`.
         action:
           $ref: "#/components/schemas/EvalAction"
         resource:
@@ -1048,7 +1080,7 @@ components:
           type: object
           additionalProperties: true
         page:
-          $ref: "#/components/schemas/SearchPage"
+          $ref: "#/components/schemas/SearchPageRequest"
 
     SubjectSearchResponse:
       type: object
@@ -1060,18 +1092,26 @@ components:
           items:
             $ref: "#/components/schemas/EvalEntity"
         page:
-          $ref: "#/components/schemas/SearchPage"
+          $ref: "#/components/schemas/SearchPageResponse"
 
     ResourceSearchRequest:
       type: object
       additionalProperties: false
-      required: [resources, subject, action]
+      required: [subject, action]
       properties:
         resources:
           type: array
           maxItems: 100
+          description: Caller-supplied candidate resources (omega extension).
           items:
             $ref: "#/components/schemas/EvalEntity"
+        resource:
+          allOf:
+            - $ref: "#/components/schemas/EvalEntity"
+          description: |
+            AuthZEN 1.0 section 8.5.1 pattern shape: only `type` is
+            read. Requires `--authzen-search-entity-store`. Supply
+            either this or `resources`.
         subject:
           $ref: "#/components/schemas/EvalEntity"
         action:
@@ -1080,7 +1120,7 @@ components:
           type: object
           additionalProperties: true
         page:
-          $ref: "#/components/schemas/SearchPage"
+          $ref: "#/components/schemas/SearchPageRequest"
 
     ResourceSearchResponse:
       type: object
@@ -1092,16 +1132,22 @@ components:
           items:
             $ref: "#/components/schemas/EvalEntity"
         page:
-          $ref: "#/components/schemas/SearchPage"
+          $ref: "#/components/schemas/SearchPageResponse"
 
     ActionSearchRequest:
       type: object
       additionalProperties: false
-      required: [actions, subject, resource]
+      required: [subject, resource]
       properties:
         actions:
           type: array
           maxItems: 100
+          description: |
+            Caller-supplied candidate actions (omega extension). Omit
+            to use the AuthZEN 1.0 section 8.6.1 shape, which carries
+            no action key at all; that requires
+            `--authzen-search-entity-store` and searches every Action
+            entity in the Cedar entity store.
           items:
             $ref: "#/components/schemas/EvalAction"
         subject:
@@ -1112,7 +1158,7 @@ components:
           type: object
           additionalProperties: true
         page:
-          $ref: "#/components/schemas/SearchPage"
+          $ref: "#/components/schemas/SearchPageRequest"
 
     ActionSearchResponse:
       type: object
@@ -1124,7 +1170,7 @@ components:
           items:
             $ref: "#/components/schemas/EvalAction"
         page:
-          $ref: "#/components/schemas/SearchPage"
+          $ref: "#/components/schemas/SearchPageResponse"
 
     OIDCDiscoveryResponse:
       type: object

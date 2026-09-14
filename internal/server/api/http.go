@@ -52,6 +52,23 @@ type Server struct {
 	oidc                    *oidc.Registry
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
+	entityStoreSearch       bool
+}
+
+// WithEntityStoreSearch enables AuthZEN's own Search request shape, in
+// which the searched dimension carries only a type and the PDP resolves
+// the search space itself - here, from the Cedar entity store loaded
+// out of `--policy-dir/entities.json`. When disabled (default), Search
+// requires an explicit candidate list and rejects the pattern shape.
+//
+// Off by default because the entity store bounds what is findable: a
+// principal the operator never declared is invisible to enumeration,
+// and a deployment that has not decided whether its entities.json is a
+// complete directory should get an error rather than a quietly partial
+// answer.
+func (s *Server) WithEntityStoreSearch(v bool) *Server {
+	s.entityStoreSearch = v
+	return s
 }
 
 // NewServer takes an issuing Authority for backward compatibility and
@@ -349,19 +366,22 @@ func (s *Server) getOIDCDiscovery(w http.ResponseWriter, _ *http.Request) {
 
 // AuthzenDiscoveryResponse is the discovery document advertised at
 // /.well-known/authzen-configuration. The shape matches OpenID AuthZEN
-// 1.0 §8: `policy_decision_point` is the PDP base; only the endpoints
-// Omega actually implements are advertised. The three Search API
-// endpoints (`subject_search_endpoint`, `resource_search_endpoint`,
-// `action_search_endpoint`) are present because Omega ships
-// candidate-set-based Search; the deviation from the spec's pattern
-// shape is documented on the search handlers themselves.
+// 1.0 §9.1.1: `policy_decision_point` is the PDP base; only the
+// endpoints Omega actually implements are advertised.
+//
+// The Search parameter names are `search_<dimension>_endpoint`, which
+// is what §9.1.1 registers. Omega previously emitted them reversed
+// (`subject_search_endpoint`), so a PEP that discovered its endpoints
+// rather than hard-coding them saw a PDP advertising no Search support
+// at all - the spec notes that an absent parameter is sufficient for
+// the PEP to conclude the PDP cannot serve that API.
 type AuthzenDiscoveryResponse struct {
 	PolicyDecisionPoint       string `json:"policy_decision_point"`
 	AccessEvaluationEndpoint  string `json:"access_evaluation_endpoint"`
 	AccessEvaluationsEndpoint string `json:"access_evaluations_endpoint"`
-	SubjectSearchEndpoint     string `json:"subject_search_endpoint"`
-	ResourceSearchEndpoint    string `json:"resource_search_endpoint"`
-	ActionSearchEndpoint      string `json:"action_search_endpoint"`
+	SearchSubjectEndpoint     string `json:"search_subject_endpoint"`
+	SearchResourceEndpoint    string `json:"search_resource_endpoint"`
+	SearchActionEndpoint      string `json:"search_action_endpoint"`
 }
 
 func (s *Server) getAuthzenDiscovery(w http.ResponseWriter, _ *http.Request) {
@@ -381,9 +401,9 @@ func (s *Server) getAuthzenDiscovery(w http.ResponseWriter, _ *http.Request) {
 		PolicyDecisionPoint:       base,
 		AccessEvaluationEndpoint:  base + "/access/v1/evaluation",
 		AccessEvaluationsEndpoint: base + "/access/v1/evaluations",
-		SubjectSearchEndpoint:     base + "/access/v1/search/subject",
-		ResourceSearchEndpoint:    base + "/access/v1/search/resource",
-		ActionSearchEndpoint:      base + "/access/v1/search/action",
+		SearchSubjectEndpoint:     base + "/access/v1/search/subject",
+		SearchResourceEndpoint:    base + "/access/v1/search/resource",
+		SearchActionEndpoint:      base + "/access/v1/search/action",
 	})
 }
 
@@ -850,101 +870,188 @@ func mergeBatchEval(top BatchEvalRequest, sub BatchEvalSubrequest) (policy.EvalR
 	}, nil
 }
 
-// AuthZEN 1.0 §5.3 Search APIs.
+// AuthZEN 1.0 §8 Search APIs.
 //
-// The spec's Search request describes a partially-specified target
-// (e.g. `subject: {type: "user"}` with no id) and leaves candidate
-// enumeration to the PDP. omega's default PDP is Cedar, which has no
-// global principal / resource / action directory - omega therefore
-// cannot enumerate candidates on its own and the spec (§5.3.2)
-// explicitly tells PDPs to error when they cannot resolve a search.
+// The spec's Search request describes a partially-specified target -
+// `subject: {type: "user"}` with the id omitted - and leaves candidate
+// enumeration to the PDP. Omega's default PDP is Cedar, which has no
+// global principal / resource / action directory, so there are two
+// ways to name a search space and Omega supports both.
 //
-// To make the endpoints useful in practice rather than just spec-
-// compliantly returning errors, omega accepts an explicit candidate
-// list in the request:
+// Candidate-set mode (always available, an Omega extension) takes the
+// dimension being searched as an explicit list while the other two are
+// fully specified:
 //
 //	{
-//	  "candidates": [ {entity}, ... ],   // the dimension being searched
-//	  "subject":    {entity},            // the two other dimensions are
-//	  "action":     {action},            // fully specified
-//	  "resource":   {entity},
+//	  "subjects":   [ {entity}, ... ],   // the dimension being searched
+//	  "action":     {action},            // the two other dimensions are
+//	  "resource":   {entity},            // fully specified
 //	  "context":    {...},
-//	  "page":       {"size": N, "offset": M}
+//	  "page":       {"limit": N, "token": "..."}
 //	}
 //
-// For each candidate, omega builds a complete EvalRequest, runs it
-// through the same PDP path as `POST /access/v1/evaluation`, and
-// returns only those candidates whose decision is `allow`. Pagination
-// is offset/size; opaque tokens add no value when the caller already
-// supplies the candidate list.
+// Entity-store mode (opt-in, `--authzen-search-entity-store`) accepts
+// the spec's own shape, with the searched dimension carrying only a
+// type, and resolves the search space from the Cedar entity store
+// loaded out of `--policy-dir/entities.json`:
+//
+//	{
+//	  "subject":    {"type": "user"},    // no id: enumerate this type
+//	  "action":     {action},
+//	  "resource":   {entity},
+//	  "page":       {"limit": N}
+//	}
+//
+// It is opt-in because the entity store is the whole search space: an
+// identity the operator never declared is invisible to enumeration, and
+// a deployment that has not thought about that is better served by the
+// 400 the default emits than by a short list that reads as complete.
+// For the same reason, enumerating a type the store has no entities of
+// is an error rather than an empty `results` - the spec permits an
+// empty result set, but "no such type here" and "nothing you may touch"
+// are different answers and a PEP cannot tell them apart.
+//
+// In both modes Omega builds a complete EvalRequest per candidate, runs
+// it through the same PDP path as `POST /access/v1/evaluation`, and
+// keeps those whose decision is `allow`. Paging applies to the search
+// space, not to the matches: a page is a window of candidates, of which
+// some subset is returned, so a page MAY come back empty while later
+// pages still hold results - which is exactly the loop `next_token` is
+// specified to drive (§8.2). Paging before evaluating is what bounds
+// the work, since each candidate costs one PDP evaluation and one audit
+// row.
 //
 // Every candidate evaluation is audited the same way single
 // evaluations are, so the hash chain records one row per decision
 // the PDP made on behalf of this Search.
 
-// SearchPage controls the optional offset/size pagination on Search
-// responses. The spec defines opaque `next_token` pagination; we use
-// offsets because omega's candidate set is supplied by the caller and
-// is already enumerable.
-type SearchPage struct {
-	Size      int    `json:"size,omitempty"`
-	Offset    int    `json:"offset,omitempty"`
-	NextToken string `json:"next_token,omitempty"`
+// SearchPageRequest is the `page` object on a Search request
+// (AuthZEN §8.2.1). `token` is the opaque `next_token` of a previous
+// response; `limit` bounds the candidate window.
+type SearchPageRequest struct {
+	Token string `json:"token,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }
 
-// MaxSearchCandidates caps the per-request candidate list. Each
-// candidate runs a full PDP evaluation and emits one audit row, so
-// the bound prevents a single Search from monopolising the hash-chain
-// writer. Same rationale as MaxBatchEvaluations; same value.
+// SearchPageResponse is the `page` object on a Search response
+// (AuthZEN §8.2.2). `next_token` is REQUIRED and MUST be the empty
+// string on the last page, so it is not `omitempty`. `total` is
+// deliberately never emitted: paging happens before evaluation, so the
+// total number of *matches* is not known without evaluating the entire
+// search space, and reporting the size of the search space under a key
+// the spec defines as "results matching the query criteria" would be a
+// lie a PEP would render in a progress bar.
+type SearchPageResponse struct {
+	NextToken string `json:"next_token"`
+	Count     int    `json:"count,omitempty"`
+}
+
+// MaxSearchCandidates caps how many candidates one request may
+// evaluate: the length of an explicit candidate list, and the largest
+// `page.limit` honoured when enumerating. Each candidate runs a full
+// PDP evaluation and emits one audit row, so the bound prevents a
+// single Search from monopolising the hash-chain writer. Same
+// rationale as MaxBatchEvaluations; same value.
 const MaxSearchCandidates = 100
 
 // SubjectSearchRequest is the request body for
-// `POST /access/v1/search/subject`. `subjects` is the candidate list
-// of subjects to test against the (action, resource) pair.
+// `POST /access/v1/search/subject`. Exactly one of `subjects` (the
+// candidate list) or `subject` (the spec's type-only pattern) names the
+// search space. Per §8.4.1 a `subject.id` SHOULD be omitted and MUST be
+// ignored if present.
 type SubjectSearchRequest struct {
-	Subjects []policy.Entity `json:"subjects"`
-	Action   policy.Action   `json:"action"`
-	Resource policy.Entity   `json:"resource"`
-	Context  map[string]any  `json:"context,omitempty"`
-	Page     *SearchPage     `json:"page,omitempty"`
+	Subjects []policy.Entity    `json:"subjects,omitempty"`
+	Subject  *policy.Entity     `json:"subject,omitempty"`
+	Action   policy.Action      `json:"action"`
+	Resource policy.Entity      `json:"resource"`
+	Context  map[string]any     `json:"context,omitempty"`
+	Page     *SearchPageRequest `json:"page,omitempty"`
 }
 
 // ResourceSearchRequest mirrors SubjectSearchRequest with the search
-// dimension on `resources` instead.
+// dimension on `resources` / `resource` instead (§8.5.1).
 type ResourceSearchRequest struct {
-	Resources []policy.Entity `json:"resources"`
-	Subject   policy.Entity   `json:"subject"`
-	Action    policy.Action   `json:"action"`
-	Context   map[string]any  `json:"context,omitempty"`
-	Page      *SearchPage     `json:"page,omitempty"`
+	Resources []policy.Entity    `json:"resources,omitempty"`
+	Resource  *policy.Entity     `json:"resource,omitempty"`
+	Subject   policy.Entity      `json:"subject"`
+	Action    policy.Action      `json:"action"`
+	Context   map[string]any     `json:"context,omitempty"`
+	Page      *SearchPageRequest `json:"page,omitempty"`
 }
 
-// ActionSearchRequest searches over a candidate list of action names
-// against the same (subject, resource) pair.
+// ActionSearchRequest searches over actions against the same
+// (subject, resource) pair. Per §8.6.1 the spec shape omits the
+// `action` key entirely, so entity-store mode is selected by the
+// absence of `actions` rather than by a type-only pattern.
 type ActionSearchRequest struct {
-	Actions  []policy.Action `json:"actions"`
-	Subject  policy.Entity   `json:"subject"`
-	Resource policy.Entity   `json:"resource"`
-	Context  map[string]any  `json:"context,omitempty"`
-	Page     *SearchPage     `json:"page,omitempty"`
+	Actions  []policy.Action    `json:"actions,omitempty"`
+	Subject  policy.Entity      `json:"subject"`
+	Resource policy.Entity      `json:"resource"`
+	Context  map[string]any     `json:"context,omitempty"`
+	Page     *SearchPageRequest `json:"page,omitempty"`
 }
 
 // SubjectSearchResponse / ResourceSearchResponse / ActionSearchResponse
-// each carry the matched candidates. AuthZEN §5.3.4 names the field
+// each carry the matched candidates. AuthZEN §8.3 names the field
 // `results`.
 type SubjectSearchResponse struct {
-	Results []policy.Entity `json:"results"`
-	Page    *SearchPage     `json:"page,omitempty"`
+	Results []policy.Entity     `json:"results"`
+	Page    *SearchPageResponse `json:"page,omitempty"`
 }
 
 type ResourceSearchResponse struct {
-	Results []policy.Entity `json:"results"`
-	Page    *SearchPage     `json:"page,omitempty"`
+	Results []policy.Entity     `json:"results"`
+	Page    *SearchPageResponse `json:"page,omitempty"`
 }
 
 type ActionSearchResponse struct {
-	Results []policy.Action `json:"results"`
-	Page    *SearchPage     `json:"page,omitempty"`
+	Results []policy.Action     `json:"results"`
+	Page    *SearchPageResponse `json:"page,omitempty"`
+}
+
+// searchSpace resolves the candidate window for one Search request.
+// candidates is the caller-supplied list (empty when the caller used
+// the spec's pattern shape); enumerate is called only when the pattern
+// shape was used and entity-store mode is on. It returns the slice of
+// candidates to evaluate and the response page object.
+//
+// dimension names the field in error messages ("subjects", "resources",
+// "actions"); patternType is the type being enumerated, empty for the
+// action dimension, and is used only in the "no entities of this type"
+// message.
+func searchSpace[T any](
+	s *Server, dimension, patternType string, patternGiven bool,
+	candidates []T, enumerate func() []T, page *SearchPageRequest, fingerprint string,
+) ([]T, *SearchPageResponse, error) {
+	space := candidates
+	switch {
+	case len(candidates) > 0:
+		if len(candidates) > MaxSearchCandidates {
+			return nil, nil, fmt.Errorf("%s: too many candidates: %d (max %d); fan out on the client",
+				dimension, len(candidates), MaxSearchCandidates)
+		}
+	case !s.entityStoreSearch:
+		return nil, nil, fmt.Errorf("%s: candidate list is required; this PDP has no directory to enumerate from. Start the server with --authzen-search-entity-store to resolve the search space from the Cedar entity store instead", dimension)
+	case !patternGiven:
+		return nil, nil, fmt.Errorf("%s: neither a candidate list nor a search pattern was supplied", dimension)
+	default:
+		space = enumerate()
+		if len(space) == 0 {
+			// Distinguishable from "you may touch none of them": an
+			// empty results array would tell the caller the search ran
+			// and found nothing permitted, which is not what happened.
+			if patternType != "" {
+				return nil, nil, fmt.Errorf("%s: the entity store declares no entities of type %q, so there is nothing to search; declare them in --policy-dir/entities.json or pass an explicit candidate list", dimension, patternType)
+			}
+			return nil, nil, fmt.Errorf("%s: the entity store declares no Action entities, so there is nothing to search; declare them in --policy-dir/entities.json or pass an explicit candidate list", dimension)
+		}
+	}
+
+	start, end, next, err := searchWindow(page, len(space), fingerprint)
+	if err != nil {
+		return nil, nil, err
+	}
+	return space[start:end], &SearchPageResponse{NextToken: next}, nil
 }
 
 func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
@@ -952,18 +1059,28 @@ func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if len(req.Subjects) == 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("subjects: candidate list is required (omega's PDP cannot enumerate principals)"))
+	fingerprint, err := fingerprintOf(&req)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if len(req.Subjects) > MaxSearchCandidates {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Errorf("subjects: too many candidates: %d (max %d); fan out on the client", len(req.Subjects), MaxSearchCandidates))
+	// Per AuthZEN 1.0 section 8.4.1 the pattern subject carries only a
+	// type; an id, if present, MUST be ignored.
+	patternType := ""
+	if req.Subject != nil {
+		patternType = req.Subject.Type
+	}
+	window, page, err := searchSpace(s, "subjects", patternType, patternType != "",
+		req.Subjects, func() []policy.Entity { return s.policy.EntitiesOfType(patternType) },
+		req.Page, fingerprint)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+
 	ctx, span := tracer.Start(r.Context(), "policy.SearchSubject",
 		trace.WithAttributes(
-			attribute.Int("authzen.search.candidates", len(req.Subjects)),
+			attribute.Int("authzen.search.candidates", len(window)),
 			attribute.String("authzen.action", req.Action.Name),
 			attribute.String("authzen.resource.type", req.Resource.Type),
 			attribute.String("authzen.resource.id", req.Resource.ID),
@@ -971,10 +1088,10 @@ func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 	)
 	defer span.End()
 
-	matched := make([]policy.Entity, 0, len(req.Subjects))
-	for i := range req.Subjects {
+	matched := make([]policy.Entity, 0, len(window))
+	for i := range window {
 		eval := policy.EvalRequest{
-			Subject:  req.Subjects[i],
+			Subject:  window[i],
 			Action:   req.Action,
 			Resource: req.Resource,
 			Context:  req.Context,
@@ -985,11 +1102,11 @@ func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if decision {
-			matched = append(matched, req.Subjects[i])
+			matched = append(matched, window[i])
 		}
 	}
-	results, page := paginate(matched, req.Page)
-	writeJSON(w, http.StatusOK, SubjectSearchResponse{Results: results, Page: page})
+	page.Count = len(matched)
+	writeJSON(w, http.StatusOK, SubjectSearchResponse{Results: matched, Page: page})
 }
 
 func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
@@ -997,18 +1114,26 @@ func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if len(req.Resources) == 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("resources: candidate list is required"))
+	fingerprint, err := fingerprintOf(&req)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if len(req.Resources) > MaxSearchCandidates {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Errorf("resources: too many candidates: %d (max %d); fan out on the client", len(req.Resources), MaxSearchCandidates))
+	patternType := ""
+	if req.Resource != nil {
+		patternType = req.Resource.Type
+	}
+	window, page, err := searchSpace(s, "resources", patternType, patternType != "",
+		req.Resources, func() []policy.Entity { return s.policy.EntitiesOfType(patternType) },
+		req.Page, fingerprint)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+
 	ctx, span := tracer.Start(r.Context(), "policy.SearchResource",
 		trace.WithAttributes(
-			attribute.Int("authzen.search.candidates", len(req.Resources)),
+			attribute.Int("authzen.search.candidates", len(window)),
 			attribute.String("authzen.subject.id", req.Subject.ID),
 			attribute.String("authzen.subject.type", req.Subject.Type),
 			attribute.String("authzen.action", req.Action.Name),
@@ -1016,12 +1141,12 @@ func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
 	)
 	defer span.End()
 
-	matched := make([]policy.Entity, 0, len(req.Resources))
-	for i := range req.Resources {
+	matched := make([]policy.Entity, 0, len(window))
+	for i := range window {
 		eval := policy.EvalRequest{
 			Subject:  req.Subject,
 			Action:   req.Action,
-			Resource: req.Resources[i],
+			Resource: window[i],
 			Context:  req.Context,
 		}
 		decision, ok := s.evaluateForSearch(ctx, eval, span, "resource", i)
@@ -1030,11 +1155,11 @@ func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if decision {
-			matched = append(matched, req.Resources[i])
+			matched = append(matched, window[i])
 		}
 	}
-	results, page := paginate(matched, req.Page)
-	writeJSON(w, http.StatusOK, ResourceSearchResponse{Results: results, Page: page})
+	page.Count = len(matched)
+	writeJSON(w, http.StatusOK, ResourceSearchResponse{Results: matched, Page: page})
 }
 
 func (s *Server) searchAction(w http.ResponseWriter, r *http.Request) {
@@ -1042,18 +1167,31 @@ func (s *Server) searchAction(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if len(req.Actions) == 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("actions: candidate list is required"))
+	fingerprint, err := fingerprintOf(&req)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if len(req.Actions) > MaxSearchCandidates {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Errorf("actions: too many candidates: %d (max %d); fan out on the client", len(req.Actions), MaxSearchCandidates))
+	// Section 8.6.1: the action key is omitted from an Action Search
+	// payload entirely, so there is no pattern object to inspect - the
+	// absence of an explicit candidate list is itself the pattern.
+	window, page, err := searchSpace(s, "actions", "", true,
+		req.Actions, func() []policy.Action {
+			names := s.policy.ActionNames()
+			out := make([]policy.Action, 0, len(names))
+			for _, n := range names {
+				out = append(out, policy.Action{Name: n})
+			}
+			return out
+		}, req.Page, fingerprint)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+
 	ctx, span := tracer.Start(r.Context(), "policy.SearchAction",
 		trace.WithAttributes(
-			attribute.Int("authzen.search.candidates", len(req.Actions)),
+			attribute.Int("authzen.search.candidates", len(window)),
 			attribute.String("authzen.subject.id", req.Subject.ID),
 			attribute.String("authzen.resource.type", req.Resource.Type),
 			attribute.String("authzen.resource.id", req.Resource.ID),
@@ -1061,11 +1199,11 @@ func (s *Server) searchAction(w http.ResponseWriter, r *http.Request) {
 	)
 	defer span.End()
 
-	matched := make([]policy.Action, 0, len(req.Actions))
-	for i := range req.Actions {
+	matched := make([]policy.Action, 0, len(window))
+	for i := range window {
 		eval := policy.EvalRequest{
 			Subject:  req.Subject,
-			Action:   req.Actions[i],
+			Action:   window[i],
 			Resource: req.Resource,
 			Context:  req.Context,
 		}
@@ -1075,11 +1213,11 @@ func (s *Server) searchAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if decision {
-			matched = append(matched, req.Actions[i])
+			matched = append(matched, window[i])
 		}
 	}
-	results, page := paginate(matched, req.Page)
-	writeJSON(w, http.StatusOK, ActionSearchResponse{Results: results, Page: page})
+	page.Count = len(matched)
+	writeJSON(w, http.StatusOK, ActionSearchResponse{Results: matched, Page: page})
 }
 
 // evaluateForSearch runs one candidate through the PDP and emits an
@@ -1113,34 +1251,6 @@ func (s *Server) evaluateForSearch(ctx context.Context, eval policy.EvalRequest,
 		}),
 	})
 	return resp.Decision, true
-}
-
-// paginate applies the request's offset/size to a matched-candidate
-// list and returns the slice plus the page envelope echoed back to
-// the caller (with a next_token marker when more results remain).
-// Generic over the candidate element type so subject/resource/action
-// search all share one implementation.
-func paginate[T any](matched []T, page *SearchPage) ([]T, *SearchPage) {
-	offset, size := 0, len(matched)
-	if page != nil {
-		if page.Offset > 0 {
-			offset = page.Offset
-		}
-		if page.Size > 0 && page.Size < size-offset {
-			size = page.Size
-		} else {
-			size = max(0, len(matched)-offset)
-		}
-	}
-	if offset >= len(matched) {
-		return []T{}, &SearchPage{Size: 0, Offset: offset}
-	}
-	end := min(offset+size, len(matched))
-	out := SearchPage{Size: size, Offset: offset}
-	if end < len(matched) {
-		out.NextToken = fmt.Sprintf("offset:%d", end)
-	}
-	return matched[offset:end], &out
 }
 
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {

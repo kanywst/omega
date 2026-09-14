@@ -85,6 +85,7 @@ func newServerCommand() *cobra.Command {
 		haLeaderKey             int64
 		haPollEvery             time.Duration
 		enforceTokenExchangePol bool
+		entityStoreSearch       bool
 		spiffeBundleRefreshHint time.Duration
 		k8sAttestEnable         bool
 		k8sSVIDTemplate         string
@@ -430,7 +431,8 @@ func newServerCommand() *cobra.Command {
 				WithFederation(fed).
 				WithEnforceTokenExchangePolicy(enforceTokenExchangePol).
 				WithSPIFFEBundleRefreshHint(spiffeBundleRefreshHint).
-				WithRequireAuth(requireAuth)
+				WithRequireAuth(requireAuth).
+				WithEntityStoreSearch(entityStoreSearch)
 
 			if len(oidcIDPs) > 0 {
 				cfgs, err := parseOIDCIDPFlags(oidcIDPs)
@@ -532,6 +534,8 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&issuerURL, "issuer-url", "",
 		"public OIDC issuer URL (e.g. https://omega.example.com). When set, JWT-SVIDs carry this as the `iss` claim and /.well-known/openid-configuration returns a discovery document. Required for AWS IAM OIDC trust, GCP WIF, and K8s ServiceAccount issuer trust. Omit to keep SPIFFE-only behaviour.")
 	cmd.Flags().StringVar(&policyDir, "policy-dir", "", "directory of *.cedar policy files (and optional entities.json) to load at startup")
+	cmd.Flags().BoolVar(&entityStoreSearch, "authzen-search-entity-store", false,
+		"let the AuthZEN Search APIs resolve the search space from the Cedar entity store (--policy-dir/entities.json) when a request uses the spec's type-only pattern shape. Off by default: the entity store then bounds what is findable, so an identity it does not declare is invisible to enumeration. With this off, Search requires an explicit candidate list.")
 	cmd.Flags().StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP/HTTP traces endpoint, host:port (overrides OTEL_EXPORTER_OTLP_ENDPOINT). Empty disables tracing.")
 	cmd.Flags().BoolVar(&otlpInsecure, "otlp-insecure", false, "send OTLP traces over plaintext HTTP (no TLS)")
 	cmd.Flags().StringArrayVar(&federateWith, "federate-with", nil,
