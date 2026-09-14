@@ -77,7 +77,7 @@ Every directory under `examples/` has a `Makefile` with a `make demo` target and
 
 ## Lint
 
-`golangci-lint` (config `.golangci.yml`, v2 schema) is run in CI but `continue-on-error: true` at the step level: upstream is built with Go 1.25 and refuses to load when `go.mod` targets Go 1.26 (see `golangci/golangci-lint#6272`). The CI `lint` job's pass signal is `go vet ./...`, which runs as a separate step. Remove the workaround once upstream ships a Go 1.26 build.
+`golangci-lint` (config `.golangci.yml`, v2 schema) is a blocking step in the CI `lint` job, alongside `go vet ./...`. The action pins an exact version rather than tracking `latest`, so a new upstream release cannot fail CI on a commit that changed nothing; bump the pin in `.github/workflows/ci.yml` deliberately.
 
 Locally, `golangci-lint run` works if your toolchain matches `go.mod`.
 
@@ -85,13 +85,13 @@ Locally, `golangci-lint run` works if your toolchain matches `go.mod`.
 
 Tagged `v*` pushes (e.g. `v0.0.2`) trigger:
 
-1. `image` job builds and pushes the multi-arch container to `ghcr.io/0-draft/omega:<tag>`.
+1. `image` job builds and pushes the multi-arch container to `ghcr.io/kanywst/omega:<tag>`.
 2. `chart-release` job (gated on `test` + `helm` passing) packages `charts/omega`, appends to `index.yaml`, and pushes both to the `gh-pages` branch via `helm/chart-releaser-action`.
 
-The Helm chart repo is served at `https://0-draft.github.io/omega/` (GitHub Pages → `gh-pages` / root). Consumers use:
+The Helm chart repo is served at `https://kanywst.github.io/omega/` (GitHub Pages → `gh-pages` / root). Consumers use:
 
 ```bash
-helm repo add omega https://0-draft.github.io/omega
+helm repo add omega https://kanywst.github.io/omega
 helm repo update
 helm install omega omega/omega --version <tag>
 ```
@@ -102,7 +102,7 @@ If a tag's `chart-release` job fails the typical cause is a missing or stale `gh
 
 ## Style
 
-- Go: `gofmt` + `goimports` with local prefix `github.com/0-draft/omega`.
+- Go: `gofmt` + `goimports` with local prefix `github.com/kanywst/omega`.
 - Markdown: must lint clean under `markdownlint-cli2` (`.markdownlint-cli2.jsonc`). Headings, lists, tables, and fenced code blocks need surrounding blank lines; every code fence needs a language tag (use `text` for plain output).
 - Comments: only when the *why* is non-obvious. Don't narrate the code.
 - Commit messages: Conventional Commits (`feat(scope): ...`, `fix: ...`, `chore: ...`, `docs: ...`).
