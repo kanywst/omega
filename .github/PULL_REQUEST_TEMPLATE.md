@@ -31,7 +31,7 @@ Omega exposes." -->
 - [ ] `go test -race ./...` passes
 - [ ] `make demo` passes (if touching `internal/` or `cmd/`)
 - [ ] Touched example's `make demo` passes (if touching `examples/<x>/`)
-- [ ] `golangci-lint run` clean (advisory; see `.golangci.yml`)
+- [ ] `golangci-lint run` clean (blocking in CI; see `.golangci.yml`)
 - [ ] `markdownlint-cli2 "**/*.md"` clean (if touching `*.md`)
 
 ## Breaking changes
