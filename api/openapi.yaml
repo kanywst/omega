@@ -1023,11 +1023,16 @@ components:
         limit:
           type: integer
           minimum: 0
-          maximum: 100
           description: |
             Maximum number of candidates to evaluate in this page.
-            Clamped to 100 (`MaxSearchCandidates`), because each
-            candidate costs one PDP evaluation and one audit row.
+            AuthZEN 1.0 section 8.2.1 defines this as a maximum, so
+            returning fewer is conformant: a value above 100
+            (`MaxSearchCandidates`) is clamped rather than rejected,
+            because each candidate costs one PDP evaluation and one
+            audit row. No `maximum` is declared here on purpose — a
+            generated client or gateway validating against this schema
+            would otherwise refuse to send a request the server
+            accepts. Walk `page.next_token` to reach the rest.
 
     SearchPageResponse:
       type: object

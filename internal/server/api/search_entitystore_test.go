@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kanywst/omega/internal/server/api"
@@ -323,10 +324,56 @@ func TestSearchCandidateListStillWorksWithEntityStoreModeOff(t *testing.T) {
 }
 
 // page.limit above MaxSearchCandidates is clamped rather than rejected:
-// the cap exists to bound PDP work and audit rows, and a caller asking
-// for more just gets the maximum plus a continuation token.
+// section 8.2.1 defines limit as a maximum, so returning fewer is
+// conformant, and the cap is what bounds PDP evaluations and audit rows
+// per request.
+//
+// The search space has to exceed MaxSearchCandidates for this to test
+// anything - against a three-entity store an unclamped limit and a
+// clamped one produce the same single terminal page. Every entity is
+// permitted here so the result count equals the window size, which is
+// what makes the clamp directly observable rather than inferred.
 func TestSearchLimitIsClampedToMaxCandidates(t *testing.T) {
-	srv := entityStoreFixture(t, true)
+	const total = api.MaxSearchCandidates + 50
+
+	policyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(policyDir, "p.cedar"), []byte(`permit (
+  principal,
+  action == Action::"GET",
+  resource == HttpPath::"/api/foo"
+);
+`), 0o600); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	entities := make([]string, 0, total)
+	for i := range total {
+		// Zero-padded so lexicographic order (what EntitiesOfType sorts
+		// by) matches numeric order, and the window boundary is legible
+		// when a failure prints ids.
+		entities = append(entities,
+			fmt.Sprintf(`{"uid": {"type": "Spiffe", "id": "spiffe://omega.local/w%03d"}, "attrs": {}, "parents": []}`, i))
+	}
+	if err := os.WriteFile(filepath.Join(policyDir, "entities.json"),
+		[]byte("["+strings.Join(entities, ",\n")+"]"), 0o600); err != nil {
+		t.Fatalf("write entities: %v", err)
+	}
+	pdp := policy.New()
+	if err := pdp.LoadDir(policyDir); err != nil {
+		t.Fatalf("load policy dir: %v", err)
+	}
+	dataDir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dataDir, "omega.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.LoadOrCreate(filepath.Join(dataDir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatalf("ca: %v", err)
+	}
+	srv := httptest.NewServer(api.NewServer(store, ca, pdp).WithEntityStoreSearch(true).Handler())
+	t.Cleanup(srv.Close)
+
 	code, raw := postSearch(t, srv, "/access/v1/search/subject", `{
 	  "subject":  {"type": "Spiffe"},
 	  "action":   {"name": "GET"},
@@ -340,9 +387,36 @@ func TestSearchLimitIsClampedToMaxCandidates(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// Only three entities exist, so one page covers them all.
-	if out.Page == nil || out.Page.NextToken != "" {
-		t.Errorf("page: got %+v, want a terminal page", out.Page)
+	// Without the clamp this page would hold all `total` results and
+	// carry no continuation token.
+	if len(out.Results) != api.MaxSearchCandidates {
+		t.Errorf("results: got %d want %d (the clamp did not bound the window)",
+			len(out.Results), api.MaxSearchCandidates)
+	}
+	if out.Page == nil || out.Page.NextToken == "" {
+		t.Fatalf("page: got %+v, want a continuation token for the remaining %d",
+			out.Page, total-api.MaxSearchCandidates)
+	}
+
+	// The rest is reachable, so clamping withholds nothing.
+	code, raw = postSearch(t, srv, "/access/v1/search/subject", fmt.Sprintf(`{
+	  "subject":  {"type": "Spiffe"},
+	  "action":   {"name": "GET"},
+	  "resource": {"type": "HttpPath", "id": "/api/foo"},
+	  "page":     {"limit": 100000, "token": %q}
+	}`, out.Page.NextToken))
+	if code != http.StatusOK {
+		t.Fatalf("second page: status %d (body=%s)", code, raw)
+	}
+	var rest api.SubjectSearchResponse
+	if err := json.Unmarshal(raw, &rest); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rest.Results) != total-api.MaxSearchCandidates {
+		t.Errorf("second page: got %d results want %d", len(rest.Results), total-api.MaxSearchCandidates)
+	}
+	if rest.Page == nil || rest.Page.NextToken != "" {
+		t.Errorf("second page: got %+v, want a terminal page", rest.Page)
 	}
 }
 
