@@ -1091,12 +1091,15 @@ components:
       properties:
         subjects:
           type: array
+          minItems: 1
           maxItems: 100
           description: |
             Caller-supplied candidate subjects to test (an omega
             extension, always available). Capped at 100
             (`MaxSearchCandidates`) for the same hash-chain-mutex
-            reason as the batch endpoint.
+            reason as the batch endpoint. An explicitly empty array is
+            a 400, not a request to search everything: omit the field
+            entirely to use the pattern shape.
           items:
             $ref: "#/components/schemas/EvalEntity"
         subject:
@@ -1143,8 +1146,12 @@ components:
       properties:
         resources:
           type: array
+          minItems: 1
           maxItems: 100
-          description: Caller-supplied candidate resources (omega extension).
+          description: |
+            Caller-supplied candidate resources (omega extension). An
+            explicitly empty array is a 400; omit the field to use the
+            pattern shape.
           items:
             $ref: "#/components/schemas/EvalEntity"
         resource:
@@ -1183,13 +1190,15 @@ components:
       properties:
         actions:
           type: array
+          minItems: 1
           maxItems: 100
           description: |
             Caller-supplied candidate actions (omega extension). Omit
             to use the AuthZEN 1.0 section 8.6.1 shape, which carries
             no action key at all; that requires
             `--authzen-search-entity-store` and searches every Action
-            entity in the Cedar entity store.
+            entity in the Cedar entity store. An explicitly empty
+            array is a 400 rather than a synonym for omitting it.
           items:
             $ref: "#/components/schemas/EvalAction"
         subject:

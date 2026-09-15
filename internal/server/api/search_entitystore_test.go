@@ -340,6 +340,44 @@ func TestSearchRejectsBothCandidateListAndPattern(t *testing.T) {
 	}
 }
 
+// An explicitly empty candidate list is not the same request as
+// omitting the field, the way `"limit": 0` is not the same as no limit.
+// Enumerating the whole entity store because the caller sent `[]` would
+// answer the opposite of what was asked, so all three dimensions reject
+// it - including Action Search, where the §8.6.1 pattern is precisely
+// the *absence* of the key and is therefore easiest to confuse.
+func TestSearchRejectsAnExplicitlyEmptyCandidateList(t *testing.T) {
+	srv := entityStoreFixture(t, true)
+
+	for _, tc := range []struct{ name, path, body string }{
+		{"subjects", "/access/v1/search/subject", `{
+		  "subjects": [],
+		  "action":   {"name": "GET"},
+		  "resource": {"type": "HttpPath", "id": "/api/foo"}
+		}`},
+		{"resources", "/access/v1/search/resource", `{
+		  "resources": [],
+		  "subject":   {"type": "Spiffe", "id": "spiffe://omega.local/alice"},
+		  "action":    {"name": "GET"}
+		}`},
+		{"actions", "/access/v1/search/action", `{
+		  "actions":  [],
+		  "subject":  {"type": "Spiffe", "id": "spiffe://omega.local/alice"},
+		  "resource": {"type": "HttpPath", "id": "/api/foo"}
+		}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, raw := postSearch(t, srv, tc.path, tc.body)
+			if code != http.StatusBadRequest {
+				t.Fatalf("status: got %d want 400 (body=%s)", code, raw)
+			}
+			if !bytes.Contains(raw, []byte("present but empty")) {
+				t.Errorf("error should distinguish an empty list from an absent one, got %s", raw)
+			}
+		})
+	}
+}
+
 // Section 8.2: every field except the token must be identical across a
 // paginated sequence, and the PDP SHOULD error when one changed.
 func TestSearchPageTokenIsBoundToItsRequest(t *testing.T) {

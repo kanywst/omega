@@ -1034,6 +1034,13 @@ func searchSpace[T any](
 ) ([]T, *SearchPageResponse, error) {
 	space := candidates
 	switch {
+	case candidates != nil && len(candidates) == 0:
+		// An explicitly empty list is not the same request as omitting
+		// the field, the way `"limit": 0` is not the same as no limit.
+		// JSON decoding preserves the difference (nil vs empty slice),
+		// so honour it: enumerating the whole store because the caller
+		// sent `[]` would answer the opposite of what was asked.
+		return nil, nil, fmt.Errorf("%s: the candidate list is present but empty; omit the field entirely to search the entity store instead", dimension)
 	case len(candidates) > 0:
 		if len(candidates) > MaxSearchCandidates {
 			return nil, nil, fmt.Errorf("%s: too many candidates: %d (max %d); fan out on the client",
@@ -1089,7 +1096,7 @@ func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 	if req.Subject != nil {
 		patternType = req.Subject.Type
 	}
-	if len(req.Subjects) > 0 && req.Subject != nil {
+	if req.Subjects != nil && req.Subject != nil {
 		writeErr(w, http.StatusBadRequest, errBothSearchSpaces("subjects", "subject"))
 		return
 	}
@@ -1146,7 +1153,7 @@ func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
 	if req.Resource != nil {
 		patternType = req.Resource.Type
 	}
-	if len(req.Resources) > 0 && req.Resource != nil {
+	if req.Resources != nil && req.Resource != nil {
 		writeErr(w, http.StatusBadRequest, errBothSearchSpaces("resources", "resource"))
 		return
 	}
