@@ -8,6 +8,16 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-16
+
+Brings the AuthZEN Search surface to the 1.0 Final Specification, and
+turns `golangci-lint` back into a gate that can actually fail.
+
+A minor rather than a patch: the Search `page` object and three
+discovery parameter names change shape. Both are corrections toward the
+specification rather than preferences, and callers that never sent a
+`page` object and never read the discovery document are unaffected.
+
 ### Added
 
 - **AuthZEN entity-store mode for Search (`--authzen-search-entity-store`).**
@@ -49,7 +59,35 @@ changes (see [SECURITY.md](SECURITY.md)).
   client that discovered its endpoints instead of hard-coding them saw a
   PDP with no Search support at all.
 
+- **An explicitly empty candidate list enumerated everything.** With
+  entity-store mode on, `"actions": []` was indistinguishable from
+  omitting the key, and §8.6.1's pattern *is* the absence of the key —
+  so a caller that asked about no actions was answered with every one of
+  them. All three dimensions now reject an empty list with a 400 and
+  read omission as the pattern shape. `subjects: []` already returned
+  400 before this release; the bug was that the new mode quietly changed
+  that answer.
+
+- **`page.limit: 0` fell through to the default.** §8.2.1 defines
+  `limit` as a non-negative integer, so zero is legal and is how a PEP
+  asks whether a search space is non-empty without paying for a single
+  PDP evaluation. It is now honoured as written rather than collapsing
+  into "no limit" and evaluating up to 100 candidates.
+
+- **Enumeration walked the whole entity store on every page.**
+  `MaxSearchCandidates` bounded how many candidates a request evaluated
+  but not how much of the store was scanned and sorted to build that
+  window, so a full paginated walk cost O(N²·log N) in store size. The
+  per-type index is now built once per policy load: on a 50k-entity
+  store one lookup went from 176ms to 21ns.
+
 ### Changed
+
+- **A Search request may name its search space only once.** Sending both
+  the candidate list and the type-only pattern previously let the
+  candidate list win silently; it is now a 400. Action Search is
+  unaffected — §8.6.1 omits the `action` key entirely, so there is no
+  second way to name the space.
 
 - **Search pagination now uses the spec's shape (BREAKING).** The `page`
   object on a request is `{token, limit}` rather than `{size, offset}`,
@@ -80,6 +118,23 @@ changes (see [SECURITY.md](SECURITY.md)).
   the same page described them as shipped, and twice attributed to
   "§5.3.2" a requirement that PDPs error when they cannot resolve a
   search space — text that does not appear in the specification.
+  [`api/openapi.yaml`](api/openapi.yaml) carried the same pre-Final
+  numbering, plus a discovery description claiming the three Search
+  endpoints were "omitted on purpose" while the handler had always
+  advertised them.
+
+### Internal
+
+- **`golangci-lint` is a blocking CI step again.** It had carried
+  `continue-on-error: true` since the Go 1.26 bump, citing
+  golangci/golangci-lint#6272 — closed upstream on 2026-02-10. In the
+  meantime the step was silently swallowing 18 findings, all fixed
+  here. One of them was substantive: three JWK decode sites built an
+  `ecdsa.PublicKey` from raw coordinates, which Go 1.26 deprecated
+  because it can yield an invalid key. They now go through
+  `ecdsa.ParseUncompressedPublicKey`, which performs the on-curve and
+  point-at-infinity checks that the agent's `parseJWKS` and the
+  `mcp-a2a-delegation` example never did at all.
 
 ## [0.4.0] - 2026-08-23
 
@@ -704,7 +759,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kanywst/omega/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kanywst/omega/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/kanywst/omega/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/kanywst/omega/compare/v0.2.1...v0.3.0
