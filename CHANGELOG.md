@@ -74,6 +74,16 @@ specification rather than preferences, and callers that never sent a
   PDP evaluation. It is now honoured as written rather than collapsing
   into "no limit" and evaluating up to 100 candidates.
 
+- **`make docker-demo` could not build.** `ui/Dockerfile` copies
+  `/app/public` into the runtime image, but `ui/public` has never
+  existed in the tree, so the compose build failed at that step — from
+  the UI's first commit through v0.4.0. Nothing caught it: no CI job ran
+  the compose stack, despite `CLAUDE.md` describing the target as the CI
+  smoke test and `RELEASING.md` listing it as a pre-release check. The
+  directory is now tracked, and a `docker-demo` job builds the stack on
+  every PR so the only thing that exercises `ui/Dockerfile` is no longer
+  a command someone has to remember to run.
+
 - **Enumeration walked the whole entity store on every page.**
   `MaxSearchCandidates` bounded how many candidates a request evaluated
   but not how much of the store was scanned and sorted to build that
