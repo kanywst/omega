@@ -144,8 +144,10 @@ specification rather than preferences, and callers that never sent a
 
 - `github.com/cert-manager/cert-manager` 1.21.1 → 1.21.2 and
   `golang.org/x/sys` 0.47.0 → 0.48.0, both of which ship in the binary.
-  The UI's npm dependencies and four GitHub Actions moved too, neither
-  of which affects what a consumer installs.
+  Nine npm packages under `ui/` and two GitHub Actions
+  (`anthropics/claude-code-action`, `github/codeql-action`, across five
+  pinned `uses:` lines in three workflows) moved too, neither of which
+  affects what a consumer installs.
 
 ### Internal
 
