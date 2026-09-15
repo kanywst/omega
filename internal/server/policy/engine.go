@@ -26,6 +26,13 @@ type Engine struct {
 	mu       sync.RWMutex
 	policies *cedar.PolicySet
 	entities cedar.EntityMap
+	// byType is the entity map indexed by Cedar entity type, each bucket
+	// sorted by id. Built once per load rather than per call: the map is
+	// immutable between LoadDir calls, and Search reads it once per page,
+	// so scanning and sorting on demand would make walking an N-entity
+	// store cost O(N^2 log N) in total even though each page evaluates at
+	// most MaxSearchCandidates candidates.
+	byType map[string][]Entity
 }
 
 // New returns an Engine with an empty policy set and no entities. A
@@ -35,6 +42,7 @@ func New() *Engine {
 	return &Engine{
 		policies: cedar.NewPolicySet(),
 		entities: cedar.EntityMap{},
+		byType:   map[string][]Entity{},
 	}
 }
 
@@ -46,11 +54,32 @@ func (e *Engine) LoadDir(dir string) error {
 	if err != nil {
 		return err
 	}
+	idx := indexByType(ents)
 	e.mu.Lock()
 	e.policies = ps
 	e.entities = ents
+	e.byType = idx
 	e.mu.Unlock()
 	return nil
+}
+
+// indexByType groups the entity map by type, sorting each bucket by id.
+//
+// The sort is load-bearing rather than cosmetic: a Search page token
+// encodes an offset into one of these slices, and Go randomises map
+// iteration, so an unstable order would make the same offset name a
+// different entity on the next call - silently skipping some and
+// repeating others across a paginated sequence.
+func indexByType(ents cedar.EntityMap) map[string][]Entity {
+	idx := map[string][]Entity{}
+	for uid := range ents {
+		typ := string(uid.Type)
+		idx[typ] = append(idx[typ], Entity{Type: typ, ID: string(uid.ID)})
+	}
+	for _, bucket := range idx {
+		sort.Slice(bucket, func(i, j int) bool { return bucket[i].ID < bucket[j].ID })
+	}
+	return idx
 }
 
 func loadFromDir(dir string) (*cedar.PolicySet, cedar.EntityMap, error) {
@@ -141,15 +170,17 @@ const ActionEntityType = "Action"
 
 // EntitiesOfType returns every entity of the given Cedar type held in
 // the static entity store loaded from `entities.json`, as AuthZEN
-// entities. Attributes are deliberately not projected: the caller is
-// enumerating a search space, and a Cedar Record does not round-trip
-// losslessly into the `properties` bag.
+// entities sorted by id. Attributes are deliberately not projected: the
+// caller is enumerating a search space, and a Cedar Record does not
+// round-trip losslessly into the `properties` bag.
 //
-// The result is sorted by id so that paging over it is stable across
-// requests. Go map iteration is randomised, and an unstable order
-// would make an opaque page token meaningless: the same offset could
-// name a different entity on the next call, silently skipping and
-// repeating results.
+// The returned slice is the engine's own and MUST NOT be mutated. It is
+// shared rather than copied because the caller windows it to at most
+// MaxSearchCandidates entries and only reads; copying the whole bucket
+// per request would reintroduce the per-call cost the type index exists
+// to remove. A concurrent LoadDir swaps in a new map and leaves this
+// slice alone, so a request in flight keeps reading a consistent
+// snapshot.
 //
 // This is the whole search space. Omega does not enumerate principals
 // from SVID issuance history or resources from anywhere else, so an
@@ -158,18 +189,8 @@ const ActionEntityType = "Action"
 // result set that reads as "these are all of them".
 func (e *Engine) EntitiesOfType(typ string) []Entity {
 	e.mu.RLock()
-	ents := e.entities
-	e.mu.RUnlock()
-
-	out := make([]Entity, 0, len(ents))
-	for uid := range ents {
-		if string(uid.Type) != typ {
-			continue
-		}
-		out = append(out, Entity{Type: typ, ID: string(uid.ID)})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
+	defer e.mu.RUnlock()
+	return e.byType[typ]
 }
 
 // ActionNames returns the ids of every Action entity in the store, in

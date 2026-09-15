@@ -70,6 +70,25 @@ func TestEntitiesOfTypeOrderIsStableAcrossCalls(t *testing.T) {
 	}
 }
 
+// The type index is built once per LoadDir, not per call: Search reads
+// it once per page, so rebuilding it on demand would make walking an
+// N-entity store cost O(N^2 log N) overall. Sharing the backing array
+// across calls is the observable consequence, and checking it is what
+// keeps a future "just scan and sort here" refactor from reintroducing
+// the cost silently.
+func TestEntitiesOfTypeIsPrecomputedNotRebuiltPerCall(t *testing.T) {
+	e := loadFixture(t, enumerateFixture)
+
+	first := e.EntitiesOfType("User")
+	second := e.EntitiesOfType("User")
+	if len(first) == 0 {
+		t.Fatal("fixture should declare User entities")
+	}
+	if &first[0] != &second[0] {
+		t.Error("EntitiesOfType rebuilt its slice; the per-type index should be built at load time")
+	}
+}
+
 func TestEntitiesOfTypeUnknownTypeIsEmpty(t *testing.T) {
 	e := loadFixture(t, enumerateFixture)
 	if got := e.EntitiesOfType("Nope"); len(got) != 0 {
