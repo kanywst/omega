@@ -255,6 +255,58 @@ func TestSearchPaginationWalksTheSearchSpace(t *testing.T) {
 	}
 }
 
+// Section 8.2.1 defines limit as a non-negative integer, so zero is a
+// legal value and not the same request as omitting the field. A PEP can
+// use it to ask whether a search space is non-empty without paying for
+// a single PDP evaluation.
+func TestSearchLimitZeroIsHonouredNotTreatedAsAbsent(t *testing.T) {
+	srv := entityStoreFixture(t, true)
+	code, raw := postSearch(t, srv, "/access/v1/search/subject", `{
+	  "subject":  {"type": "Spiffe"},
+	  "action":   {"name": "GET"},
+	  "resource": {"type": "HttpPath", "id": "/api/foo"},
+	  "page":     {"limit": 0}
+	}`)
+	if code != http.StatusOK {
+		t.Fatalf("status: got %d want 200 (body=%s)", code, raw)
+	}
+	var out api.SubjectSearchResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Results) != 0 {
+		t.Errorf("results: got %d, want 0 (limit 0 was treated as absent)", len(out.Results))
+	}
+	// The store holds three Spiffe entities, so there is more to come and
+	// the token has to say so - that is what makes the zero-cost probe
+	// answer anything at all.
+	if out.Page == nil || out.Page.NextToken == "" {
+		t.Fatalf("page: got %+v, want a continuation token", out.Page)
+	}
+
+	// Omitting limit entirely is a different request and still defaults
+	// to the full window.
+	code, raw = postSearch(t, srv, "/access/v1/search/subject", `{
+	  "subject":  {"type": "Spiffe"},
+	  "action":   {"name": "GET"},
+	  "resource": {"type": "HttpPath", "id": "/api/foo"},
+	  "page":     {}
+	}`)
+	if code != http.StatusOK {
+		t.Fatalf("no-limit: status %d (body=%s)", code, raw)
+	}
+	var full api.SubjectSearchResponse
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(full.Results) != 1 {
+		t.Errorf("no-limit: got %d results want 1", len(full.Results))
+	}
+	if full.Page == nil || full.Page.NextToken != "" {
+		t.Errorf("no-limit: got %+v, want a terminal page", full.Page)
+	}
+}
+
 // Section 8.2: every field except the token must be identical across a
 // paginated sequence, and the PDP SHOULD error when one changed.
 func TestSearchPageTokenIsBoundToItsRequest(t *testing.T) {

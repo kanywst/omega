@@ -108,11 +108,16 @@ func decodePageToken(token, fingerprint string) (int, error) {
 func searchWindow(page *SearchPageRequest, total int, fingerprint string) (start, end int, next string, err error) {
 	limit := MaxSearchCandidates
 	if page != nil {
-		if page.Limit < 0 {
-			return 0, 0, "", errors.New("page.limit must not be negative")
-		}
-		if page.Limit > 0 && page.Limit < limit {
-			limit = page.Limit
+		if page.Limit != nil {
+			switch {
+			case *page.Limit < 0:
+				return 0, 0, "", errors.New("page.limit must not be negative")
+			case *page.Limit < limit:
+				// Zero lands here and is honoured as written: the caller
+				// asked for at most no results, and gets an empty page
+				// plus a token that says whether more exist.
+				limit = *page.Limit
+			}
 		}
 		if page.Token != "" {
 			start, err = decodePageToken(page.Token, fingerprint)

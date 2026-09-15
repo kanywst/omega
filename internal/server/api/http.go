@@ -928,9 +928,18 @@ func mergeBatchEval(top BatchEvalRequest, sub BatchEvalSubrequest) (policy.EvalR
 // SearchPageRequest is the `page` object on a Search request
 // (AuthZEN §8.2.1). `token` is the opaque `next_token` of a previous
 // response; `limit` bounds the candidate window.
+//
+// Limit is a pointer so that an explicit `"limit": 0` is distinguishable
+// from an omitted field. §8.2.1 defines limit as a non-negative integer,
+// which makes zero a legal value meaning "evaluate none of them", and a
+// PEP can use it to ask whether a search space is non-empty without
+// paying for a single PDP evaluation: an empty `results` with a
+// non-empty `next_token` says there is something there. Collapsing zero
+// into the default would silently evaluate up to MaxSearchCandidates
+// candidates instead.
 type SearchPageRequest struct {
 	Token string `json:"token,omitempty"`
-	Limit int    `json:"limit,omitempty"`
+	Limit *int   `json:"limit,omitempty"`
 }
 
 // SearchPageResponse is the `page` object on a Search response
