@@ -307,6 +307,39 @@ func TestSearchLimitZeroIsHonouredNotTreatedAsAbsent(t *testing.T) {
 	}
 }
 
+// Naming the search space twice is a 400 rather than a silent
+// precedence rule. The OpenAPI schema says to supply one or the other,
+// and a PEP that filled in both because it misread which field this PDP
+// wants would otherwise never find out.
+func TestSearchRejectsBothCandidateListAndPattern(t *testing.T) {
+	srv := entityStoreFixture(t, true)
+
+	for _, tc := range []struct{ name, path, body string }{
+		{"subject", "/access/v1/search/subject", `{
+		  "subjects": [{"type": "Spiffe", "id": "spiffe://omega.local/alice"}],
+		  "subject":  {"type": "Spiffe"},
+		  "action":   {"name": "GET"},
+		  "resource": {"type": "HttpPath", "id": "/api/foo"}
+		}`},
+		{"resource", "/access/v1/search/resource", `{
+		  "resources": [{"type": "HttpPath", "id": "/api/foo"}],
+		  "resource":  {"type": "HttpPath"},
+		  "subject":   {"type": "Spiffe", "id": "spiffe://omega.local/alice"},
+		  "action":    {"name": "GET"}
+		}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, raw := postSearch(t, srv, tc.path, tc.body)
+			if code != http.StatusBadRequest {
+				t.Fatalf("status: got %d want 400 (body=%s)", code, raw)
+			}
+			if !bytes.Contains(raw, []byte("not both")) {
+				t.Errorf("error should say the two are exclusive, got %s", raw)
+			}
+		})
+	}
+}
+
 // Section 8.2: every field except the token must be identical across a
 // paginated sequence, and the PDP SHOULD error when one changed.
 func TestSearchPageTokenIsBoundToItsRequest(t *testing.T) {

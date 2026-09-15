@@ -1063,6 +1063,16 @@ func searchSpace[T any](
 	return space[start:end], &SearchPageResponse{NextToken: next}, nil
 }
 
+// errBothSearchSpaces rejects a request that names its search space
+// twice. Picking one silently would be deterministic but would answer a
+// question the caller did not unambiguously ask, and a PEP that filled
+// in both because it misread which field this PDP wants would never
+// find out.
+func errBothSearchSpaces(dimension, patternField string) error {
+	return fmt.Errorf("%s: supply either %q (an explicit candidate list) or %q (the AuthZEN type-only pattern), not both",
+		dimension, dimension, patternField)
+}
+
 func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 	var req SubjectSearchRequest
 	if !decodeJSONBody(w, r, &req) {
@@ -1078,6 +1088,10 @@ func (s *Server) searchSubject(w http.ResponseWriter, r *http.Request) {
 	patternType := ""
 	if req.Subject != nil {
 		patternType = req.Subject.Type
+	}
+	if len(req.Subjects) > 0 && req.Subject != nil {
+		writeErr(w, http.StatusBadRequest, errBothSearchSpaces("subjects", "subject"))
+		return
 	}
 	window, page, err := searchSpace(s, "subjects", patternType, patternType != "",
 		req.Subjects, func() []policy.Entity { return s.policy.EntitiesOfType(patternType) },
@@ -1131,6 +1145,10 @@ func (s *Server) searchResource(w http.ResponseWriter, r *http.Request) {
 	patternType := ""
 	if req.Resource != nil {
 		patternType = req.Resource.Type
+	}
+	if len(req.Resources) > 0 && req.Resource != nil {
+		writeErr(w, http.StatusBadRequest, errBothSearchSpaces("resources", "resource"))
+		return
 	}
 	window, page, err := searchSpace(s, "resources", patternType, patternType != "",
 		req.Resources, func() []policy.Entity { return s.policy.EntitiesOfType(patternType) },
