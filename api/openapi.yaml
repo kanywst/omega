@@ -338,16 +338,20 @@ paths:
       operationId: getAuthzenDiscovery
       summary: AuthZEN 1.0 discovery document.
       description: |
-        Returns the [OpenID AuthZEN 1.0 §8](https://openid.net/specs/authorization-api-1_0.html)
-        discovery document. The PDP base URL is `--issuer-url` -
-        canonical, validated `https`, no query/fragment - so a PEP
-        consuming this document cannot be redirected to an
-        attacker-controlled URL through a spoofed `Host` header.
-        Returns `404 Not Found` when `omega server` was started
-        without `--issuer-url`, matching the OIDC discovery handler.
-        Only the endpoints Omega implements are advertised - the
-        three optional Search APIs are omitted on purpose (per §8
-        their absence signals "not implemented").
+        Returns the [OpenID AuthZEN 1.0 §9](https://openid.net/specs/authorization-api-1_0-final.html)
+        Policy Decision Point metadata document. The PDP base URL is
+        `--issuer-url` - canonical, validated `https`, no
+        query/fragment - so a PEP consuming this document cannot be
+        redirected to an attacker-controlled URL through a spoofed
+        `Host` header. Returns `404 Not Found` when `omega server` was
+        started without `--issuer-url`, matching the OIDC discovery
+        handler.
+
+        Only the endpoints Omega implements are advertised; §9.1.1
+        notes that an absent parameter is sufficient for a PEP to
+        conclude the PDP cannot serve that API. All three Search
+        endpoints are advertised, under the registered
+        `search_<dimension>_endpoint` names.
       responses:
         "200":
           description: AuthZEN discovery document.
@@ -397,8 +401,8 @@ paths:
       operationId: evaluateAccessBatch
       summary: AuthZEN 1.0 batch evaluation.
       description: |
-        Implements the [AuthZEN 1.0 §5.2](https://openid.net/specs/authorization-api-1_0.html)
-        batch endpoint. Top-level `subject` / `action` / `resource`
+        Implements the [AuthZEN 1.0 §7](https://openid.net/specs/authorization-api-1_0-final.html)
+        Access Evaluations (batch) endpoint. Top-level `subject` / `action` / `resource`
         / `context` act as defaults; each entry in `evaluations`
         inherits them unless it provides its own override. Each
         evaluation runs through the same policy path as the
@@ -428,7 +432,7 @@ paths:
       operationId: evaluateAccess
       summary: AuthZEN 1.0 single-decision evaluation.
       description: |
-        Implements the [OpenID AuthZEN 1.0](https://openid.net/specs/authorization-api-1_0.html)
+        Implements the [OpenID AuthZEN 1.0](https://openid.net/specs/authorization-api-1_0-final.html)
         single-decision endpoint. Cedar is the default in-process PDP.
       requestBody:
         required: true
@@ -452,15 +456,27 @@ paths:
     post:
       tags: [authzen, leader-only]
       operationId: searchSubject
-      summary: AuthZEN 1.0 Subject Search (candidate-set variant).
+      summary: AuthZEN 1.0 Subject Search (§8.4).
       description: |
-        Searches a caller-supplied list of subject candidates against
-        a fully specified `(action, resource)` pair and returns those
-        whose decision is `allow`. Omega does not maintain a global
-        principal directory, so the caller supplies the candidates
-        explicitly; the spec's §5.3.2 expressly allows the PDP to
-        error when it cannot resolve the search space, and a
-        candidate list is a strict refinement of that contract.
+        Returns the subjects that may perform the given action on the
+        given resource. Each candidate runs through the same PDP path
+        as `POST /access/v1/evaluation` and is kept only on `allow`.
+
+        The search space is named in one of two ways. `subjects` is an
+        explicit candidate list (an Omega extension, always
+        available). `subject` carrying only a `type` is the §8.4.1
+        pattern shape, and is accepted when the server runs with
+        `--authzen-search-entity-store`, in which case the space is
+        every entity of that type in the Cedar entity store. Cedar has
+        no global principal directory, so without that flag there is
+        nothing to enumerate and the pattern shape is a 400.
+
+        Paging (§8.2) applies to the search space rather than to the
+        matches, which bounds one request to `MaxSearchCandidates`
+        evaluations however large the store is. A page may therefore
+        come back with fewer results than its `limit`, or none at all,
+        while later pages still hold results - walk `next_token` until
+        it is the empty string.
       requestBody:
         required: true
         content:
@@ -483,12 +499,13 @@ paths:
     post:
       tags: [authzen, leader-only]
       operationId: searchResource
-      summary: AuthZEN 1.0 Resource Search (candidate-set variant).
+      summary: AuthZEN 1.0 Resource Search (§8.5).
       description: |
-        Searches a caller-supplied list of resource candidates against
-        a fully specified `(subject, action)` pair and returns those
-        whose decision is `allow`. Same candidate-set rationale as
-        Subject Search.
+        Returns the resources the given subject may act on with the
+        given action. Same two ways of naming the search space as
+        Subject Search: `resources` as an explicit candidate list, or
+        a type-only `resource` under
+        `--authzen-search-entity-store`.
       requestBody:
         required: true
         content:
@@ -511,12 +528,13 @@ paths:
     post:
       tags: [authzen, leader-only]
       operationId: searchAction
-      summary: AuthZEN 1.0 Action Search (candidate-set variant).
+      summary: AuthZEN 1.0 Action Search (§8.6).
       description: |
-        Searches a caller-supplied list of action candidates against
-        a fully specified `(subject, resource)` pair and returns those
-        whose decision is `allow`. Same candidate-set rationale as
-        Subject Search.
+        Returns the actions the given subject may perform on the given
+        resource. `actions` is an explicit candidate list; omitting it
+        is the §8.6.1 shape, which carries no `action` key at all, and
+        under `--authzen-search-entity-store` searches every `Action`
+        entity in the Cedar entity store.
       requestBody:
         required: true
         content:
