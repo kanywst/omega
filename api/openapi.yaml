@@ -1052,6 +1052,12 @@ components:
             would otherwise refuse to send a request the server
             accepts. Walk `page.next_token` to reach the rest.
 
+            `0` is a legal value and is not the same request as
+            omitting the field: it evaluates nothing and answers only
+            whether the search space is non-empty, via an empty
+            `results` and a `next_token` that is non-empty when more
+            candidates exist. Omitting `limit` defaults to 100.
+
     SearchPageResponse:
       type: object
       additionalProperties: false
