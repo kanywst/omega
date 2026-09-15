@@ -64,6 +64,20 @@ jobs:
       - name: end-to-end demo (hello-svid)
         run: make demo
 
+  docker-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The compose stack is the only thing that builds ui/Dockerfile.
+      # Without this job a break there is invisible until someone runs
+      # `make docker-demo` by hand, which is how COPY /app/public sat
+      # broken from the UI's first commit through v0.4.0.
+      - name: compose demo (control plane + agents + hello-svid + UI)
+        run: make docker-demo
+      - name: tear down
+        if: always()
+        run: make docker-demo-down
+
   examples:
     runs-on: ubuntu-latest
     strategy:

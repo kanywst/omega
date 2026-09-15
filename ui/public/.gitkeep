@@ -1,0 +1,4 @@
+Next.js serves this directory's contents at the site root. It is empty
+today, but ui/Dockerfile copies it into the runtime image, and Docker
+fails the build when a COPY source does not exist - so the directory has
+to be tracked even while it holds nothing.
