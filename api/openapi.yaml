@@ -1081,6 +1081,13 @@ components:
       type: object
       additionalProperties: false
       required: [action, resource]
+      # Naming the search space twice is rejected with a 400; see the
+      # two property descriptions below.
+      not:
+        required: [subjects, subject]
+        properties:
+          subjects: {}
+          subject: {}
       properties:
         subjects:
           type: array
@@ -1100,7 +1107,8 @@ components:
             read, and an `id` is ignored if present. Accepted only when
             the server runs with `--authzen-search-entity-store`, in
             which case the search space is every entity of that type in
-            the Cedar entity store. Supply either this or `subjects`.
+            the Cedar entity store. Supply either this or `subjects`;
+            sending both is a 400.
         action:
           $ref: "#/components/schemas/EvalAction"
         resource:
@@ -1127,6 +1135,11 @@ components:
       type: object
       additionalProperties: false
       required: [subject, action]
+      not:
+        required: [resources, resource]
+        properties:
+          resources: {}
+          resource: {}
       properties:
         resources:
           type: array
@@ -1140,7 +1153,7 @@ components:
           description: |
             AuthZEN 1.0 section 8.5.1 pattern shape: only `type` is
             read. Requires `--authzen-search-entity-store`. Supply
-            either this or `resources`.
+            either this or `resources`; sending both is a 400.
         subject:
           $ref: "#/components/schemas/EvalEntity"
         action:
