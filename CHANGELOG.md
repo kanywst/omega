@@ -84,6 +84,13 @@ specification rather than preferences, and callers that never sent a
   every PR so the only thing that exercises `ui/Dockerfile` is no longer
   a command someone has to remember to run.
 
+  That job then failed on its first run against a commit that had a
+  second break: `ui/package-lock.json` was missing the
+  `@next/swc-win32-x64-msvc` entry `next@16.3.5` declares, which makes
+  `npm ci` refuse the lockfile. The `ui` job runs `npm ci` and passed
+  anyway, because it pins node 22 whose npm does not check optional
+  platform entries; the compose build's node 26 does. Both are fixed.
+
 - **Enumeration walked the whole entity store on every page.**
   `MaxSearchCandidates` bounded how many candidates a request evaluated
   but not how much of the store was scanned and sorted to build that
