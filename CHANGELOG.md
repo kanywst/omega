@@ -133,6 +133,13 @@ specification rather than preferences, and callers that never sent a
   endpoints were "omitted on purpose" while the handler had always
   advertised them.
 
+### Dependencies
+
+- `github.com/cert-manager/cert-manager` 1.21.1 → 1.21.2 and
+  `golang.org/x/sys` 0.47.0 → 0.48.0, both of which ship in the binary.
+  The UI's npm dependencies and four GitHub Actions moved too, neither
+  of which affects what a consumer installs.
+
 ### Internal
 
 - **`golangci-lint` is a blocking CI step again.** It had carried
