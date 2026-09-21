@@ -8,6 +8,26 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Dependencies
+
+- `modernc.org/sqlite` 1.58.0 → 1.59.0 and
+  `sigs.k8s.io/controller-runtime` 0.25.0 → 0.25.1, both of which ship
+  in the binary, plus `modernc.org/libc` 1.75.6 → 1.75.7 pulled in
+  behind the former. Six npm packages under `ui/` and two GitHub
+  Actions (`anthropics/claude-code-action`, `github/codeql-action`
+  4.38.0 → 4.38.1) moved too, neither of which affects what a consumer
+  installs.
+
+- **`google.golang.org/grpc` stays on 1.83.2.** The grouped minor bump
+  proposed 1.84.0, which is inside the vulnerable range of
+  GHSA-2v4p-qf9q-27wj / GO-2026-6443 — a server panic reachable through
+  a missing `:authority` or `Host` header. The advisory is fixed on the
+  1.82.x and 1.83.x lines but has no fixed 1.84.x release, only an
+  unreleased 1.85.0-dev pseudo-version, so taking the bump would have
+  moved the binary off a patched version onto an unpatched one.
+  Dependabot now carries an `ignore` entry for 1.84.x, to be dropped
+  once a fixed release ships.
+
 ## [0.5.0] - 2026-09-16
 
 Brings the AuthZEN Search surface to the 1.0 Final Specification, and
