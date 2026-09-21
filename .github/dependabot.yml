@@ -12,6 +12,14 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # GHSA-2v4p-qf9q-27wj (GO-2026-6443) is fixed on the 1.82.x and 1.83.x
+      # lines but has no fixed 1.84.x release — only an unreleased 1.85.0-dev
+      # pseudo-version. Bumping off 1.83.2 moves onto a vulnerable version and
+      # fails the govulncheck job. Drop this once a fixed release ships.
+      - dependency-name: google.golang.org/grpc
+        versions:
+          - 1.84.x
 
   - package-ecosystem: github-actions
     directory: /
