@@ -10,18 +10,13 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.4.0)
+## Now (next release, post-0.5.0)
 
 - Agent-side Kubernetes workload attestor (cgroup-based pod
   introspection). The server-side `POST /v1/attest/k8s` endpoint
   has shipped (TokenReview-backed); the SPIRE-style "agent attests
   workloads by inspecting `/proc/<pid>/cgroup` then calling
   kube-apiserver" path is the remaining bit.
-- AuthZEN Search capability metadata (§9.1.2). Now that Search accepts
-  the spec's own request shape, the remaining gap on that surface is
-  `supported_capabilities`: omega declares no capability URNs, which is
-  also what blocks the `page.properties` extension point for sorting
-  and filtering.
 
 ## Next (3-6 months)
 
@@ -74,6 +69,13 @@ release as features are ready rather than on a fixed cadence; see
   committing to an in-tree implementation.
 - NIST PQC: ML-DSA / ML-KEM / SLH-DSA support for CA and JWT-SVID
   signing once Go's standard library exposes stable APIs.
+- AuthZEN PDP capability metadata (§9.1.2) and the `page.properties`
+  Search extension that depends on it. Moved here from Now in October
+  2026: the Final specification creates the "AuthZEN Policy Decision
+  Point Capabilities" registry (§12.3) with no initial entries, so
+  there is no URN omega could declare, and the spec names the metadata
+  key both `capabilities` (§9.1.2) and `supported_capabilities`
+  (§8.2.1). Revisit when the first capability is registered.
 
 ## Non-goals
 
