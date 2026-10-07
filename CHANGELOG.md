@@ -8,6 +8,18 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-07
+
+Adds the AuthZEN 1.0 evaluation semantics (§7.1.2) to batch
+evaluation, so a PEP can ask for `&&` / `||` short-circuiting instead
+of always receiving every decision.
+
+A minor rather than a patch: a batch carrying an unrecognised
+`options.evaluations_semantic` now gets a 400 where it previously got
+200, and a malformed entry anywhere in a batch fails it before any
+entry is evaluated or audited. Callers that never sent `options` and
+send well-formed batches are unaffected.
+
 ### Added
 
 - **AuthZEN evaluation semantics on `POST /access/v1/evaluations`
@@ -837,7 +849,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kanywst/omega/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kanywst/omega/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kanywst/omega/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/kanywst/omega/compare/v0.3.0...v0.3.1
