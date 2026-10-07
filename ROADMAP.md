@@ -10,13 +10,11 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.5.0)
+## Now (next release, post-0.6.0)
 
-- Agent-side Kubernetes workload attestor (cgroup-based pod
-  introspection). The server-side `POST /v1/attest/k8s` endpoint
-  has shipped (TokenReview-backed); the SPIRE-style "agent attests
-  workloads by inspecting `/proc/<pid>/cgroup` then calling
-  kube-apiserver" path is the remaining bit.
+Nothing is committed to the next release. The October 2026 pass moved
+the last two items out: the agent-side attestor to Later, and AuthZEN
+capability metadata to Tracking.
 
 ## Next (3-6 months)
 
@@ -40,6 +38,17 @@ release as features are ready rather than on a fixed cadence; see
   rotation work above).
 
 ## Later (6-12 months)
+
+- Agent-side Kubernetes workload attestor (cgroup-based pod
+  introspection). The server-side `POST /v1/attest/k8s` endpoint
+  has shipped (TokenReview-backed); the SPIRE-style "agent attests
+  workloads by inspecting `/proc/<pid>/cgroup` then calling
+  kube-apiserver" path is the remaining bit. Demoted from Now in
+  October 2026: it reimplements what a SPIRE agent's k8s workload
+  attestor already does, and the project's direction is to consume an
+  upstream SPIFFE trust domain rather than to compete with its issuing
+  and attestation side. It stays on the list for the self-issued
+  dev / eval path, not as a production substitute for SPIRE.
 
 - SCIM 2.0 provisioning endpoint for the Human subject (the OIDC
   side - `POST /v1/oidc/exchange` accepting Keycloak / Okta / Entra
