@@ -42,10 +42,10 @@ Section numbers below are the Final Specification's own. Earlier revisions of th
 | --- | --- | --- | --- |
 | 7.1 | Endpoint accepts a batch request, returns an ordered list of decisions | implemented | `evaluateAccessBatch` |
 | 7.1.1 | Top-level subject / action / resource / context act as defaults | implemented | merged in `mergeBatchEval`; per-evaluation override wins, and a required field still missing after the merge is a 400 |
-| 7.1.2 | Evaluations options | deferred | omega evaluates every entry and always returns the full parallel array; the spec's optional short-circuit semantics are not implemented |
+| 7.1.2 | Evaluations options | implemented | `options.evaluations_semantic` accepts `execute_all` (default), `deny_on_first_deny` and `permit_on_first_permit`; a short circuit truncates the response after the stopping decision, as in the spec's examples. Other `options` keys are ignored; an unknown semantic is a 400 rather than a silent `execute_all`. Every entry is merged and validated before the first is evaluated, so whether a malformed entry fails the batch does not depend on where it would have stopped |
 | 7.2 | Response is a parallel array under `evaluations` | implemented | `BatchEvalResponse.Evaluations` preserves request order |
 | 7.2 | Maximum batch size is implementation-defined | implemented | capped at 100 per `MaxBatchEvaluations`; `maxItems: 100` reflected in the OpenAPI schema |
-| — | Per-decision audit (implementation-defined) | implemented | one `access.evaluate` audit row per merged sub-request; payload carries `{request, response, batch:{index,size}}` |
+| — | Per-decision audit (implementation-defined) | implemented | one `access.evaluate` audit row per merged sub-request; payload carries `{request, response, batch:{index,size,semantic}}`; a short-circuited batch writes rows only for the entries it evaluated |
 
 ## §8 — Search APIs
 
@@ -68,7 +68,7 @@ Section numbers below are the Final Specification's own. Earlier revisions of th
 | Section | Requirement | Status | omega notes |
 | --- | --- | --- | --- |
 | 9.1.1 | Endpoint parameters use the registered names | implemented | `policy_decision_point`, `access_evaluation_endpoint`, `access_evaluations_endpoint`, `search_subject_endpoint`, `search_resource_endpoint`, `search_action_endpoint`. Through 0.4.0 the three Search names were emitted reversed (`subject_search_endpoint`), which §9.1.1 notes is indistinguishable to a PEP from a PDP that cannot serve Search at all |
-| 9.1.2 | Capabilities parameters | deferred | omega does not advertise `supported_capabilities`; it declares no capability URNs, and the `page.properties` extension point that would need one is not implemented |
+| 9.1.2 | Capabilities parameters | deferred | omega does not advertise capabilities; it declares no capability URNs, and the `page.properties` extension point that would need one is not implemented. Nothing is registered to declare yet: the Final text creates the §12.3 "AuthZEN Policy Decision Point Capabilities" registry with a template but no initial entries. The spec also names the parameter two ways — `capabilities` in §9.1.2 and §12.2, `supported_capabilities` in §8.2.1 — so the first registered capability will have to settle which key a PEP reads |
 | 9.1.3 | Signature parameter | deferred | metadata is served unsigned |
 | 9.2 | Metadata published at `/.well-known/authzen-configuration` | implemented | the PDP base is `--issuer-url` (canonical, validated `https`); the handler returns `404` when it is not set, so the base cannot be sourced from a spoofed `Host` header |
 

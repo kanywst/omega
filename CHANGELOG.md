@@ -8,6 +8,38 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **AuthZEN evaluation semantics on `POST /access/v1/evaluations`
+  (§7.1.2).** `options.evaluations_semantic` now accepts
+  `deny_on_first_deny` and `permit_on_first_permit` alongside the
+  default `execute_all`. Under a short-circuit semantic evaluation stops
+  at the first deny (or permit), the response array ends with that
+  decision as in the specification's examples, and the entries after
+  it are neither evaluated nor written to the audit chain. Each audit
+  row's `batch` object now carries `semantic`, so a batch of size N with
+  fewer than N rows reads as a short circuit rather than as lost events.
+  Through 0.5.0 the `options` object was silently ignored, so a PEP
+  asking for `&&` semantics got every decision back.
+
+  An unrecognised semantic is a 400 rather than a fallback to
+  `execute_all`, for the same reason: a PEP that asked to stop early
+  must not act on decisions it never asked to have made. Other keys in
+  `options` are accepted and ignored, as §7.1.2 describes the object as
+  open-ended.
+
+### Changed
+
+- **A batch is validated in full before anything is evaluated.** A
+  malformed entry — one still missing `subject`, `action` or `resource`
+  after the top-level defaults are applied, an entity without a `type`
+  or `id`, or a `context` Cedar cannot represent — was already a 400,
+  but it was reported only when the loop reached it, after the entries
+  ahead of it had been evaluated and audited. The checks now run through
+  the same `policy.Validate` that `Evaluate` uses. All entries are now merged first, so a
+  malformed batch leaves no audit rows, and whether it fails does not
+  depend on where a short-circuit semantic would have stopped.
+
 ### Dependencies
 
 - `modernc.org/sqlite` 1.58.0 → 1.59.0 and

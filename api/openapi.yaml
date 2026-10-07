@@ -408,6 +408,14 @@ paths:
         evaluation runs through the same policy path as the
         single-decision endpoint and produces one audit-log row,
         in the same order as the request.
+
+        `options.evaluations_semantic` (§7.1.2) selects
+        `execute_all` (the default), `deny_on_first_deny`, or
+        `permit_on_first_permit`. Under the two short-circuit
+        semantics evaluation stops at the first deny (resp. permit),
+        the response array ends with that decision, and the entries
+        after it are neither evaluated nor audited. Every entry is
+        still validated before the first is evaluated.
       requestBody:
         required: true
         content:
@@ -1360,6 +1368,23 @@ components:
             client.
           items:
             $ref: "#/components/schemas/BatchEvalSubrequest"
+        options:
+          $ref: "#/components/schemas/BatchEvalOptions"
+
+    BatchEvalOptions:
+      type: object
+      additionalProperties: true
+      description: |
+        AuthZEN 1.0 §7.1.2 execution options. Keys other than
+        `evaluations_semantic` are accepted and ignored.
+      properties:
+        evaluations_semantic:
+          type: string
+          enum: [execute_all, deny_on_first_deny, permit_on_first_permit]
+          default: execute_all
+          description: |
+            An unrecognised value is `400 Bad Request` rather than a
+            fallback to `execute_all`.
 
     BatchEvalResponse:
       type: object
@@ -1368,6 +1393,10 @@ components:
       properties:
         evaluations:
           type: array
+          description: |
+            One decision per evaluated entry, in request order. Under a
+            short-circuit semantic this is shorter than the request and
+            its last element is the decision that stopped the batch.
           items:
             $ref: "#/components/schemas/EvalResponse"
 

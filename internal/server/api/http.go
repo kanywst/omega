@@ -739,10 +739,45 @@ type BatchEvalRequest struct {
 	Resource    *policy.Entity        `json:"resource,omitempty"`
 	Context     map[string]any        `json:"context,omitempty"`
 	Evaluations []BatchEvalSubrequest `json:"evaluations"`
+	Options     *BatchEvalOptions     `json:"options,omitempty"`
+}
+
+// BatchEvalOptions is the `options` object of AuthZEN 1.0 §7.1.2. The
+// spec makes it a general-purpose bag of PEP-supplied execution hints,
+// so keys omega does not know are ignored rather than rejected.
+type BatchEvalOptions struct {
+	EvaluationsSemantic string `json:"evaluations_semantic,omitempty"`
+}
+
+// AuthZEN 1.0 §7.1.2.1 evaluation semantics.
+const (
+	SemanticExecuteAll          = "execute_all"
+	SemanticDenyOnFirstDeny     = "deny_on_first_deny"
+	SemanticPermitOnFirstPermit = "permit_on_first_permit"
+)
+
+// batchSemantic resolves the requested semantic. An unknown value is an
+// error rather than a fallback to execute_all: a PEP asking for `&&` or
+// `||` behaviour reads a short response as "stopped here", and silently
+// handing it the full array would make it act on a decision it never
+// asked to have evaluated.
+func batchSemantic(opts *BatchEvalOptions) (string, error) {
+	if opts == nil || opts.EvaluationsSemantic == "" {
+		return SemanticExecuteAll, nil
+	}
+	switch s := opts.EvaluationsSemantic; s {
+	case SemanticExecuteAll, SemanticDenyOnFirstDeny, SemanticPermitOnFirstPermit:
+		return s, nil
+	default:
+		return "", fmt.Errorf("options.evaluations_semantic: unsupported value %q (want %s, %s or %s)",
+			s, SemanticExecuteAll, SemanticDenyOnFirstDeny, SemanticPermitOnFirstPermit)
+	}
 }
 
 // BatchEvalResponse mirrors AuthZEN 1.0 §5.2: a parallel array of
-// per-evaluation decisions in the same order as the request.
+// per-evaluation decisions in the same order as the request. Under a
+// short-circuit semantic the array is truncated after the decision that
+// stopped the batch, as in the §7.1.2.1 examples.
 type BatchEvalResponse struct {
 	Evaluations []policy.EvalResponse `json:"evaluations"`
 }
@@ -783,6 +818,34 @@ func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
 		),
 	)
 	defer batchSpan.End()
+	semantic, err := batchSemantic(req.Options)
+	if err != nil {
+		batchSpan.RecordError(err)
+		batchSpan.SetStatus(codes.Error, "options")
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	batchSpan.SetAttributes(attribute.String("authzen.batch.semantic", semantic))
+	// Every entry is merged and validated before any is evaluated.
+	// Under a short-circuit semantic the entries past the stopping
+	// point are never evaluated, and whether a malformed one there is a
+	// 400 must not depend on the decisions ahead of it. It also keeps a
+	// malformed batch from leaving audit rows for the entries that
+	// preceded it.
+	merged := make([]policy.EvalRequest, len(req.Evaluations))
+	for i, sub := range req.Evaluations {
+		m, err := mergeBatchEval(req, sub)
+		if err == nil {
+			err = policy.Validate(m)
+		}
+		if err != nil {
+			batchSpan.RecordError(err)
+			batchSpan.SetStatus(codes.Error, "validate")
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("evaluations[%d]: %w", i, err))
+			return
+		}
+		merged[i] = m
+	}
 
 	// NOTE on serial processing: each sub-request appends one audit
 	// row, and AppendAudit serialises on a process-wide mutex so the
@@ -791,17 +854,10 @@ func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
 	// last audit row commits). The MaxBatchEvaluations cap bounds the
 	// worst case; a true throughput optimisation would be a bulk
 	// AppendAudit at the storage layer, tracked as a follow-up.
-	out := BatchEvalResponse{Evaluations: make([]policy.EvalResponse, 0, len(req.Evaluations))}
-	for i, sub := range req.Evaluations {
-		merged, err := mergeBatchEval(req, sub)
-		if err != nil {
-			batchSpan.RecordError(err)
-			batchSpan.SetStatus(codes.Error, "merge")
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("evaluations[%d]: %w", i, err))
-			return
-		}
+	out := BatchEvalResponse{Evaluations: make([]policy.EvalResponse, 0, len(merged))}
+	for i, m := range merged {
 		start := time.Now()
-		resp, err := s.policy.Evaluate(merged)
+		resp, err := s.policy.Evaluate(m)
 		metrics.DecisionLatency.Observe(time.Since(start).Seconds())
 		if err != nil {
 			batchSpan.RecordError(err)
@@ -816,15 +872,23 @@ func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
 		metrics.Decisions.WithLabelValues(decision).Inc()
 		s.audit(ctx, storage.AuditEvent{
 			Kind:     "access.evaluate",
-			Subject:  merged.Subject.ID,
+			Subject:  m.Subject.ID,
 			Decision: decision,
 			Payload: mustJSON(map[string]any{
-				"request":  merged,
+				"request":  m,
 				"response": resp,
-				"batch":    map[string]any{"index": i, "size": len(req.Evaluations)},
+				// semantic is recorded so that a batch of size N with
+				// fewer than N rows in the chain reads as a short
+				// circuit, not as lost audit events.
+				"batch": map[string]any{"index": i, "size": len(req.Evaluations), "semantic": semantic},
 			}),
 		})
 		out.Evaluations = append(out.Evaluations, resp)
+		if (semantic == SemanticDenyOnFirstDeny && !resp.Decision) ||
+			(semantic == SemanticPermitOnFirstPermit && resp.Decision) {
+			batchSpan.SetAttributes(attribute.Int("authzen.batch.evaluated", i+1))
+			break
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
