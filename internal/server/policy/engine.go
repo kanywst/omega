@@ -210,21 +210,9 @@ func (e *Engine) ActionNames() []string {
 // AuthZEN decision. Missing subject/resource type or id is treated as a
 // validation error rather than a silent deny.
 func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
-	if err := validate(req); err != nil {
-		return EvalResponse{}, err
-	}
-
-	principalUID := cedar.NewEntityUID(cedar.EntityType(req.Subject.Type), cedar.String(req.Subject.ID))
-	resourceUID := cedar.NewEntityUID(cedar.EntityType(req.Resource.Type), cedar.String(req.Resource.ID))
-	ctxRecord, err := recordFromMap(req.Context)
+	cedarReq, overlays, err := prepare(req)
 	if err != nil {
-		return EvalResponse{}, fmt.Errorf("context: %w", err)
-	}
-	cedarReq := cedar.Request{
-		Principal: principalUID,
-		Action:    cedar.NewEntityUID("Action", cedar.String(req.Action.Name)),
-		Resource:  resourceUID,
-		Context:   ctxRecord,
+		return EvalResponse{}, err
 	}
 
 	e.mu.RLock()
@@ -238,10 +226,6 @@ func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
 	// entities from LoadDir win on UID collision (we only fill in attrs
 	// when the operator did not already define the entity).
 	ents := baseEnts
-	overlays, err := requestEntities(principalUID, req.Subject.Attrs, resourceUID, req.Resource.Attrs)
-	if err != nil {
-		return EvalResponse{}, err
-	}
 	if len(overlays) > 0 {
 		ents = baseEnts.Clone()
 		for uid, ent := range overlays {
@@ -258,6 +242,38 @@ func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
 		resp.Reasons = append(resp.Reasons, string(r.PolicyID))
 	}
 	return resp, nil
+}
+
+// Validate reports whether Evaluate would reject req as malformed,
+// without evaluating it. It lets a batch caller reject a bad entry
+// before any entry has been decided or audited.
+func Validate(req EvalRequest) error {
+	_, _, err := prepare(req)
+	return err
+}
+
+// prepare is every input check Evaluate performs, producing the Cedar
+// request and the per-request entity overlays it evaluates against.
+func prepare(req EvalRequest) (cedar.Request, cedar.EntityMap, error) {
+	if err := validate(req); err != nil {
+		return cedar.Request{}, nil, err
+	}
+	principalUID := cedar.NewEntityUID(cedar.EntityType(req.Subject.Type), cedar.String(req.Subject.ID))
+	resourceUID := cedar.NewEntityUID(cedar.EntityType(req.Resource.Type), cedar.String(req.Resource.ID))
+	ctxRecord, err := recordFromMap(req.Context)
+	if err != nil {
+		return cedar.Request{}, nil, fmt.Errorf("context: %w", err)
+	}
+	overlays, err := requestEntities(principalUID, req.Subject.Attrs, resourceUID, req.Resource.Attrs)
+	if err != nil {
+		return cedar.Request{}, nil, err
+	}
+	return cedar.Request{
+		Principal: principalUID,
+		Action:    cedar.NewEntityUID("Action", cedar.String(req.Action.Name)),
+		Resource:  resourceUID,
+		Context:   ctxRecord,
+	}, overlays, nil
 }
 
 func validate(r EvalRequest) error {

@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -399,6 +400,130 @@ func TestHTTPAccessEvaluationsRejectsIncompleteSubrequest(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status: got %d want 400", resp.StatusCode)
+	}
+}
+
+// The three entries decide allow, deny, allow, which is the §7.1.2.1
+// example: each semantic stops at a different point in that sequence.
+func TestHTTPAccessEvaluationsSemantics(t *testing.T) {
+	pdp := policy.New()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.cedar"), []byte(`permit (
+  principal == Spiffe::"spiffe://omega.local/example/web",
+  action == Action::"GET",
+  resource
+) when { resource == HttpPath::"/doc/1" || resource == HttpPath::"/doc/3" };
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if err := pdp.LoadDir(dir); err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+	srv := newTestServerWithPolicy(t, pdp)
+
+	cases := []struct {
+		name    string
+		options string
+		want    []bool
+	}{
+		{"omitted defaults to execute_all", ``, []bool{true, false, true}},
+		{"empty options object", `"options": {},`, []bool{true, false, true}},
+		{"execute_all", `"options": {"evaluations_semantic": "execute_all"},`, []bool{true, false, true}},
+		{"deny_on_first_deny", `"options": {"evaluations_semantic": "deny_on_first_deny"},`, []bool{true, false}},
+		{"permit_on_first_permit", `"options": {"evaluations_semantic": "permit_on_first_permit"},`, []bool{true}},
+		{"unknown option keys are ignored", `"options": {"evaluations_semantic": "deny_on_first_deny", "another_option": "value"},`, []bool{true, false}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{
+  "subject": {"type":"Spiffe","id":"spiffe://omega.local/example/web"},
+  "action":  {"name":"GET"},
+  ` + tc.options + `
+  "evaluations": [
+    {"resource": {"type":"HttpPath","id":"/doc/1"}},
+    {"resource": {"type":"HttpPath","id":"/doc/2"}},
+    {"resource": {"type":"HttpPath","id":"/doc/3"}}
+  ]
+}`)
+			resp, err := http.Post(srv.URL+"/access/v1/evaluations", "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("post: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				raw, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status: got %d want 200 (body=%s)", resp.StatusCode, raw)
+			}
+			var out api.BatchEvalResponse
+			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			got := make([]bool, len(out.Evaluations))
+			for i, e := range out.Evaluations {
+				got[i] = e.Decision
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("decisions: got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Under a short-circuit semantic the stopping point depends on the
+// decisions, so a malformed entry past it must still fail the batch
+// rather than going unnoticed because it was never reached.
+// The first entry is denied by the empty policy set, so each of these
+// batches would stop before reaching the malformed second entry.
+func TestHTTPAccessEvaluationsSemanticValidatesEveryEntry(t *testing.T) {
+	srv := newTestServer(t)
+	cases := map[string]string{
+		"missing resource after merge": `{}`,
+		"resource without id":          `{"resource": {"type":"HttpPath"}}`,
+		"context Cedar cannot hold":    `{"resource": {"type":"HttpPath","id":"/"}, "context": {"x": 1.5}}`,
+	}
+	for name, second := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := []byte(`{
+  "subject": {"type":"Spiffe","id":"spiffe://omega.local/x"},
+  "action":  {"name":"GET"},
+  "options": {"evaluations_semantic": "deny_on_first_deny"},
+  "evaluations": [
+    {"resource": {"type":"HttpPath","id":"/"}},
+    ` + second + `
+  ]
+}`)
+			resp, err := http.Post(srv.URL+"/access/v1/evaluations", "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("post: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				raw, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status: got %d want 400 (body=%s)", resp.StatusCode, raw)
+			}
+		})
+	}
+}
+
+func TestHTTPAccessEvaluationsRejectsUnknownSemantic(t *testing.T) {
+	srv := newTestServer(t)
+	body := []byte(`{
+  "subject": {"type":"Spiffe","id":"spiffe://omega.local/x"},
+  "action":  {"name":"GET"},
+  "options": {"evaluations_semantic": "deny_on_first_permit"},
+  "evaluations": [{"resource": {"type":"HttpPath","id":"/"}}]
+}`)
+	resp, err := http.Post(srv.URL+"/access/v1/evaluations", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(raw), "evaluations_semantic") {
+		t.Errorf("error body should name the option: %s", raw)
 	}
 }
 
