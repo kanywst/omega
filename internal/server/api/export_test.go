@@ -1,6 +1,11 @@
 package api
 
-import "time"
+import (
+	"errors"
+	"time"
+
+	"github.com/kanywst/omega/internal/server/storage"
+)
 
 // SameTargetURIForTest exposes sameTargetURI to the external test package.
 var SameTargetURIForTest = sameTargetURI
@@ -33,4 +38,14 @@ func ReplayOwnerQuotaForTest(quota, n int) (ownerAccepted int, otherAccepted boo
 	}
 	otherAccepted, _ = c.firstUseBy("quiet", "k", now)
 	return ownerAccepted, otherAccepted
+}
+
+// FailAuditForTest makes every audit append of the given kind fail.
+func (s *Server) FailAuditForTest(kind string) {
+	s.auditFault = func(ev storage.AuditEvent) error {
+		if ev.Kind == kind {
+			return errors.New("injected audit failure")
+		}
+		return nil
+	}
 }

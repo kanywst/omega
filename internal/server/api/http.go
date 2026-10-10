@@ -42,21 +42,23 @@ var tracer = tracing.Tracer("github.com/kanywst/omega/internal/server/api")
 var errIssuanceDisabledUpstream = errors.New("issuance disabled: omega is in spire-upstream identity mode; obtain SVIDs from the upstream SPIFFE issuer")
 
 type Server struct {
-	store                   *storage.Store
-	ca                      identity.Source
-	policy                  *policy.Engine
-	federation              *federation.Registry
-	enforceExchangePolicy   bool
-	k8sAttestor             *attest.K8sAttestor
-	k8sSVIDTemplate         string
-	oidc                    *oidc.Registry
-	idJAG                   *oidc.Registry
-	idJAGMaxAssertionTTL    time.Duration
-	idJAGMTLS               bool
-	idJAGJWT                bool
-	dpopReplay              *replayCache
-	clientAssertionReplay   *replayCache
-	domains                 domainState
+	store                 *storage.Store
+	ca                    identity.Source
+	policy                *policy.Engine
+	federation            *federation.Registry
+	enforceExchangePolicy bool
+	k8sAttestor           *attest.K8sAttestor
+	k8sSVIDTemplate       string
+	oidc                  *oidc.Registry
+	idJAG                 *oidc.Registry
+	idJAGMaxAssertionTTL  time.Duration
+	idJAGMTLS             bool
+	idJAGJWT              bool
+	dpopReplay            *replayCache
+	clientAssertionReplay *replayCache
+	domains               domainState
+	// auditFault, set only by tests, makes appendAudit fail.
+	auditFault              func(storage.AuditEvent) error
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
 	entityStoreSearch       bool
@@ -454,6 +456,11 @@ func (s *Server) audit(ctx context.Context, ev storage.AuditEvent) {
 // appendAudit is audit for callers that must not proceed when the
 // record could not be written.
 func (s *Server) appendAudit(ctx context.Context, ev storage.AuditEvent) error {
+	if s.auditFault != nil {
+		if err := s.auditFault(ev); err != nil {
+			return err
+		}
+	}
 	ctx, span := tracer.Start(ctx, "audit.append",
 		trace.WithAttributes(
 			attribute.String("audit.kind", ev.Kind),
