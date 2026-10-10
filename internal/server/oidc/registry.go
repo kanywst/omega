@@ -42,6 +42,11 @@ type IDPConfig struct {
 	// caller are documented next to its render function; the
 	// registry never interprets the template itself.
 	SPIFFEIDTemplate string
+	// RequiredTyp, when set, is the JOSE `typ` the token must carry
+	// (RFC 8725 §3.11), so an ID token cannot pass as an ID-JAG.
+	RequiredTyp string
+	// ExactAudience requires `aud` to hold exactly one value.
+	ExactAudience bool
 }
 
 // Validate returns nil iff the config is internally consistent.
@@ -150,6 +155,39 @@ func (r *Registry) Validate(ctx context.Context, idpName, idToken string) (*Clai
 		return nil, fmt.Errorf("%w: %q", ErrUnknownIDP, idpName)
 	}
 	return c.validate(ctx, idToken)
+}
+
+// ValidateByIssuer routes on the unverified `iss` to pick the IdP, then
+// fully validates against it; a forged `iss` only selects keys that fail
+// verification. An issuer configured twice is rejected as ambiguous.
+func (r *Registry) ValidateByIssuer(ctx context.Context, token string) (*Claims, error) {
+	parsed, err := jwt.ParseSigned(token, supportedSigAlgs)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: parse token: %w", err)
+	}
+	var peek struct {
+		Issuer string `json:"iss"`
+	}
+	if err := parsed.UnsafeClaimsWithoutVerification(&peek); err != nil {
+		return nil, fmt.Errorf("oidc: read token issuer: %w", err)
+	}
+	if peek.Issuer == "" {
+		return nil, errors.New("oidc: token has no iss claim")
+	}
+	var match *idpClient
+	for _, c := range r.idps {
+		if c.cfg.Issuer != peek.Issuer {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("oidc: issuer %q is configured on more than one idp", peek.Issuer)
+		}
+		match = c
+	}
+	if match == nil {
+		return nil, fmt.Errorf("%w: no idp is configured for issuer %q", ErrUnknownIDP, peek.Issuer)
+	}
+	return match.validate(ctx, token)
 }
 
 // idpClient handles discovery, JWKS fetching, and validation for one
@@ -281,6 +319,11 @@ func (c *idpClient) validate(ctx context.Context, idToken string) (*Claims, erro
 	if err != nil {
 		return nil, fmt.Errorf("oidc: idp %q: parse id_token: %w", c.cfg.Name, err)
 	}
+	if c.cfg.RequiredTyp != "" {
+		if err := checkTyp(parsed.Headers, c.cfg.RequiredTyp); err != nil {
+			return nil, fmt.Errorf("oidc: idp %q: %w", c.cfg.Name, err)
+		}
+	}
 	jwks := c.jwksSnapshot()
 	// Look up the kid; refresh once on miss to handle key rotation.
 	var keyFound bool
@@ -317,6 +360,9 @@ func (c *idpClient) validate(ctx context.Context, idToken string) (*Claims, erro
 	}, 30*time.Second); err != nil {
 		return nil, fmt.Errorf("oidc: idp %q: claim validation: %w", c.cfg.Name, err)
 	}
+	if c.cfg.ExactAudience && len(std.Audience) != 1 {
+		return nil, fmt.Errorf("oidc: idp %q: aud must contain exactly one value, got %d", c.cfg.Name, len(std.Audience))
+	}
 	cl := &Claims{
 		Issuer:   std.Issuer,
 		Subject:  std.Subject,
@@ -340,4 +386,28 @@ func (c *idpClient) validate(ctx context.Context, idToken string) (*Claims, erro
 		cl.Name = s
 	}
 	return cl, nil
+}
+
+// checkTyp requires every JOSE header to carry the wanted typ.
+func checkTyp(headers []jose.Header, want string) error {
+	if len(headers) == 0 {
+		return errors.New("token has no JOSE header")
+	}
+	for _, h := range headers {
+		got, _ := h.ExtraHeaders[jose.HeaderType].(string)
+		if !typMatches(got, want) {
+			return fmt.Errorf("typ header %q does not match required %q", got, want)
+		}
+	}
+	return nil
+}
+
+// typMatches compares per RFC 7515 §4.1.9: case-insensitive, optional
+// "application/" prefix.
+func typMatches(got, want string) bool {
+	norm := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		return strings.TrimPrefix(s, "application/")
+	}
+	return got != "" && norm(got) == norm(want)
 }
