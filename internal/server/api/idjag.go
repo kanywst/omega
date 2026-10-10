@@ -32,15 +32,20 @@ const (
 	DefaultIDJAGMaxAssertionTTL = 5 * time.Minute
 
 	maxFormBodyBytes = 64 << 10
+	// clientAssertionQuota caps the single-use assertions one client can
+	// have in the replay cache at once, so one client cannot exhaust it.
+	clientAssertionQuota = 1000
 )
 
 // IDJAGConfig wires the ID-JAG grant. Registry entries must set
 // RequiredTyp = IDJAGTyp, ExactAudience, and omega's issuer URL as the
-// only audience. MTLSClientAuth decides whether spiffe_x509 is advertised.
+// only audience. MTLSClientAuth and JWTClientAuth say which client
+// authentication methods the listener lets through, for the metadata.
 type IDJAGConfig struct {
 	Registry        *oidc.Registry
 	MaxAssertionTTL time.Duration
 	MTLSClientAuth  bool
+	JWTClientAuth   bool
 }
 
 // WithIDJAG enables POST /oauth2/token and the RFC 8414 metadata.
@@ -52,6 +57,11 @@ func (s *Server) WithIDJAG(cfg IDJAGConfig) *Server {
 		s.idJAGMaxAssertionTTL = DefaultIDJAGMaxAssertionTTL
 	}
 	s.idJAGMTLS = cfg.MTLSClientAuth
+	s.idJAGJWT = cfg.JWTClientAuth
+	// A client assertion lives at most MaxAssertionTTL, and go-jose
+	// accepts it up to 30s past exp, so remember its jti a little longer.
+	s.clientAssertionReplay = newReplayCache(s.idJAGMaxAssertionTTL + time.Minute)
+	s.clientAssertionReplay.perOwner = clientAssertionQuota
 	return s
 }
 
@@ -112,6 +122,9 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	// chain; the route's request metrics still count the 401s.
 	clientID, authMethod, oerr := s.authenticateSPIFFEClient(r, form, issuer)
 	if oerr != nil {
+		if !clientID.IsZero() {
+			s.auditIDJAG(r, "deny", clientID.String(), "", map[string]any{"client_auth": authMethod, "error": oerr.code, "detail": oerr.desc})
+		}
 		writeOAuthErr(w, oerr)
 		return
 	}
@@ -343,8 +356,9 @@ func parseTokenForm(w http.ResponseWriter, r *http.Request) (url.Values, *oauthE
 
 // authenticateSPIFFEClient accepts exactly one of spiffe_x509 (verified
 // mTLS client SVID) or spiffe_jwt (JWT-SVID client_assertion whose sole
-// aud is omega's issuer). Under --require-auth only spiffe_x509 binds the
-// client: there, every connection already carries a verified SVID.
+// aud is omega's issuer). spiffe_jwt binds the client only under
+// --require-auth, where a JWT-SVID without act can come from the client
+// alone; reaching it there needs --client-cert-optional.
 func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issuer string) (spiffeid.ID, string, *oauthError) {
 	assertionType := form.Get("client_assertion_type")
 	assertion := form.Get("client_assertion")
@@ -359,8 +373,11 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		if hasCert {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusBadRequest, "invalid_request", "use one client authentication method: mTLS or client_assertion, not both")
 		}
-		if s.requireAuth {
-			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "this server authenticates clients by mTLS X.509-SVID only")
+		// Only accept the method the operator enabled and the metadata
+		// advertises, even if an embedder fronts this server with a laxer
+		// TLS ClientAuth than the CLI configures.
+		if !s.idJAGJWT {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "spiffe_jwt client authentication is not enabled on this server")
 		}
 		if assertionType != clientAssertionTypeSPIFFE {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion_type must be %q", clientAssertionTypeSPIFFE)
@@ -377,8 +394,9 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		if !okExp || !okIat {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must carry iat and exp")
 		}
-		if jti, _ := claims["jti"].(string); jti == "" {
-			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must carry jti")
+		jti, _ := claims["jti"].(string)
+		if jti == "" || len(jti) > dpopMaxJTI {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must carry a jti of at most %d bytes", dpopMaxJTI)
 		}
 		if life := exp.Sub(iat); life > s.idJAGMaxAssertionTTL {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion lifetime %s exceeds the accepted maximum %s", life, s.idJAGMaxAssertionTTL)
@@ -393,6 +411,20 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		}
 		if _, ok := claims["cnf"]; ok {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must not carry cnf")
+		}
+		// A JWT-SVID assertion is a bearer credential, so it is single use:
+		// a leaked one cannot be replayed within its lifetime.
+		fresh, err := s.clientAssertionReplay.firstUseBy(parsed.String(), jti, time.Now())
+		if errors.Is(err, errReplayOwnerQuota) {
+			// Authenticated by signature already, so hand the ID back for
+			// the audit row.
+			return parsed, authMethodSPIFFEJWT, newOAuthErr(http.StatusTooManyRequests, "invalid_request", "%s", err)
+		}
+		if err != nil {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusServiceUnavailable, "temporarily_unavailable", "%s", err)
+		}
+		if !fresh {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion has already been used")
 		}
 		id, method = parsed, authMethodSPIFFEJWT
 	case hasCert:
@@ -511,10 +543,12 @@ func (s *Server) getOAuthASMetadata(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("OAuth authorization server metadata is served only when the ID-JAG grant is configured (--id-jag-idp with --issuer-url)"))
 		return
 	}
-	// With mTLS every connection carries a cert, so only spiffe_x509 can succeed.
-	methods := []string{authMethodSPIFFEJWT}
+	var methods []string
 	if s.idJAGMTLS {
-		methods = []string{authMethodSPIFFEX509}
+		methods = append(methods, authMethodSPIFFEX509)
+	}
+	if s.idJAGJWT {
+		methods = append(methods, authMethodSPIFFEJWT)
 	}
 	writeJSON(w, http.StatusOK, OAuthASMetadata{
 		Issuer:                              iss,

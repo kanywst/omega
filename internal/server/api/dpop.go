@@ -56,6 +56,10 @@ type replayCache struct {
 	retention time.Duration
 	cur, prev map[[sha256.Size]byte]struct{}
 	rotated   time.Time
+	// perOwner, when non-zero, caps the entries one owner may hold, so a
+	// single client cannot fill the shared cache and lock others out.
+	perOwner            int
+	curOwner, prevOwner map[string]int
 }
 
 func newReplayCache(retention time.Duration) *replayCache {
@@ -73,11 +77,19 @@ var errReplayCacheFull = errors.New("replay cache is full; retry later")
 
 // firstUse records key and reports whether it had not been seen.
 func (c *replayCache) firstUse(key string, now time.Time) (bool, error) {
-	h := sha256.Sum256([]byte(key))
+	return c.firstUseBy("", key, now)
+}
+
+var errReplayOwnerQuota = errors.New("too many single-use credentials from this client; retry later")
+
+// firstUseBy is firstUse with key counted against owner's quota.
+func (c *replayCache) firstUseBy(owner, key string, now time.Time) (bool, error) {
+	h := sha256.Sum256([]byte(owner + "|" + key))
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if now.Sub(c.rotated) >= c.retention {
 		c.prev, c.cur, c.rotated = c.cur, map[[sha256.Size]byte]struct{}{}, now
+		c.prevOwner, c.curOwner = c.curOwner, map[string]int{}
 	}
 	if _, ok := c.cur[h]; ok {
 		return false, nil
@@ -85,10 +97,19 @@ func (c *replayCache) firstUse(key string, now time.Time) (bool, error) {
 	if _, ok := c.prev[h]; ok {
 		return false, nil
 	}
+	if c.perOwner > 0 && c.curOwner[owner]+c.prevOwner[owner] >= c.perOwner {
+		return false, errReplayOwnerQuota
+	}
 	if len(c.cur)+len(c.prev) >= dpopMaxReplayEntries {
 		return false, errReplayCacheFull
 	}
 	c.cur[h] = struct{}{}
+	if c.perOwner > 0 {
+		if c.curOwner == nil {
+			c.curOwner = map[string]int{}
+		}
+		c.curOwner[owner]++
+	}
 	return true, nil
 }
 

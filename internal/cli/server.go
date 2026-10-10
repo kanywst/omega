@@ -98,6 +98,7 @@ func newServerCommand() *cobra.Command {
 		idJAGIDPs                  []string
 		idJAGMaxAssertionTTL       time.Duration
 		idJAGInsecureClientBinding bool
+		clientCertOptional         bool
 		identitySource             string
 		identitySourceBundle       string
 		identitySourceJWTBundle    string
@@ -477,6 +478,7 @@ func newServerCommand() *cobra.Command {
 					Registry:        reg,
 					MaxAssertionTTL: idJAGMaxAssertionTTL,
 					MTLSClientAuth:  clientCAFile != "",
+					JWTClientAuth:   clientCAFile == "" || clientCertOptional,
 				})
 				names := reg.Names()
 				fmt.Fprintf(os.Stderr, "omega server: id-jag idps configured (%d): %s\n", len(names), strings.Join(names, ", "))
@@ -500,9 +502,12 @@ func newServerCommand() *cobra.Command {
 					k8sSVIDTemplate, k8sTokenAudiences)
 			}
 
-			tlsConf, err := buildServerTLS(tlsCertFile, tlsKeyFile, clientCAFile)
+			tlsConf, err := buildServerTLS(tlsCertFile, tlsKeyFile, clientCAFile, clientCertOptional)
 			if err != nil {
 				return err
+			}
+			if clientCertOptional && !requireAuth {
+				return errors.New("--client-cert-optional requires --require-auth: without it the handshake is the only gate on write, issuance and PDP routes, and removing it opens them to callers with no certificate")
 			}
 			if requireAuth && clientCAFile == "" {
 				return errors.New("--require-auth needs --client-ca: caller authentication verifies client SVIDs against a CA bundle (mTLS); set --client-ca (and --tls-cert/--tls-key) or leave --require-auth off")
@@ -677,7 +682,9 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&tlsKeyFile, "tls-key", "",
 		"PEM private key matching --tls-cert. Required when --tls-cert is set.")
 	cmd.Flags().StringVar(&clientCAFile, "client-ca", "",
-		"PEM CA bundle used to require and verify client certificates (mutual TLS). When set, the listener rejects any client whose certificate does not chain to this bundle. Requires --tls-cert/--tls-key. Empty (default) disables client-cert verification.")
+		"PEM CA bundle used to require and verify client certificates (mutual TLS). When set, the listener rejects any client whose certificate does not chain to this bundle, and requires a certificate on every connection unless --client-cert-optional. Requires --tls-cert/--tls-key. Empty (default) disables client-cert verification.")
+	cmd.Flags().BoolVar(&clientCertOptional, "client-cert-optional", false,
+		"with --client-ca and --require-auth, verify a client certificate when one is presented instead of requiring it on every connection. Endpoints gated by --require-auth still require a verified SPIFFE client certificate; ungated ones become reachable without one: health and leader state, GET /v1/domains, the trust and federation bundles, discovery documents, /metrics, the enrollment paths, and POST /oauth2/token, which authenticates its own client. See ADR 0012. Lets JWT-SVID clients use the spiffe_jwt method of the ID-JAG grant under --require-auth.")
 	cmd.Flags().BoolVar(&requireAuth, "require-auth", false,
 		"require an authenticated caller on every write / PDP / issuance endpoint: the request must arrive over mTLS with a verified client certificate carrying a spiffe:// URI SAN, and SVID issuance is bound to that caller (self-renewal only; minting a different identity is denied). Default false keeps today's open, unauthenticated behaviour. Requires --client-ca. Public reads (/healthz, /v1/leader, GET /v1/bundle, GET /v1/domains) and the attestation enrollment paths stay reachable. See docs/threat-model.md (S3).")
 
@@ -690,9 +697,14 @@ func newServerCommand() *cobra.Command {
 //
 // When cert+key are set it serves TLS with a 1.2 floor. When --client-ca
 // is additionally set it switches to mutual TLS: client certificates are
-// required and verified against that bundle, which is what lets the
-// application layer trust the SPIFFE URI SAN it reads off the peer cert.
-func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
+// verified against that bundle, which is what lets the application layer
+// trust the SPIFFE URI SAN it reads off the peer cert. They are required
+// on every handshake unless clientCertOptional, in which case only a
+// presented certificate is checked.
+func buildServerTLS(certFile, keyFile, clientCAFile string, clientCertOptional bool) (*tls.Config, error) {
+	if clientCertOptional && clientCAFile == "" {
+		return nil, errors.New("--client-cert-optional requires --client-ca")
+	}
 	if certFile == "" && keyFile == "" {
 		if clientCAFile != "" {
 			return nil, errors.New("--client-ca requires --tls-cert/--tls-key: client-cert verification only applies to a TLS listener")
@@ -722,6 +734,12 @@ func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error)
 		}
 		cfg.ClientCAs = pool
 		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+		if clientCertOptional {
+			// Routes that need a caller identity still demand a verified
+			// SVID through requireSPIFFEAuth; only the handshake stops
+			// insisting on one.
+			cfg.ClientAuth = tls.VerifyClientCertIfGiven
+		}
 	}
 	return cfg, nil
 }
