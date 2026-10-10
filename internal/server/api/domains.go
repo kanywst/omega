@@ -82,7 +82,21 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 		// tree goes stale and evaluation fails closed.
 		return errors.New("domains exist but the identity source reports no trust domain")
 	}
-	s.policy.SetDirectory(policy.Directory{TrustDomain: td, Domains: tree})
+	groups, err := s.store.ListGroups(ctx, "")
+	if err != nil {
+		return err
+	}
+	dir := policy.Directory{TrustDomain: td, Domains: tree, Memberships: map[string][]policy.Membership{}}
+	for _, g := range groups {
+		if _, ok := tree[g.Domain]; !ok {
+			continue
+		}
+		dir.Groups = append(dir.Groups, g.ID())
+		for _, m := range g.Members {
+			dir.Memberships[m.Principal] = append(dir.Memberships[m.Principal], policy.Membership{Group: g.ID(), ExpiresAt: m.ExpiresAt})
+		}
+	}
+	s.policy.SetDirectory(dir)
 	s.domains.mu.Lock()
 	s.domains.loadedAt = time.Now()
 	s.domains.mu.Unlock()
@@ -247,7 +261,7 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
-	case errors.Is(err, storage.ErrHasChildren):
+	case errors.Is(err, storage.ErrHasChildren), errors.Is(err, storage.ErrHasGroups):
 		writeErr(w, http.StatusConflict, err)
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)

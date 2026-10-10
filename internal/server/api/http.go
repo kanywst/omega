@@ -205,6 +205,12 @@ func (s *Server) Handler() http.Handler {
 	handle("DELETE /v1/domains/{name}", gated(s.deleteDomain))
 	handle("POST /v1/domains/{name}/admins", gated(s.addDomainAdmin))
 	handle("DELETE /v1/domains/{name}/admins", gated(s.removeDomainAdmin))
+	handle("GET /v1/domains/{name}/groups", s.listGroups)
+	handle("POST /v1/domains/{name}/groups", gated(s.createGroup))
+	handle("GET /v1/domains/{name}/groups/{group}", s.getGroup)
+	handle("DELETE /v1/domains/{name}/groups/{group}", gated(s.deleteGroup))
+	handle("PUT /v1/domains/{name}/groups/{group}/members", gated(s.putGroupMember))
+	handle("DELETE /v1/domains/{name}/groups/{group}/members", gated(s.removeGroupMember))
 	handle("POST /v1/svid", issuingOnly(gated(s.issueSVID)))
 	// The attestation enrollment paths (POST /v1/attest/k8s and
 	// POST /v1/oidc/exchange) carry their own platform-rooted / external-

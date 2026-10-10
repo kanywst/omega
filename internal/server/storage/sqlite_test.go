@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kanywst/omega/internal/server/storage"
 )
@@ -178,5 +179,61 @@ func TestSQLiteDomainCreateDeleteRace(t *testing.T) {
 		}
 		_ = s.DeleteDomain(ctx, "race.child")
 		_ = s.DeleteDomain(ctx, "race")
+	}
+}
+
+func TestGroups(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateGroup(ctx, storage.Group{Domain: "media", Name: "oncall"}); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("group in a missing domain: %v", err)
+	}
+	if _, err := s.CreateDomain(ctx, storage.Domain{Name: "media"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateGroup(ctx, storage.Group{Domain: "media", Name: "On Call"}); err == nil {
+		t.Error("an invalid group name must be rejected")
+	}
+	if _, err := s.CreateGroup(ctx, storage.Group{Domain: "media", Name: "oncall"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateGroup(ctx, storage.Group{Domain: "media", Name: "oncall"}); !errors.Is(err, storage.ErrAlreadyExists) {
+		t.Fatalf("duplicate: %v", err)
+	}
+	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	if err := s.PutGroupMember(ctx, "media", "oncall", storage.GroupMember{Principal: "spiffe://td/a", ExpiresAt: exp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutGroupMember(ctx, "media", "oncall", storage.GroupMember{Principal: "spiffe://td/b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutGroupMember(ctx, "media", "nope", storage.GroupMember{Principal: "spiffe://td/b"}); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("member of a missing group: %v", err)
+	}
+	g, err := s.GetGroup(ctx, "media", "oncall")
+	if err != nil || len(g.Members) != 2 || !g.Members[0].ExpiresAt.Equal(exp) || !g.Members[1].ExpiresAt.IsZero() {
+		t.Fatalf("members: %+v %v", g, err)
+	}
+	// Re-putting a member updates its expiry instead of duplicating it.
+	if err := s.PutGroupMember(ctx, "media", "oncall", storage.GroupMember{Principal: "spiffe://td/a"}); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.GetGroup(ctx, "media", "oncall"); len(g.Members) != 2 || !g.Members[0].ExpiresAt.IsZero() {
+		t.Fatalf("expiry update: %+v", g.Members)
+	}
+	if err := s.DeleteDomain(ctx, "media"); !errors.Is(err, storage.ErrHasGroups) {
+		t.Fatalf("deleting a domain that owns groups: %v", err)
+	}
+	if err := s.RemoveGroupMember(ctx, "media", "oncall", "spiffe://td/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteGroup(ctx, "media", "oncall"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateGroup(ctx, storage.Group{Domain: "media", Name: "oncall"}); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.GetGroup(ctx, "media", "oncall"); len(g.Members) != 0 {
+		t.Errorf("a re-created group starts empty: %+v", g.Members)
 	}
 }

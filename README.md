@@ -28,7 +28,7 @@ What Omega ships today:
 - **SPIFFE federation**: trust-bundle exchange via `--federate-with`
 - **K8s integration**: `OmegaDomain` CRD and a cert-manager `Issuer` / `ClusterIssuer`
 - **AI agent delegation**: an `examples/mcp-a2a-delegation/` reference using JWT-SVID with RFC 8693 nested `act` claims, and an ID-JAG grant endpoint (`POST /oauth2/token`) that turns an enterprise IdP's Identity Assertion JWT Authorization Grant into a delegated JWT-SVID ([docs/id-jag.md](docs/id-jag.md))
-- **Delegated domains**: a domain tree (`media` → `media.news`) where each domain's admins run their own subtree, visible to policies as `principal in Domain::"media"` ([docs/domains.md](docs/domains.md))
+- **Delegated domains**: a domain tree (`media` → `media.news`) where each domain's admins run their own subtree, visible to policies as `principal in Domain::"media"` ([docs/domains.md](docs/domains.md)), and groups owned by those domains with time-bound membership, usable as `principal in Group::"media:oncall"` ([docs/groups.md](docs/groups.md))
 - **Tamper-evident audit log** with hash chain and webhook forwarding
 - **Modular**: server / agent / CLI run independently
 - **Apache-2.0**, no CLA, no BSL trap door
