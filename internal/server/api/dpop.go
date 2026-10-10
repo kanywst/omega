@@ -46,28 +46,37 @@ func dpopAlgNames() []string {
 	return out
 }
 
-// dpopReplayCache remembers proof jtis for at least twice the proof
-// window, in two generations that rotate every window so eviction costs
-// nothing per request. It is per process; the endpoints using it are
-// leader-only, so one cache sees every proof in an HA deployment.
-type dpopReplayCache struct {
+// replayCache remembers hashed keys for at least `retention`: two
+// generations rotate every `retention`, so a key recorded just before a
+// rotation still survives one full interval, and eviction costs nothing
+// per request. It is per process; the endpoints using it are
+// leader-only, so one cache sees every request in an HA deployment.
+type replayCache struct {
 	mu        sync.Mutex
+	retention time.Duration
 	cur, prev map[[sha256.Size]byte]struct{}
 	rotated   time.Time
 }
 
-func newDPoPReplayCache() *dpopReplayCache {
-	return &dpopReplayCache{cur: map[[sha256.Size]byte]struct{}{}, prev: map[[sha256.Size]byte]struct{}{}}
+func newReplayCache(retention time.Duration) *replayCache {
+	return &replayCache{retention: retention, cur: map[[sha256.Size]byte]struct{}{}, prev: map[[sha256.Size]byte]struct{}{}}
 }
 
-var errReplayCacheFull = errors.New("DPoP replay cache is full; retry later")
+// newDPoPReplayCache keeps proof jtis for the whole span a proof can be
+// valid: iat may be up to one window ahead of first use and is accepted
+// for one window after that.
+func newDPoPReplayCache() *replayCache {
+	return newReplayCache(2 * dpopProofWindow)
+}
+
+var errReplayCacheFull = errors.New("replay cache is full; retry later")
 
 // firstUse records key and reports whether it had not been seen.
-func (c *dpopReplayCache) firstUse(key string, now time.Time) (bool, error) {
+func (c *replayCache) firstUse(key string, now time.Time) (bool, error) {
 	h := sha256.Sum256([]byte(key))
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if now.Sub(c.rotated) >= dpopProofWindow {
+	if now.Sub(c.rotated) >= c.retention {
 		c.prev, c.cur, c.rotated = c.cur, map[[sha256.Size]byte]struct{}{}, now
 	}
 	if _, ok := c.cur[h]; ok {

@@ -53,7 +53,7 @@ type Server struct {
 	idJAG                   *oidc.Registry
 	idJAGMaxAssertionTTL    time.Duration
 	idJAGMTLS               bool
-	dpopReplay              *dpopReplayCache
+	dpopReplay              *replayCache
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
 	entityStoreSearch       bool

@@ -227,3 +227,23 @@ func TestSameTargetURINormalisation(t *testing.T) {
 		t.Error("the scheme must matter")
 	}
 }
+
+func TestReplayCacheKeepsKeysForTheWholeRetention(t *testing.T) {
+	t0 := time.Unix(1_000_000, 0)
+	r := time.Minute
+	got := api.ReplayFirstUseForTest(r, []struct {
+		Key string
+		At  time.Time
+	}{
+		{"a", t0},                          // first use, starts the first generation
+		{"b", t0.Add(r - time.Second)},     // recorded just before a rotation
+		{"b", t0.Add(2*r - 2*time.Second)}, // still remembered almost a full retention later
+		{"a", t0.Add(3*r + time.Second)},   // gone once a later rotation drops its generation
+	})
+	want := []bool{true, true, false, true}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("use %d: firstUse = %v, want %v (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
