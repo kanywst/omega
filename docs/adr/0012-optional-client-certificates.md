@@ -15,11 +15,13 @@ That made two things impossible under `--require-auth`:
 
 ## Decision
 
-`--client-cert-optional`, valid only with `--client-ca`, switches the listener to `tls.VerifyClientCertIfGiven`. A certificate that is presented is still verified against `--client-ca`; a connection without one is accepted.
+`--client-cert-optional`, valid only with `--client-ca` and `--require-auth`, switches the listener to `tls.VerifyClientCertIfGiven`. A certificate that is presented is still verified against `--client-ca`; a connection without one is accepted.
 
 Authorization does not move. Routes gated by `--require-auth` already check the verified chain per request (`requireSPIFFEAuth`), so they keep answering `401` without a client SVID. Ungated routes, and `POST /oauth2/token`, which authenticates its own client, become reachable without one.
 
 Under `--require-auth` a `spiffe_jwt` client assertion is a real credential: the server only mints a JWT-SVID for the caller's own identity, and the grant refuses assertions that carry `act` (delegated tokens) or `cnf` (cert-bound tokens), so a JWT-SVID for client C without `act` comes from C. The ID-JAG metadata advertises `spiffe_x509` when `--client-ca` is set and `spiffe_jwt` when the listener admits connections without a certificate.
+
+It is refused without `--require-auth`. There the handshake is the only gate on write, issuance and PDP routes, and dropping it would turn a certificate-gated server into one that mints any identity for any caller.
 
 The default is unchanged: without the flag, `--client-ca` still requires a certificate on every connection.
 
@@ -33,6 +35,7 @@ Easier:
 Harder:
 
 - With the flag, ungated routes, including `/metrics`, are reachable by anyone who can reach the listener. Operators who relied on the handshake to hide them must restrict them at the network layer or leave the flag off.
+- The enrollment paths become reachable without a certificate, as they already are on a listener without `--client-ca`. Their failed attempts append audit deny rows, and `POST /v1/attest/k8s` costs a TokenReview call per request, so an unauthenticated caller can generate both.
 - Every new ungated route is now reachable without a certificate in this mode, so the "wrap it" rule for write and PDP routes in the project guide matters more.
 
 ## Scope fit

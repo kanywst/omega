@@ -42,7 +42,8 @@ func CallerSPIFFEID(ctx context.Context) string {
 // spiffeIDFromTLS pulls the SPIFFE URI SAN out of the verified client
 // certificate. It keys off cs.VerifiedChains, which the TLS stack only
 // populates after it has actually verified the leaf against the trust
-// anchors (the configured --client-ca, via RequireAndVerifyClientCert),
+// anchors (the configured --client-ca, under RequireAndVerifyClientCert
+// or VerifyClientCertIfGiven),
 // so an unverified or self-signed peer cert can never reach the identity
 // projection even if an embedder fronts this Server with a laxer
 // ClientAuth mode. It deliberately trusts no caller-supplied header — the

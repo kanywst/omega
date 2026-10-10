@@ -308,3 +308,16 @@ func TestBuildServerTLSClientCertOptional(t *testing.T) {
 		t.Fatalf("expected optional client certs, got ClientAuth=%v", cfg.ClientAuth)
 	}
 }
+
+func TestServerCommandClientCertOptionalNeedsRequireAuth(t *testing.T) {
+	dir := t.TempDir()
+	certPath, keyPath := writeTestKeypair(t, dir)
+	cmd := newServerCommand()
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{"--data-dir", t.TempDir(), "--tls-cert", certPath, "--tls-key", keyPath, "--client-ca", certPath, "--client-cert-optional"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--client-cert-optional requires --require-auth") {
+		t.Fatalf("want a refusal without --require-auth, got %v", err)
+	}
+}
