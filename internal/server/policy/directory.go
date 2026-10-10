@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"log/slog"
 	"strings"
 
 	cedar "github.com/cedar-policy/cedar-go"
@@ -49,13 +50,18 @@ func (e *Engine) SetDirectory(d Directory) {
 }
 
 // rebuildLocked merges the static and directory entity maps and
-// reindexes them. Callers hold e.mu for writing.
+// reindexes them. Callers hold e.mu for writing. The directory wins: a
+// static entity with the same UID as a projected one would cut the
+// hierarchy (and so silently narrow a forbid), so it is ignored, loudly.
 func (e *Engine) rebuildLocked() {
 	merged := make(cedar.EntityMap, len(e.static)+len(e.directory))
-	for uid, ent := range e.directory {
+	for uid, ent := range e.static {
 		merged[uid] = ent
 	}
-	for uid, ent := range e.static {
+	for uid, ent := range e.directory {
+		if _, clash := e.static[uid]; clash {
+			slog.Warn("entities.json declares an entity the control plane projects; the control plane's wins", "entity", uid.String())
+		}
 		merged[uid] = ent
 	}
 	e.entities = merged

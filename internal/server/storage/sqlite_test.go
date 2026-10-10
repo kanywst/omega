@@ -115,13 +115,13 @@ func TestDomainHierarchyRules(t *testing.T) {
 		t.Fatalf("admins deduplicated: %+v %v", d, err)
 	}
 
-	if err := s.AddDomainAdmin(ctx, "media", "spiffe://td/c"); err != nil {
-		t.Fatalf("add admin: %v", err)
+	if inserted, err := s.AddDomainAdmin(ctx, "media", "spiffe://td/c"); err != nil || !inserted {
+		t.Fatalf("add admin: %v %v", inserted, err)
 	}
-	if err := s.AddDomainAdmin(ctx, "media", "spiffe://td/c"); err != nil {
-		t.Fatalf("re-adding an admin is a no-op: %v", err)
+	if inserted, err := s.AddDomainAdmin(ctx, "media", "spiffe://td/c"); err != nil || inserted {
+		t.Fatalf("re-adding an admin is a no-op that inserts nothing: %v %v", inserted, err)
 	}
-	if err := s.AddDomainAdmin(ctx, "nope", "spiffe://td/c"); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := s.AddDomainAdmin(ctx, "nope", "spiffe://td/c"); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("admin on missing domain: %v", err)
 	}
 	if err := s.RemoveDomainAdmin(ctx, "media", "spiffe://td/c"); err != nil {

@@ -63,7 +63,7 @@ New domains are picked up without a restart: the server reloads the tree after e
 
 Domain membership comes from the SPIFFE ID path, so a domain's admins do not decide who is in it: whoever may obtain an SVID under `/media/...` is. Keep issuance authenticated (`--require-auth`) and the attestation templates tight.
 
-Two more things to keep in mind when writing policies. A `Domain::"..."` entity declared in `entities.json` replaces the projected one, so declaring it there can cut the chain to its ancestors. And because an admin of `media` may delete the leaf `media.news`, a central `forbid (principal in Domain::"media.news", ...)` stops matching once that domain is gone; write such rules against a domain the delegated admins cannot delete, or against the SPIFFE ID path itself.
+Two more things to keep in mind when writing policies. A `Domain::"..."` entity declared in `entities.json` is ignored in favour of the projected one (the server logs a warning), so a static file cannot cut the chain to a domain's ancestors. And because an admin of `media` may delete the leaf `media.news`, a central `forbid (principal in Domain::"media.news", ...)` stops matching once that domain is gone; write such rules against a domain the delegated admins cannot delete, or against the SPIFFE ID path itself.
 
 ## Walkthrough
 

@@ -139,33 +139,28 @@ func (s *Store) DeleteDomain(ctx context.Context, name string) error {
 	return tx.Commit()
 }
 
-// AddDomainAdmin grants principal admin rights on domain. Granting an
-// existing admin is a no-op.
-func (s *Store) AddDomainAdmin(ctx context.Context, domain, principal string) error {
+// AddDomainAdmin grants principal admin rights on domain and reports
+// whether it inserted the grant (false: it already existed).
+func (s *Store) AddDomainAdmin(ctx context.Context, domain, principal string) (bool, error) {
 	if !s.IsLeader() {
-		return ErrNotLeader
+		return false, ErrNotLeader
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin: %w", err)
+		return false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	// Same lock as CreateDomain's parent check: a concurrent delete of
 	// the domain cannot strand this grant.
 	if err := s.lockDomain(ctx, tx, domain, "FOR SHARE"); err != nil {
-		return err
+		return false, err
 	}
-	var exists int
-	err = tx.QueryRowContext(ctx, s.rebind(`SELECT COUNT(*) FROM domain_admins WHERE domain = ? AND principal = ?`), domain, principal).Scan(&exists)
+	res, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO domain_admins(domain, principal) VALUES (?, ?) ON CONFLICT (domain, principal) DO NOTHING`), domain, principal)
 	if err != nil {
-		return fmt.Errorf("query admin: %w", err)
+		return false, fmt.Errorf("insert admin: %w", err)
 	}
-	if exists == 0 {
-		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO domain_admins(domain, principal) VALUES (?, ?)`), domain, principal); err != nil {
-			return fmt.Errorf("insert admin: %w", err)
-		}
-	}
-	return tx.Commit()
+	n, _ := res.RowsAffected()
+	return n == 1, tx.Commit()
 }
 
 // RemoveDomainAdmin revokes principal's admin rights on domain.

@@ -77,3 +77,31 @@ func TestResourceDomainAndDomainEntitiesSearchable(t *testing.T) {
 		t.Error("after the domains are gone the resource is no longer in Domain::\"media\"")
 	}
 }
+
+func TestDirectoryWinsOverStaticEntities(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.cedar"), []byte(`forbid (principal in Domain::"media", action, resource);
+permit (principal, action, resource);`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A static Domain::"media.news" without its parent would cut the chain.
+	if err := os.WriteFile(filepath.Join(dir, "entities.json"), []byte(`[{"uid":{"type":"Domain","id":"media.news"},"parents":[],"attrs":{}}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := policy.New()
+	if err := e.LoadDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	e.SetDirectory(policy.Directory{TrustDomain: spiffeid.RequireTrustDomainFromString("omega.local"), Domains: map[string]string{"media": "", "media.news": "media"}})
+	resp, err := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "Spiffe", ID: "spiffe://omega.local/media/news/web"},
+		Action:   policy.Action{Name: "read"},
+		Resource: policy.Entity{Type: "Doc", ID: "d"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Decision {
+		t.Fatal("the forbid on media must still cover media.news despite the static entity")
+	}
+}

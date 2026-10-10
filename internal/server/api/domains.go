@@ -271,17 +271,7 @@ func (s *Server) addDomainAdmin(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeDomainWrite(w, r, "domain.admin.add", name, name) {
 		return
 	}
-	before, err := s.store.GetDomain(r.Context(), name)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	already := slices.Contains(before.Admins, req.Principal)
-	err = s.store.AddDomainAdmin(r.Context(), name, req.Principal)
+	inserted, err := s.store.AddDomainAdmin(r.Context(), name, req.Principal)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
@@ -289,8 +279,10 @@ func (s *Server) addDomainAdmin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
 		ev := storage.AuditEvent{Kind: "domain.admin.add", Actor: CallerSPIFFEID(r.Context()), Subject: name, Decision: "ok", Payload: mustJSON(map[string]string{"principal": req.Principal})}
+		// Undo only a grant this request inserted, never one that existed
+		// or that a concurrent request added.
 		undo := func(ctx context.Context) error {
-			if already {
+			if !inserted {
 				return nil
 			}
 			return s.store.RemoveDomainAdmin(ctx, name, req.Principal)
@@ -323,7 +315,10 @@ func (s *Server) removeDomainAdmin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
 		ev := storage.AuditEvent{Kind: "domain.admin.remove", Actor: CallerSPIFFEID(r.Context()), Subject: name, Decision: "ok", Payload: mustJSON(map[string]string{"principal": principal})}
-		if !s.recordOrUndo(w, r, ev, func(ctx context.Context) error { return s.store.AddDomainAdmin(ctx, name, principal) }) {
+		if !s.recordOrUndo(w, r, ev, func(ctx context.Context) error {
+			_, err := s.store.AddDomainAdmin(ctx, name, principal)
+			return err
+		}) {
 			return
 		}
 		s.getDomain(w, r)
