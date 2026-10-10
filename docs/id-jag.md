@@ -77,7 +77,7 @@ flowchart TD
   C -- no --> E2[401 invalid_client<br/>not audited]
   C -- yes --> V{ID-JAG verifies?<br/>iss is a trusted --id-jag-idp,<br/>signature by its JWKS,<br/>typ = oauth-id-jag+jwt,<br/>aud = exactly Omega issuer,<br/>exp / iat valid}
   V -- no --> E3[400 invalid_grant + audit deny]
-  V -- yes --> B{profile rules<br/>sub, jti present,<br/>exp - iat within max TTL,<br/>client_id = authenticated SPIFFE ID,<br/>no cnf}
+  V -- yes --> B{profile rules<br/>sub, jti present,<br/>exp - iat within max TTL,<br/>client_id = authenticated SPIFFE ID,<br/>cnf.jkt needs a matching DPoP proof}
   B -- no --> E3
   B -- yes --> N{ID-JAG grants a resource, and<br/>requested resource / scope only narrow it?}
   N -- no --> E4[400 invalid_target / invalid_scope + audit deny]
@@ -233,7 +233,7 @@ These follow from the draft or are deliberate. ADR 0011 explains each.
 | --- | --- |
 | The issued token never outlives the ID-JAG (minutes, not the draft example's day) | Delegated authority must not outlive its grant; the client re-presents the ID-JAG or asks its IdP for a new one. |
 | `jti` is required but not tracked for replay | The draft lets a client re-present the same ID-JAG until it expires. Binding to the client's SPIFFE ID is what stops theft. |
-| `cnf`-bound (DPoP) ID-JAGs are rejected | Omega does not verify DPoP proofs yet, and the draft requires refusing a bound assertion without one. |
+| DPoP-bound tokens need a DPoP-aware resource server | An ID-JAG bound with `cnf.jkt` is redeemed with a DPoP proof for that key, and the issued token is bound to it (`token_type: DPoP`). The resource server must verify the proof; see [ADR 0013](adr/0013-dpop-sender-constrained-tokens.md). |
 | An ID-JAG without `resource` is refused | The token's audience must come from the IdP's decision, not from the client. |
 | JWT-SVID client authentication cannot bind the client in production | Under `--require-auth` the listener requires a client cert, so only `spiffe_x509` is accepted. Without it the server refuses to start unless `--id-jag-insecure-client-binding` is set. |
 | Omega only receives ID-JAGs | Issuing them is the IdP's job; Omega is not an end-user IdP. |

@@ -10,10 +10,15 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ### Added
 
+- **DPoP (RFC 9449) on the ID-JAG grant.** An ID-JAG bound with `cnf.jkt` is redeemed with a DPoP proof for that key, and any valid proof binds the issued JWT-SVID to its key (`cnf.jkt`, `token_type: DPoP`). Proofs are checked for compact serialization, `typ`, signature, `htm`, `htu`, a one-minute `iat` window and `jti` replay (hashed, bounded cache). The metadata lists `dpop_signing_alg_values_supported`. See [ADR 0013](docs/adr/0013-dpop-sender-constrained-tokens.md).
 - **ID-JAG authorization grant on `POST /oauth2/token`.** Omega now accepts an Identity Assertion JWT Authorization Grant (draft-ietf-oauth-identity-assertion-authz-grant) from an IdP trusted with `--id-jag-idp`, presented as an RFC 7523 jwt-bearer assertion. The client authenticates with its SPIFFE ID, either an mTLS X.509-SVID or a JWT-SVID `client_assertion` of type `jwt-spiffe` (draft-ietf-oauth-spiffe-client-auth), and must match the ID-JAG's `client_id`. `--id-jag-idp` requires `--require-auth` (mTLS only), unless `--id-jag-insecure-client-binding` opts in to an unbound development mode. The response is a JWT-SVID for the client whose `act` names the user, capped at the ID-JAG's lifetime and usable as the subject token of `POST /v1/token/exchange`. Every grant is evaluated by Cedar as its own action, `token.id_jag`, regardless of `--enforce-token-exchange-policy`, so nothing is issued until a permit is written and no existing `token.exchange` permit applies. Grants and authenticated clients' refusals are audited as `token.id_jag`, and a token is withheld if its grant cannot be recorded. `GET /.well-known/oauth-authorization-server` advertises the endpoint. See [ADR 0011](docs/adr/0011-id-jag-authorization-grant.md).
 - `--id-jag-max-assertion-ttl` (default 5m) rejects ID-JAGs and JWT-SVID client assertions with a longer lifetime.
 - `--id-jag-insecure-client-binding` lets `--id-jag-idp` run without `--require-auth`, for development.
 - [docs/id-jag.md](docs/id-jag.md) and `examples/id-jag/` walk through the flow end to end.
+
+### Security
+
+- **`POST /v1/token/exchange` honours `cnf`.** A subject or actor token bound to a DPoP key or a client certificate was accepted as a bearer token. It now needs a DPoP proof for `cnf.jkt` or the matching client certificate for `cnf.x5t#S256`; any other `cnf` is refused. The output keeps the actor's binding (or the subject's, when the actor is the subject's own principal), so a key holder cannot unbind its token by exchanging it with itself.
 
 ## [0.6.0] - 2026-10-07
 

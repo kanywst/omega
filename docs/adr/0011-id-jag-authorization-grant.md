@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. The rule that rejects `cnf`-bound ID-JAGs is replaced by [ADR 0013](0013-dpop-sender-constrained-tokens.md), which verifies DPoP proofs.
 
 ## Context
 

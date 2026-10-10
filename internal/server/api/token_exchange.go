@@ -94,8 +94,23 @@ func (s *Server) tokenExchange(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("subject_token: %w", err))
 		return
 	}
-	actorID, _, err := s.ca.ParseJWTSVIDClaims(req.ActorToken)
+	actorID, actorClaims, err := s.ca.ParseJWTSVIDClaims(req.ActorToken)
 	if err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("actor_token: %w", err))
+		return
+	}
+	// A sender-constrained token is honoured only with its proof of
+	// possession, never as a bearer token.
+	var htu string
+	if iss := s.ca.IssuerURL(); iss != "" {
+		htu = iss + "/v1/token/exchange"
+	}
+	proof := s.dpopProofOnce(r, htu)
+	if err := checkPresentedBinding(r, subjectClaims, proof); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("subject_token: %w", err))
+		return
+	}
+	if err := checkPresentedBinding(r, actorClaims, proof); err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("actor_token: %w", err))
 		return
 	}
@@ -211,6 +226,21 @@ func (s *Server) tokenExchange(w http.ResponseWriter, r *http.Request) {
 	if req.Scope != "" {
 		extra["scope"] = req.Scope
 	}
+	// The output belongs to the actor, so it keeps the actor's binding.
+	// When the actor is the subject's own principal it keeps the
+	// subject's, so a key holder cannot unbind a token by exchanging it
+	// with itself.
+	tokenType := "Bearer"
+	cnf, hasCnf := actorClaims["cnf"]
+	if !hasCnf && actorID.String() == subjectID.String() {
+		cnf, hasCnf = subjectClaims["cnf"]
+	}
+	if hasCnf {
+		extra["cnf"] = cnf
+		if m, _ := cnf.(map[string]any); m["jkt"] != nil {
+			tokenType = "DPoP"
+		}
+	}
 
 	svid, err := s.ca.IssueJWTSVID(requestedID, req.Audience, ttl, extra)
 	if err != nil {
@@ -243,7 +273,7 @@ func (s *Server) tokenExchange(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, TokenExchangeResponse{
 		AccessToken:     svid.Token,
 		IssuedTokenType: tokenTypeJWT,
-		TokenType:       "Bearer",
+		TokenType:       tokenType,
 		ExpiresIn:       int(ttl / time.Second),
 		Scope:           req.Scope,
 		SPIFFEID:        svid.SPIFFEID,
