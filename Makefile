@@ -1,4 +1,4 @@
-.PHONY: all build cross test lint tidy clean demo docker-up docker-down docker-demo docker-demo-down install run-server run-agent observability-up observability-down
+.PHONY: all build cross test cover lint tidy clean demo docker-up docker-down docker-demo docker-demo-down install run-server run-agent observability-up observability-down
 
 BIN        := bin/omega
 DIST       := dist
@@ -25,6 +25,9 @@ install:
 
 test:
 	go test -race -count=1 $(PKG)
+
+cover:
+	PKG='$(PKG)' scripts/check-coverage.sh
 
 lint:
 	golangci-lint run

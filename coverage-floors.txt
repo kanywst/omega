@@ -1,0 +1,15 @@
+# Minimum statement coverage, in percent, enforced by scripts/check-coverage.sh.
+# A ratchet: raise a floor when coverage goes up; never lower one to pass CI.
+# Measured over ./... (examples included) without OMEGA_TEST_POSTGRES_DSN,
+# so storage reads lower locally than in CI.
+total 50
+github.com/kanywst/omega/internal/server/api 82
+github.com/kanywst/omega/internal/server/attest 88
+github.com/kanywst/omega/internal/server/audit 85
+github.com/kanywst/omega/internal/server/federation 78
+github.com/kanywst/omega/internal/server/identity 75
+github.com/kanywst/omega/internal/server/oidc 81
+github.com/kanywst/omega/internal/server/policy 72
+github.com/kanywst/omega/internal/server/storage 65
+github.com/kanywst/omega/internal/cli 32
+github.com/kanywst/omega/internal/agent/workloadapi 23

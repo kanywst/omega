@@ -15,6 +15,7 @@ Go side (run from repo root):
 | --- | --- |
 | `make build` | Build the single binary into `bin/omega`. Embeds version via `-ldflags`. |
 | `make test` | `go test -race -count=1 ./...`. Postgres-backed tests skip unless `OMEGA_TEST_POSTGRES_DSN` is set. |
+| `make cover` | The same suite with a coverage profile; fails below the floors in `coverage-floors.txt` (what CI runs). |
 | `make demo` | Local Go build + `scripts/demo.sh`: runs the full hello-svid mTLS loop without Docker. Used as a smoke test. |
 | `make docker-up` / `make docker-down` | Compose stack (control plane + 2 agents + hello-svid + UI) on `:8080` / `:3000` / `:9443`. |
 | `make docker-demo` | Same compose stack but exits when the hello-svid client succeeds. CI smoke test. |
