@@ -1013,6 +1013,58 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/policy/bundle:
+    get:
+      tags: [authzen]
+      operationId: getPolicyBundle
+      summary: The policy set and directory local evaluators decide from.
+      description: |
+        Cedar sources, static entities and the projected domain and
+        group directory. `revision` is a content hash and the ETag; send
+        it as `If-None-Match` to get `304` when nothing changed. Needs
+        caller authentication under `--require-auth`; served by followers.
+      responses:
+        "200":
+          description: Bundle.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyBundle"
+        "304":
+          description: Unchanged since the revision in If-None-Match.
+        "503":
+          description: The projected directory is stale.
+
+  /v1/audit/decisions:
+    post:
+      tags: [audit, leader-only]
+      operationId: recordDecisions
+      summary: Record decisions a local evaluator made.
+      description: |
+        Appends each decision to the audit chain as `access.evaluate`
+        with `source: local`, the caller's SPIFFE ID as actor, and the
+        bundle revision. At most 1000 decisions per batch. A failed append
+        answers 500 so the caller retries the batch.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecisionBatch"
+      responses:
+        "200":
+          description: All decisions recorded.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
   /v1/audit:
     get:
       tags: [audit]
@@ -1312,6 +1364,68 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Group"
+
+    PolicyBundle:
+      type: object
+      required: [revision, policies, directory]
+      properties:
+        revision:
+          type: string
+        policies:
+          type: object
+          additionalProperties:
+            type: string
+          description: Cedar source by file name.
+        entities:
+          description: The static entities.json, verbatim.
+        directory:
+          type: object
+          properties:
+            trust_domain:
+              type: string
+            domains:
+              type: object
+              additionalProperties:
+                type: string
+            groups:
+              type: array
+              items:
+                type: string
+            memberships:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    group:
+                      type: string
+                    expires_at:
+                      type: string
+                      format: date-time
+
+    DecisionBatch:
+      type: object
+      required: [decisions]
+      properties:
+        bundle_revision:
+          type: string
+        decisions:
+          type: array
+          maxItems: 1000
+          items:
+            type: object
+            required: [id, decided_at, request, response]
+            properties:
+              id:
+                type: string
+              decided_at:
+                type: string
+                format: date-time
+              request:
+                type: object
+              response:
+                type: object
 
     DomainListResponse:
       type: object

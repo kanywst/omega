@@ -233,6 +233,10 @@ func (s *Server) Handler() http.Handler {
 	// served by followers), hence requireSPIFFEAuth alone, not gated.
 	handle("GET /v1/audit", s.requireSPIFFEAuth(s.listAudit))
 	handle("GET /v1/audit/verify", s.requireSPIFFEAuth(s.verifyAudit))
+	// The bundle carries every policy and group membership, so it needs
+	// the same caller authentication as audit reads; followers serve it.
+	handle("GET /v1/policy/bundle", s.requireSPIFFEAuth(fresh(s.getPolicyBundle)))
+	handle("POST /v1/audit/decisions", gated(s.recordDecisions))
 	handle("POST /v1/svid/jwt", issuingOnly(gated(s.issueJWTSVID)))
 	handle("POST /v1/token/exchange", issuingOnly(gated(fresh(s.tokenExchange))))
 	handle("POST /v1/oidc/exchange", issuingOnly(leaderOnly(s.exchangeOIDC)))

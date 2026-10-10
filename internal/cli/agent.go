@@ -2,7 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -17,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/kanywst/omega/internal/agent/attestor"
+	"github.com/kanywst/omega/internal/agent/localpdp"
 	"github.com/kanywst/omega/internal/agent/workloadapi"
 	"github.com/kanywst/omega/internal/server/tracing"
 	"github.com/kanywst/omega/internal/version"
@@ -29,6 +34,13 @@ func newAgentCommand() *cobra.Command {
 		mappings     []string
 		otlpEndpoint string
 		otlpInsecure bool
+		pdpAddr      string
+		pdpSync      time.Duration
+		pdpMaxAge    time.Duration
+		pdpBuffer    int
+		serverCA     string
+		clientCert   string
+		clientKey    string
 	)
 
 	cmd := &cobra.Command{
@@ -66,7 +78,32 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				_ = shutdownTracing(flushCtx)
 			}()
 
-			return runAgent(ctx, socket, serverURL, mapping)
+			transport, err := controlPlaneTransport(serverCA, clientCert, clientKey)
+			if err != nil {
+				return err
+			}
+
+			if pdpAddr != "" {
+				pdp := localpdp.New(localpdp.Config{
+					ServerURL: serverURL, SyncInterval: pdpSync, MaxAge: pdpMaxAge, BufferSize: pdpBuffer,
+					HTTPClient: &http.Client{Transport: transport, Timeout: 10 * time.Second},
+				})
+				go pdp.Run(ctx)
+				srv := &http.Server{Addr: pdpAddr, Handler: pdp.Handler(), ReadHeaderTimeout: 5 * time.Second}
+				go func() {
+					fmt.Fprintf(os.Stderr, "omega agent: local PDP on %s\n", pdpAddr)
+					if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						fmt.Fprintf(os.Stderr, "omega agent: local PDP: %v\n", err)
+					}
+				}()
+				defer func() {
+					shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_ = srv.Shutdown(shutCtx)
+				}()
+			}
+
+			return runAgent(ctx, socket, serverURL, mapping, transport)
 		},
 	}
 	cmd.Flags().StringVar(&socket, "socket", "/tmp/omega-agent.sock", "Workload API unix socket path")
@@ -74,6 +111,13 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 	cmd.Flags().StringArrayVar(&mappings, "map", nil, "uid->spiffe-id mapping (repeatable), e.g. --map 'uid=1000,id=spiffe://omega.local/example/web'")
 	cmd.Flags().StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP/HTTP traces endpoint, host:port (overrides OTEL_EXPORTER_OTLP_ENDPOINT). Empty disables tracing.")
 	cmd.Flags().BoolVar(&otlpInsecure, "otlp-insecure", false, "send OTLP traces over plaintext HTTP (no TLS)")
+	cmd.Flags().StringVar(&serverCA, "server-ca", "", "PEM bundle that verifies the control plane's TLS certificate (https --server). Empty uses the system roots.")
+	cmd.Flags().StringVar(&clientCert, "client-cert", "", "PEM client certificate (an X.509-SVID) the agent presents to the control plane; needed when the server runs with --require-auth")
+	cmd.Flags().StringVar(&clientKey, "client-key", "", "PEM private key for --client-cert")
+	cmd.Flags().StringVar(&pdpAddr, "local-pdp-addr", "", "serve an AuthZEN evaluation endpoint on this address (e.g. 127.0.0.1:8181), deciding locally from the control plane's policy bundle and shipping every decision to its audit chain. Empty disables it.")
+	cmd.Flags().DurationVar(&pdpSync, "policy-sync-interval", 10*time.Second, "how often the local PDP re-fetches the policy bundle")
+	cmd.Flags().DurationVar(&pdpMaxAge, "policy-max-age", time.Minute, "the local PDP refuses to decide (503) when its last successful bundle sync is older than this")
+	cmd.Flags().IntVar(&pdpBuffer, "decision-buffer", 10000, "decisions the local PDP may hold before they reach the audit chain; when full it refuses to decide (503)")
 	return cmd
 }
 
@@ -107,7 +151,42 @@ func parseMappings(specs []string) (workloadapi.Mapping, error) {
 	return out, nil
 }
 
-func runAgent(ctx context.Context, socketPath, serverURL string, mapping workloadapi.Mapping) error {
+// controlPlaneTransport builds the transport the agent uses for the
+// control plane: the default one, or TLS with an optional server CA and
+// client certificate.
+func controlPlaneTransport(caFile, certFile, keyFile string) (http.RoundTripper, error) {
+	if caFile == "" && certFile == "" && keyFile == "" {
+		return http.DefaultTransport, nil
+	}
+	if (certFile == "") != (keyFile == "") {
+		return nil, errors.New("--client-cert and --client-key must be set together")
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if caFile != "" {
+		// #nosec G304 -- operator-supplied --server-ca path.
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read --server-ca: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("--server-ca %q contains no PEM certificates", caFile)
+		}
+		cfg.RootCAs = pool
+	}
+	if certFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load --client-cert/--client-key: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = cfg
+	return t, nil
+}
+
+func runAgent(ctx context.Context, socketPath, serverURL string, mapping workloadapi.Mapping, transport http.RoundTripper) error {
 	lis, err := attestor.Listen(socketPath)
 	if err != nil {
 		return err
@@ -115,7 +194,7 @@ func runAgent(ctx context.Context, socketPath, serverURL string, mapping workloa
 	defer lis.Close()
 
 	grpcSrv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
-	workloadpb.RegisterSpiffeWorkloadAPIServer(grpcSrv, workloadapi.NewServer(serverURL, mapping))
+	workloadpb.RegisterSpiffeWorkloadAPIServer(grpcSrv, workloadapi.NewServer(serverURL, mapping).WithTransport(transport))
 
 	errCh := make(chan error, 1)
 	go func() {

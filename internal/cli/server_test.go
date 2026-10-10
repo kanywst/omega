@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -319,5 +320,34 @@ func TestServerCommandClientCertOptionalNeedsRequireAuth(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--client-cert-optional requires --require-auth") {
 		t.Fatalf("want a refusal without --require-auth, got %v", err)
+	}
+}
+
+func TestControlPlaneTransport(t *testing.T) {
+	if rt, err := controlPlaneTransport("", "", ""); err != nil || rt != http.DefaultTransport {
+		t.Fatalf("no TLS flags: %v %v", rt, err)
+	}
+	dir := t.TempDir()
+	certPath, keyPath := writeTestKeypair(t, dir)
+	if _, err := controlPlaneTransport("", certPath, ""); err == nil {
+		t.Error("a cert without its key must fail")
+	}
+	if _, err := controlPlaneTransport(filepath.Join(dir, "missing.pem"), "", ""); err == nil {
+		t.Error("a missing CA file must fail")
+	}
+	bad := filepath.Join(dir, "bad.pem")
+	if err := os.WriteFile(bad, []byte("not pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlPlaneTransport(bad, "", ""); err == nil {
+		t.Error("a CA file without certificates must fail")
+	}
+	rt, err := controlPlaneTransport(certPath, certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, ok := rt.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs == nil || len(tr.TLSClientConfig.Certificates) != 1 {
+		t.Fatalf("TLS transport: %+v", rt)
 	}
 }

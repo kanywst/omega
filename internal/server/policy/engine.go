@@ -29,7 +29,12 @@ type Engine struct {
 	// static is the entity map from entities.json, directory the one
 	// projected from control-plane state (SetDirectory); entities is
 	// their union, with static winning on a UID collision.
-	static    cedar.EntityMap
+	static cedar.EntityMap
+	// sources and staticRaw are what LoadDir / LoadSources read, kept so
+	// the exact policy set can be distributed to local evaluators.
+	sources   map[string]string
+	staticRaw []byte
+	dirSpec   Directory
 	directory cedar.EntityMap
 	snap      directorySnapshot
 	entities  cedar.EntityMap
@@ -59,16 +64,37 @@ func New() *Engine {
 // present, dir/entities.json as the entity map. The two are swapped in
 // atomically; on error the engine is left untouched.
 func (e *Engine) LoadDir(dir string) error {
-	ps, ents, err := loadFromDir(dir)
+	sources, raw, err := readDir(dir)
+	if err != nil {
+		return err
+	}
+	return e.LoadSources(sources, raw)
+}
+
+// LoadSources replaces the policy set with the given Cedar sources
+// (file name -> text) and the static entity map (entities.json bytes,
+// nil for none). On error the engine is left untouched.
+func (e *Engine) LoadSources(sources map[string]string, entitiesJSON []byte) error {
+	ps, ents, err := parseSources(sources, entitiesJSON)
 	if err != nil {
 		return err
 	}
 	e.mu.Lock()
 	e.policies = ps
 	e.static = ents
+	e.sources = sources
+	e.staticRaw = entitiesJSON
 	e.rebuildLocked()
 	e.mu.Unlock()
 	return nil
+}
+
+// Snapshot returns what the engine evaluates against: the Cedar sources,
+// the static entities.json bytes, and the projected directory.
+func (e *Engine) Snapshot() (map[string]string, []byte, Directory) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.sources, e.staticRaw, e.dirSpec
 }
 
 // indexByType groups the entity map by type, sorting each bucket by id.
@@ -90,24 +116,46 @@ func indexByType(ents cedar.EntityMap) map[string][]Entity {
 	return idx
 }
 
-func loadFromDir(dir string) (*cedar.PolicySet, cedar.EntityMap, error) {
+// readDir reads every *.cedar file in dir and, if present,
+// dir/entities.json.
+func readDir(dir string) (map[string]string, []byte, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.cedar"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("glob policies: %w", err)
 	}
-	sort.Strings(matches)
-
-	ps := cedar.NewPolicySet()
+	sources := make(map[string]string, len(matches))
 	for _, path := range matches {
 		// #nosec G304 -- path comes from operator-supplied --policy-dir glob, not user input.
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		base := filepath.Base(path)
-		fileSet, err := cedar.NewPolicySetFromBytes(base, raw)
+		sources[filepath.Base(path)] = string(raw)
+	}
+	entPath := filepath.Join(dir, "entities.json")
+	// #nosec G304 -- path is operator-controlled --policy-dir, not user input.
+	raw, err := os.ReadFile(entPath)
+	if os.IsNotExist(err) {
+		return sources, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %s: %w", entPath, err)
+	}
+	return sources, raw, nil
+}
+
+func parseSources(sources map[string]string, entitiesJSON []byte) (*cedar.PolicySet, cedar.EntityMap, error) {
+	names := make([]string, 0, len(sources))
+	for n := range sources {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	ps := cedar.NewPolicySet()
+	for _, base := range names {
+		fileSet, err := cedar.NewPolicySetFromBytes(base, []byte(sources[base]))
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse %s: %w", path, err)
+			return nil, nil, fmt.Errorf("parse %s: %w", base, err)
 		}
 		// cedar-go names every parsed policy "policy0", "policy1", ... per
 		// file, which collides as soon as the operator splits policies
@@ -123,22 +171,17 @@ func loadFromDir(dir string) (*cedar.PolicySet, cedar.EntityMap, error) {
 				id = cedar.PolicyID(v)
 			}
 			if !ps.Add(id, p) {
-				return nil, nil, fmt.Errorf("duplicate policy id %q (defined again in %s)", id, path)
+				return nil, nil, fmt.Errorf("duplicate policy id %q (defined again in %s)", id, base)
 			}
 		}
 	}
 
 	ents := cedar.EntityMap{}
-	entPath := filepath.Join(dir, "entities.json")
-	// #nosec G304 -- path is operator-controlled --policy-dir, not user input.
-	if raw, err := os.ReadFile(entPath); err == nil {
-		if err := json.Unmarshal(raw, &ents); err != nil {
-			return nil, nil, fmt.Errorf("parse %s: %w", entPath, err)
+	if len(entitiesJSON) > 0 {
+		if err := json.Unmarshal(entitiesJSON, &ents); err != nil {
+			return nil, nil, fmt.Errorf("parse entities.json: %w", err)
 		}
-	} else if !os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("read %s: %w", entPath, err)
 	}
-
 	return ps, ents, nil
 }
 
