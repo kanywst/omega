@@ -324,13 +324,14 @@ own SVID and asks for a delegated token in someone else's name.
 - Residual risk: if the `actor_token` was issued by the same Omega
   server, this baseline holds. Cross-issuer delegation chains are
   not supported today.
+- Sender-constrained tokens: a subject or actor token carrying `cnf` is exchanged only with its proof of possession, a DPoP proof for `cnf.jkt` or the matching client certificate for `cnf.x5t#S256` ([ADR 0013](adr/0013-dpop-sender-constrained-tokens.md)).
 
 ### E3 — Elevation of privilege via a forged or misdirected ID-JAG
 
 A client presents an ID-JAG that was minted for another client, another authorization server, or not as a grant at all (an ID token), to obtain a token in a user's name.
 
 - Mitigation today: `POST /oauth2/token` requires client authentication by SPIFFE ID and an ID-JAG whose `client_id` equals it, whose single `aud` is Omega's issuer, whose JOSE `typ` is `oauth-id-jag+jwt`, and whose signature verifies against an IdP trusted with `--id-jag-idp`. Under `--require-auth` the client is the verified mTLS X.509-SVID. Every grant is evaluated by Cedar under its own action (`token.id_jag`) with default deny, and the token is released only after its grant is on the audit chain. The issued token is capped at the ID-JAG's lifetime, its audience comes only from the ID-JAG's `resource`, and every grant and every refusal from an authenticated client is audited ([ADR 0011](adr/0011-id-jag-authorization-grant.md)).
-- Residual risk: with `--id-jag-insecure-client-binding` (no `--require-auth`) the client binding does not hold, because any caller can mint the client's JWT-SVID; the server refuses this mode unless that flag is set, and warns when it is. With it, a stolen ID-JAG is still usable by its bound client until it expires, because `jti` is not tracked (the draft allows re-presentation). `cnf`-bound ID-JAGs are rejected until DPoP verification lands. The IdP's own decision on which client may act for which user is trusted as-is.
+- Residual risk: with `--id-jag-insecure-client-binding` (no `--require-auth`) the client binding does not hold, because any caller can mint the client's JWT-SVID; the server refuses this mode unless that flag is set, and warns when it is. With it, a stolen ID-JAG is still usable by its bound client until it expires, because `jti` is not tracked (the draft allows re-presentation). A DPoP-bound ID-JAG needs a proof for its key, and the issued token stays bound to it ([ADR 0013](adr/0013-dpop-sender-constrained-tokens.md)). The IdP's own decision on which client may act for which user is trusted as-is.
 
 ## Out of scope
 

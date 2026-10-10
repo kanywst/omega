@@ -395,16 +395,16 @@ func checkTyp(headers []jose.Header, want string) error {
 	}
 	for _, h := range headers {
 		got, _ := h.ExtraHeaders[jose.HeaderType].(string)
-		if !typMatches(got, want) {
+		if !TypMatches(got, want) {
 			return fmt.Errorf("typ header %q does not match required %q", got, want)
 		}
 	}
 	return nil
 }
 
-// typMatches compares per RFC 7515 §4.1.9: case-insensitive, optional
+// TypMatches compares per RFC 7515 §4.1.9: case-insensitive, optional
 // "application/" prefix.
-func typMatches(got, want string) bool {
+func TypMatches(got, want string) bool {
 	norm := func(s string) string {
 		s = strings.ToLower(strings.TrimSpace(s))
 		return strings.TrimPrefix(s, "application/")

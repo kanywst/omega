@@ -20,8 +20,8 @@ func TestTypMatches(t *testing.T) {
 		{"", "oauth-id-jag+jwt", false},
 	}
 	for _, tc := range cases {
-		if got := typMatches(tc.got, tc.want); got != tc.ok {
-			t.Errorf("typMatches(%q, %q) = %v, want %v", tc.got, tc.want, got, tc.ok)
+		if got := TypMatches(tc.got, tc.want); got != tc.ok {
+			t.Errorf("TypMatches(%q, %q) = %v, want %v", tc.got, tc.want, got, tc.ok)
 		}
 	}
 }

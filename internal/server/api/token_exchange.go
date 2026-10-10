@@ -94,8 +94,23 @@ func (s *Server) tokenExchange(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("subject_token: %w", err))
 		return
 	}
-	actorID, _, err := s.ca.ParseJWTSVIDClaims(req.ActorToken)
+	actorID, actorClaims, err := s.ca.ParseJWTSVIDClaims(req.ActorToken)
 	if err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("actor_token: %w", err))
+		return
+	}
+	// A sender-constrained token is honoured only with its proof of
+	// possession, never as a bearer token.
+	var htu string
+	if iss := s.ca.IssuerURL(); iss != "" {
+		htu = iss + "/v1/token/exchange"
+	}
+	proof := s.dpopProofOnce(r, htu)
+	if err := checkPresentedBinding(r, subjectClaims, proof); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("subject_token: %w", err))
+		return
+	}
+	if err := checkPresentedBinding(r, actorClaims, proof); err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("actor_token: %w", err))
 		return
 	}

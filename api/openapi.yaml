@@ -633,6 +633,18 @@ paths:
         Cedar with `action: token.exchange` before issuance; the
         baseline `requested_spiffe_id == actor_token.sub` rule always
         applies regardless.
+
+        A subject or actor token with `cnf.jkt` needs a DPoP proof for
+        that key (`htu` = `<issuer>/v1/token/exchange`); one with
+        `cnf.x5t#S256` needs the matching client certificate. Any
+        other `cnf` is refused.
+      parameters:
+        - name: DPoP
+          in: header
+          required: false
+          description: DPoP proof for a DPoP-bound subject or actor token.
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -681,6 +693,17 @@ paths:
         `token.id_jag`, and the token is withheld (`500`) if the
         record cannot be written. Returns `404 Not Found` when no ID-JAG IdP
         is configured and `501` in spire-upstream mode.
+
+        An ID-JAG bound with `cnf.jkt` needs a DPoP proof (RFC 9449)
+        for that key. With any valid proof the issued token carries
+        `cnf.jkt` and `token_type` is `DPoP`; see ADR 0013.
+      parameters:
+        - name: DPoP
+          in: header
+          required: false
+          description: DPoP proof JWT with `htu` = `<issuer>/oauth2/token`.
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -700,7 +723,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthTokenResponse"
         "400":
-          description: invalid_request, unsupported_grant_type, invalid_grant, invalid_target or invalid_scope (RFC 6749 §5.2).
+          description: invalid_request, unsupported_grant_type, invalid_grant, invalid_target, invalid_scope (RFC 6749 §5.2) or invalid_dpop_proof (RFC 9449).
           content:
             application/json:
               schema:
@@ -850,7 +873,7 @@ components:
           type: string
         token_type:
           type: string
-          enum: [Bearer]
+          enum: [Bearer, DPoP]
         expires_in:
           type: integer
         scope:
@@ -903,6 +926,10 @@ components:
           items:
             type: string
             enum: [spiffe_x509, spiffe_jwt]
+        dpop_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
 
     Error:
       type: object

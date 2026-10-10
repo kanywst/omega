@@ -152,6 +152,31 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	jti, _ := claims.Raw["jti"].(string)
 	audit["jti"] = jti
 
+	// A cnf.jkt assertion is redeemable only with a DPoP proof for that
+	// key; any valid proof binds the issued token to its key.
+	boundJKT, err := confirmationJKT(claims.Raw)
+	if err != nil {
+		fail(newOAuthErr(http.StatusBadRequest, "invalid_grant", "%s", err), "")
+		return
+	}
+	var proofJKT string
+	if boundJKT != "" || len(r.Header.Values("DPoP")) > 0 {
+		proofJKT, err = s.verifyDPoPProof(r, issuer+"/oauth2/token")
+		if err != nil {
+			code := "invalid_dpop_proof"
+			if boundJKT != "" {
+				code = "invalid_grant"
+			}
+			fail(newOAuthErr(http.StatusBadRequest, code, "%s", err), "")
+			return
+		}
+		if boundJKT != "" && proofJKT != boundJKT {
+			fail(newOAuthErr(http.StatusBadRequest, "invalid_grant", "DPoP proof key does not match the assertion's cnf.jkt"), "")
+			return
+		}
+		audit["dpop_jkt"] = proofJKT
+	}
+
 	resources, oerr := grantedResources(claims.Raw, form["resource"])
 	if oerr != nil {
 		fail(oerr, "")
@@ -236,6 +261,11 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	if scope != "" {
 		extra["scope"] = scope
 	}
+	tokenType := "Bearer"
+	if proofJKT != "" {
+		extra["cnf"] = map[string]any{"jkt": proofJKT}
+		tokenType = "DPoP"
+	}
 	svid, err := s.ca.IssueJWTSVID(clientID, resources, ttl, extra)
 	if err != nil {
 		fail(newOAuthErr(http.StatusBadRequest, "invalid_request", "%s", err), "")
@@ -253,7 +283,7 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, OAuthTokenResponse{
 		AccessToken:     svid.Token,
-		TokenType:       "Bearer",
+		TokenType:       tokenType,
 		ExpiresIn:       int(ttl / time.Second),
 		Scope:           scope,
 		Resource:        svid.Audience,
@@ -405,11 +435,6 @@ func (s *Server) checkIDJAGClaims(c *oidc.Claims, client spiffeid.ID) *oauthErro
 	if cid, _ := c.Raw["client_id"].(string); cid != client.String() {
 		return newOAuthErr(http.StatusBadRequest, "invalid_grant", "assertion client_id %q does not match the authenticated client %q", cid, client)
 	}
-	// omega does not verify DPoP proofs, and a cnf-bound assertion
-	// presented without one must be rejected.
-	if _, ok := c.Raw["cnf"]; ok {
-		return newOAuthErr(http.StatusBadRequest, "invalid_grant", "sender-constrained (cnf) assertions are not supported")
-	}
 	return nil
 }
 
@@ -477,6 +502,7 @@ type OAuthASMetadata struct {
 	GrantTypesSupported                 []string `json:"grant_types_supported"`
 	AuthorizationGrantProfilesSupported []string `json:"authorization_grant_profiles_supported"`
 	TokenEndpointAuthMethodsSupported   []string `json:"token_endpoint_auth_methods_supported"`
+	DPoPSigningAlgValuesSupported       []string `json:"dpop_signing_alg_values_supported"`
 }
 
 func (s *Server) getOAuthASMetadata(w http.ResponseWriter, _ *http.Request) {
@@ -497,5 +523,6 @@ func (s *Server) getOAuthASMetadata(w http.ResponseWriter, _ *http.Request) {
 		GrantTypesSupported:                 []string{grantTypeJWTBearer},
 		AuthorizationGrantProfilesSupported: []string{grantProfileIDJAG},
 		TokenEndpointAuthMethodsSupported:   methods,
+		DPoPSigningAlgValuesSupported:       dpopAlgNames(),
 	})
 }

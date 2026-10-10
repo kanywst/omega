@@ -53,6 +53,7 @@ type Server struct {
 	idJAG                   *oidc.Registry
 	idJAGMaxAssertionTTL    time.Duration
 	idJAGMTLS               bool
+	dpopReplay              *dpopReplayCache
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
 	entityStoreSearch       bool
@@ -79,7 +80,7 @@ func (s *Server) WithEntityStoreSearch(v bool) *Server {
 // upstream-SPIFFE Source can be wired in later without touching the
 // handlers, which only ever call the embedded Authority method set.
 func NewServer(store *storage.Store, ca identity.Authority, pdp *policy.Engine) *Server {
-	return &Server{store: store, ca: identity.AsSource(ca), policy: pdp}
+	return &Server{store: store, ca: identity.AsSource(ca), policy: pdp, dpopReplay: newDPoPReplayCache()}
 }
 
 // WithFederation wires a federation registry into the server. Passing

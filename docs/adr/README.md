@@ -68,4 +68,5 @@ index to avoid collisions.
 | [0008](0008-upstream-jwt-svid-validation.md) | Consume the upstream JWKS to validate upstream JWT-SVIDs | Accepted |
 | [0009](0009-upstream-trust-material-reload.md) | Reload upstream trust material on SIGHUP | Accepted |
 | [0010](0010-live-upstream-trust-material.md) | Follow upstream trust material over the SPIFFE Workload API | Accepted |
-| [0011](0011-id-jag-authorization-grant.md) | Accept ID-JAG as an RFC 7523 authorization grant | Accepted |
+| [0011](0011-id-jag-authorization-grant.md) | Accept ID-JAG as an RFC 7523 authorization grant | Accepted (`cnf` rule replaced by 0013) |
+| [0013](0013-dpop-sender-constrained-tokens.md) | Verify DPoP proofs and honour sender-constrained tokens | Accepted |
