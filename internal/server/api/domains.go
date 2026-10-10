@@ -22,7 +22,10 @@ import (
 // projection of the domain tree into the policy engine.
 type domainState struct {
 	rootAdmins []string
-	mu         sync.Mutex
+	// refreshMu serialises whole reloads, so a reload that read older
+	// state can never apply it after one that read newer state.
+	refreshMu sync.Mutex
+	mu        sync.Mutex
 	loadedAt   time.Time
 	interval   time.Duration
 }
@@ -50,6 +53,8 @@ func (s *Server) WithDomainRootAdmins(ids []string) *Server {
 
 // RefreshDirectory reloads the domain tree into the policy engine.
 func (s *Server) RefreshDirectory(ctx context.Context) error {
+	s.domains.refreshMu.Lock()
+	defer s.domains.refreshMu.Unlock()
 	items, err := s.store.ListDomains(ctx)
 	if err != nil {
 		return err
