@@ -39,8 +39,14 @@ jobs:
           cache: true
       - name: build
         run: make build
-      - name: test
-        run: make test
+      - name: test with coverage floors
+        run: make cover
+      - name: coverage summary
+        if: always()
+        run: |
+          if [ -f coverage.out ]; then
+            { echo '### Coverage'; echo; echo '```text'; go tool cover -func=coverage.out | tail -1; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   cross:
     runs-on: ubuntu-latest

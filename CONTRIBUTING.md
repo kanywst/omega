@@ -95,7 +95,7 @@ the spec on every push. Generated code, if any, lives under
 
 - One logical change per pull request. Refactors and behaviour changes
   go in separate PRs.
-- Add tests for new behaviour. `go test -race ./...` must stay green.
+- Add tests for new behaviour. `go test -race ./...` must stay green, and `make cover` must stay above the floors in `coverage-floors.txt`. When your change raises a package's coverage, raise its floor in the same PR; never lower one to make CI pass.
 - Run `golangci-lint run` and `make demo` locally before opening the PR.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat(scope): ...`, `fix: ...`, `chore: ...`, `docs: ...`.
