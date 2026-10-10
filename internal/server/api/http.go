@@ -50,6 +50,9 @@ type Server struct {
 	k8sAttestor             *attest.K8sAttestor
 	k8sSVIDTemplate         string
 	oidc                    *oidc.Registry
+	idJAG                   *oidc.Registry
+	idJAGMaxAssertionTTL    time.Duration
+	idJAGMTLS               bool
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
 	entityStoreSearch       bool
@@ -205,6 +208,9 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /v1/svid/jwt", issuingOnly(gated(s.issueJWTSVID)))
 	handle("POST /v1/token/exchange", issuingOnly(gated(s.tokenExchange)))
 	handle("POST /v1/oidc/exchange", issuingOnly(leaderOnly(s.exchangeOIDC)))
+	// Authenticates its own client, so not wrapped in requireSPIFFEAuth.
+	handle("POST /oauth2/token", issuingOnly(leaderOnly(s.oauthToken)))
+	handle("GET /.well-known/oauth-authorization-server", s.getOAuthASMetadata)
 	handle("GET /v1/jwt/bundle", s.getJWTBundle)
 	handle("GET /v1/federation/bundles", s.getFederationBundles)
 	handle("GET /.well-known/openid-configuration", s.getOIDCDiscovery)
@@ -422,6 +428,12 @@ func (s *Server) getJWTBundle(w http.ResponseWriter, _ *http.Request) {
 // caller's response - the HTTP request has already succeeded by the time
 // audit is called.
 func (s *Server) audit(ctx context.Context, ev storage.AuditEvent) {
+	_ = s.appendAudit(ctx, ev)
+}
+
+// appendAudit is audit for callers that must not proceed when the
+// record could not be written.
+func (s *Server) appendAudit(ctx context.Context, ev storage.AuditEvent) error {
 	ctx, span := tracer.Start(ctx, "audit.append",
 		trace.WithAttributes(
 			attribute.String("audit.kind", ev.Kind),
@@ -434,9 +446,10 @@ func (s *Server) audit(ctx context.Context, ev storage.AuditEvent) {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "audit append failed")
 		slog.Error("audit append failed", "kind", ev.Kind, "err", err)
-		return
+		return err
 	}
 	metrics.AuditAppended.WithLabelValues(ev.Kind).Inc()
+	return nil
 }
 
 func mustJSON(v any) json.RawMessage {

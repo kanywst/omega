@@ -298,7 +298,11 @@ func inferKind(id spiffeid.ID) string {
 // claims map. go-jose decodes `exp` as float64 (JSON number); we
 // accept int64 as a fallback for callers that pre-marshal.
 func claimExpiry(claims map[string]any) (time.Time, bool) {
-	switch v := claims["exp"].(type) {
+	return claimNumericDate(claims, "exp")
+}
+
+func claimNumericDate(claims map[string]any, name string) (time.Time, bool) {
+	switch v := claims[name].(type) {
 	case float64:
 		return time.Unix(int64(v), 0).UTC(), true
 	case int64:

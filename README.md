@@ -27,7 +27,7 @@ What Omega ships today:
 - **AuthZEN 1.0 PDP**: Cedar embedded by default
 - **SPIFFE federation**: trust-bundle exchange via `--federate-with`
 - **K8s integration**: `OmegaDomain` CRD and a cert-manager `Issuer` / `ClusterIssuer`
-- **AI agent delegation**: an `examples/mcp-a2a-delegation/` reference using JWT-SVID with RFC 8693 nested `act` claims
+- **AI agent delegation**: an `examples/mcp-a2a-delegation/` reference using JWT-SVID with RFC 8693 nested `act` claims, and an ID-JAG grant endpoint (`POST /oauth2/token`) that turns an enterprise IdP's Identity Assertion JWT Authorization Grant into a delegated JWT-SVID ([docs/id-jag.md](docs/id-jag.md))
 - **Tamper-evident audit log** with hash chain and webhook forwarding
 - **Modular**: server / agent / CLI run independently
 - **Apache-2.0**, no CLA, no BSL trap door
