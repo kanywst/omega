@@ -56,6 +56,7 @@ type Server struct {
 	idJAGJWT                bool
 	dpopReplay              *replayCache
 	clientAssertionReplay   *replayCache
+	domains                 domainState
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
 	entityStoreSearch       bool
@@ -186,6 +187,9 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /v1/domains", gated(s.createDomain))
 	handle("GET /v1/domains", s.listDomains)
 	handle("GET /v1/domains/{name}", s.getDomain)
+	handle("DELETE /v1/domains/{name}", gated(s.deleteDomain))
+	handle("POST /v1/domains/{name}/admins", gated(s.addDomainAdmin))
+	handle("DELETE /v1/domains/{name}/admins", gated(s.removeDomainAdmin))
 	handle("POST /v1/svid", issuingOnly(gated(s.issueSVID)))
 	// The attestation enrollment paths (POST /v1/attest/k8s and
 	// POST /v1/oidc/exchange) carry their own platform-rooted / external-
@@ -467,29 +471,6 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
-}
-
-func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
-	var d storage.Domain
-	if !decodeJSONBody(w, r, &d) {
-		return
-	}
-	created, err := s.store.CreateDomain(r.Context(), d)
-	switch {
-	case errors.Is(err, storage.ErrAlreadyExists):
-		writeErr(w, http.StatusConflict, err)
-	case err != nil:
-		writeErr(w, http.StatusBadRequest, err)
-	default:
-		metrics.DomainsCreated.Inc()
-		s.audit(r.Context(), storage.AuditEvent{
-			Kind:     "domain.create",
-			Subject:  created.Name,
-			Decision: "ok",
-			Payload:  mustJSON(created),
-		})
-		writeJSON(w, http.StatusCreated, created)
-	}
 }
 
 func (s *Server) getDomain(w http.ResponseWriter, r *http.Request) {

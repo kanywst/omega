@@ -25,7 +25,13 @@ import (
 type Engine struct {
 	mu       sync.RWMutex
 	policies *cedar.PolicySet
-	entities cedar.EntityMap
+	// static is the entity map from entities.json, directory the one
+	// projected from control-plane state (SetDirectory); entities is
+	// their union, with static winning on a UID collision.
+	static    cedar.EntityMap
+	directory cedar.EntityMap
+	domains   map[string]bool
+	entities  cedar.EntityMap
 	// byType is the entity map indexed by Cedar entity type, each bucket
 	// sorted by id. Built once per load rather than per call: the map is
 	// immutable between LoadDir calls, and Search reads it once per page,
@@ -40,9 +46,12 @@ type Engine struct {
 // Cedar's default-deny semantics.
 func New() *Engine {
 	return &Engine{
-		policies: cedar.NewPolicySet(),
-		entities: cedar.EntityMap{},
-		byType:   map[string][]Entity{},
+		policies:  cedar.NewPolicySet(),
+		static:    cedar.EntityMap{},
+		directory: cedar.EntityMap{},
+		domains:   map[string]bool{},
+		entities:  cedar.EntityMap{},
+		byType:    map[string][]Entity{},
 	}
 }
 
@@ -54,11 +63,10 @@ func (e *Engine) LoadDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	idx := indexByType(ents)
 	e.mu.Lock()
 	e.policies = ps
-	e.entities = ents
-	e.byType = idx
+	e.static = ents
+	e.rebuildLocked()
 	e.mu.Unlock()
 	return nil
 }
@@ -169,7 +177,7 @@ type EvalResponse struct {
 const ActionEntityType = "Action"
 
 // EntitiesOfType returns every entity of the given Cedar type held in
-// the static entity store loaded from `entities.json`, as AuthZEN
+// the entity store (`entities.json` plus the domains from SetDirectory), as AuthZEN
 // entities sorted by id. Attributes are deliberately not projected: the
 // caller is enumerating a search space, and a Cedar Record does not
 // round-trip losslessly into the `properties` bag.
@@ -235,6 +243,8 @@ func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
 			ents[uid] = ent
 		}
 	}
+
+	ents = e.withSPIFFEParents(ents, cedarReq.Principal, cedarReq.Resource)
 
 	ok, diag := cedar.Authorize(ps, ents, cedarReq)
 	resp := EvalResponse{Decision: bool(ok)}

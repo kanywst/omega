@@ -46,6 +46,9 @@ func (r *DomainReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // the CR. The control plane already enforces uniqueness on domain.name,
 // so the loop is "GET to check existence; POST if missing; record
 // outcome in status".
+// createRetryInterval is how soon a failed create is retried.
+const createRetryInterval = 5 * time.Second
+
 func (r *DomainReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -71,8 +74,10 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, r.markCondition(ctx, &domain, metav1.ConditionFalse, "OmegaUnreachable", err.Error())
 	}
 	if !exists {
-		if err := r.createDomain(ctx, name, domain.Spec.Description); err != nil {
-			return ctrl.Result{}, r.markCondition(ctx, &domain, metav1.ConditionFalse, "CreateFailed", err.Error())
+		if err := r.createDomain(ctx, name, domain.Spec.Description, domain.Spec.Admins); err != nil {
+			// Retry: the usual cause is a parent OmegaDomain that has not
+			// been reconciled yet.
+			return ctrl.Result{RequeueAfter: createRetryInterval}, r.markCondition(ctx, &domain, metav1.ConditionFalse, "CreateFailed", err.Error())
 		}
 		logger.Info("created omega domain", "name", name)
 	}
@@ -102,8 +107,8 @@ func (r *DomainReconciler) domainExists(ctx context.Context, name string) (bool,
 	}
 }
 
-func (r *DomainReconciler) createDomain(ctx context.Context, name, description string) error {
-	body, err := json.Marshal(map[string]string{"name": name, "description": description})
+func (r *DomainReconciler) createDomain(ctx context.Context, name, description string, admins []string) error {
+	body, err := json.Marshal(map[string]any{"name": name, "description": description, "admins": admins})
 	if err != nil {
 		return err
 	}

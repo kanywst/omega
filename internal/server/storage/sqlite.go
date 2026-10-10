@@ -48,10 +48,13 @@ type Store struct {
 }
 
 type Domain struct {
-	Name        string    `json:"name"`
-	Parent      string    `json:"parent,omitempty"`
-	Description string    `json:"description,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	Name        string `json:"name"`
+	Parent      string `json:"parent,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Admins are the principals (SPIFFE IDs) that administer this domain
+	// and every domain below it.
+	Admins    []string  `json:"admins,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Open returns a Store backed by the driver inferred from spec.
@@ -160,6 +163,11 @@ func (s *Store) schemaDDL() []string {
 			   created_at  BIGINT  NOT NULL
 			 )`,
 			`CREATE INDEX IF NOT EXISTS idx_domains_parent ON domains(parent)`,
+			`CREATE TABLE IF NOT EXISTS domain_admins (
+			   domain     TEXT NOT NULL,
+			   principal  TEXT NOT NULL,
+			   PRIMARY KEY (domain, principal)
+			 )`,
 			`CREATE TABLE IF NOT EXISTS audit_log (
 			   seq        BIGSERIAL PRIMARY KEY,
 			   ts         BIGINT  NOT NULL,
@@ -193,6 +201,11 @@ func (s *Store) schemaDDL() []string {
 		   created_at  INTEGER NOT NULL
 		 )`,
 		`CREATE INDEX IF NOT EXISTS idx_domains_parent ON domains(parent)`,
+		`CREATE TABLE IF NOT EXISTS domain_admins (
+		   domain     TEXT NOT NULL,
+		   principal  TEXT NOT NULL,
+		   PRIMARY KEY (domain, principal)
+		 )`,
 		`CREATE TABLE IF NOT EXISTS audit_log (
 		   seq        INTEGER PRIMARY KEY AUTOINCREMENT,
 		   ts         INTEGER NOT NULL,
@@ -240,77 +253,6 @@ func (s *Store) rebind(query string) string {
 		b.WriteByte(c)
 	}
 	return b.String()
-}
-
-func (s *Store) CreateDomain(ctx context.Context, d Domain) (Domain, error) {
-	if !s.IsLeader() {
-		return Domain{}, ErrNotLeader
-	}
-	if d.Name == "" {
-		return Domain{}, fmt.Errorf("domain name is required")
-	}
-	if d.CreatedAt.IsZero() {
-		d.CreatedAt = time.Now().UTC()
-	}
-	if d.Parent == "" {
-		if i := strings.LastIndex(d.Name, "."); i > 0 {
-			d.Parent = d.Name[:i]
-		}
-	}
-	_, err := s.db.ExecContext(ctx,
-		s.rebind(`INSERT INTO domains(name, parent, description, created_at) VALUES (?, ?, ?, ?)`),
-		d.Name, d.Parent, d.Description, d.CreatedAt.UnixNano(),
-	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return Domain{}, ErrAlreadyExists
-		}
-		return Domain{}, fmt.Errorf("insert domain: %w", err)
-	}
-	return d, nil
-}
-
-func (s *Store) GetDomain(ctx context.Context, name string) (Domain, error) {
-	var (
-		d            Domain
-		createdNanos int64
-	)
-	err := s.db.QueryRowContext(ctx,
-		s.rebind(`SELECT name, parent, description, created_at FROM domains WHERE name = ?`),
-		name,
-	).Scan(&d.Name, &d.Parent, &d.Description, &createdNanos)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Domain{}, ErrNotFound
-	}
-	if err != nil {
-		return Domain{}, fmt.Errorf("query domain: %w", err)
-	}
-	d.CreatedAt = time.Unix(0, createdNanos).UTC()
-	return d, nil
-}
-
-func (s *Store) ListDomains(ctx context.Context) ([]Domain, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT name, parent, description, created_at FROM domains ORDER BY name`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query domains: %w", err)
-	}
-	defer rows.Close()
-
-	var out []Domain
-	for rows.Next() {
-		var (
-			d            Domain
-			createdNanos int64
-		)
-		if err := rows.Scan(&d.Name, &d.Parent, &d.Description, &createdNanos); err != nil {
-			return nil, fmt.Errorf("scan domain: %w", err)
-		}
-		d.CreatedAt = time.Unix(0, createdNanos).UTC()
-		out = append(out, d)
-	}
-	return out, rows.Err()
 }
 
 // isUniqueViolation reports whether err comes from inserting a row that

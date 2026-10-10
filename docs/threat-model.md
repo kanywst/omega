@@ -334,6 +334,13 @@ A client presents an ID-JAG that was minted for another client, another authoriz
 - Mitigation today: `POST /oauth2/token` requires client authentication by SPIFFE ID and an ID-JAG whose `client_id` equals it, whose single `aud` is Omega's issuer, whose JOSE `typ` is `oauth-id-jag+jwt`, and whose signature verifies against an IdP trusted with `--id-jag-idp`. Under `--require-auth` the client is the verified mTLS X.509-SVID, or with `--client-cert-optional` a short-lived JWT-SVID client assertion that is single use within one process lifetime (a restart or failover forgets used `jti`s, bounded by the assertion lifetime). Every grant is evaluated by Cedar under its own action (`token.id_jag`) with default deny, and the token is released only after its grant is on the audit chain. The issued token is capped at the ID-JAG's lifetime, its audience comes only from the ID-JAG's `resource`, and every grant and every refusal from an authenticated client is audited ([ADR 0011](adr/0011-id-jag-authorization-grant.md)).
 - Residual risk: with `--id-jag-insecure-client-binding` (no `--require-auth`) the client binding does not hold, because any caller can mint the client's JWT-SVID; the server refuses this mode unless that flag is set, and warns when it is. With it, a stolen ID-JAG is still usable by its bound client until it expires, because `jti` is not tracked (the draft allows re-presentation). A DPoP-bound ID-JAG needs a proof for its key, and the issued token stays bound to it ([ADR 0013](adr/0013-dpop-sender-constrained-tokens.md)). The IdP's own decision on which client may act for which user is trusted as-is.
 
+### E4 — Elevation of privilege across the domain tree
+
+A principal that administers one domain tries to create, delete or grant admins on a domain outside its subtree, or to make itself a root admin.
+
+- Mitigation today: under `--require-auth` every domain write is authorized against the target's admin chain (the domain and its ancestors) and the `--domain-root-admin` list, using the caller's verified SPIFFE ID. Creating or deleting a domain is authorized against its parent, so a domain's own admins cannot delete it. Every write is audited with the caller as actor ([ADR 0014](adr/0014-domain-hierarchy-and-delegation.md)).
+- Residual risk: revoking a principal on a domain does not revoke grants it holds on domains below it; operators must revoke each grant. Without `--require-auth` domain writes are open. `principal in Domain::"..."` policies trust the SPIFFE ID path, so an identity minted under a domain's path is in that domain, which is why issuance must be authenticated too (S3).
+
 ## Out of scope
 
 These are threats the project deliberately does not address. Each

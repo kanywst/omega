@@ -77,6 +77,9 @@ func TestPostgresDomainCRUD(t *testing.T) {
 	s := openPostgresStore(t)
 	ctx := context.Background()
 
+	if _, err := s.CreateDomain(ctx, storage.Domain{Name: "media"}); err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
 	d, err := s.CreateDomain(ctx, storage.Domain{Name: "media.news", Description: "news"})
 	if err != nil {
 		t.Fatalf("create: %v", err)

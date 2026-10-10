@@ -1,0 +1,75 @@
+package policy_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/kanywst/omega/internal/server/policy"
+)
+
+func engineWith(t *testing.T, cedarSrc string) *policy.Engine {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.cedar"), []byte(cedarSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := policy.New()
+	if err := e.LoadDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestSPIFFEPrincipalInDomainHierarchy(t *testing.T) {
+	e := engineWith(t, `permit (principal in Domain::"media", action == Action::"read", resource);`)
+	e.SetDirectory(policy.Directory{Domains: map[string]string{"media": "", "media.news": "media", "sports": ""}})
+
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"spiffe://omega.local/media/news/web", true},  // media.news -> media
+		{"spiffe://omega.local/media/web", true},       // media
+		{"spiffe://omega.local/sports/web", false},     // another domain
+		{"spiffe://omega.local/media.news/web", false}, // a dotted segment is not a label path
+		{"spiffe://omega.local/mediax/web", false},     // label prefix, not segment prefix
+	}
+	for _, tc := range cases {
+		resp, err := e.Evaluate(policy.EvalRequest{
+			Subject:  policy.Entity{Type: "Spiffe", ID: tc.id},
+			Action:   policy.Action{Name: "read"},
+			Resource: policy.Entity{Type: "Doc", ID: "d"},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.id, err)
+		}
+		if resp.Decision != tc.want {
+			t.Errorf("%s: decision %v, want %v", tc.id, resp.Decision, tc.want)
+		}
+	}
+}
+
+func TestResourceDomainAndDomainEntitiesSearchable(t *testing.T) {
+	e := engineWith(t, `permit (principal, action == Action::"read", resource in Domain::"media");`)
+	e.SetDirectory(policy.Directory{Domains: map[string]string{"media": "", "media.news": "media"}})
+	resp, err := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "User", ID: "u"},
+		Action:   policy.Action{Name: "read"},
+		Resource: policy.Entity{Type: "Spiffe", ID: "spiffe://omega.local/media/news/db", Attrs: map[string]any{"tier": "gold"}},
+	})
+	if err != nil || !resp.Decision {
+		t.Fatalf("resource in domain: %+v %v", resp, err)
+	}
+	if got := e.EntitiesOfType("Domain"); len(got) != 2 {
+		t.Errorf("Domain entities: %v", got)
+	}
+	e.SetDirectory(policy.Directory{})
+	if resp, _ := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "User", ID: "u"},
+		Action:   policy.Action{Name: "read"},
+		Resource: policy.Entity{Type: "Spiffe", ID: "spiffe://omega.local/media/news/db"},
+	}); resp.Decision {
+		t.Error("after the domains are gone the resource is no longer in Domain::\"media\"")
+	}
+}

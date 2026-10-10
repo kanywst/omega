@@ -2,6 +2,14 @@
 apiVersion: omega.kanywst.github.io/v1alpha1
 kind: OmegaDomain
 metadata:
+  name: media
+spec:
+  domainName: media
+  description: Parent of media.news. A domain's parent must exist first.
+---
+apiVersion: omega.kanywst.github.io/v1alpha1
+kind: OmegaDomain
+metadata:
   name: media-news
 spec:
   domainName: media.news

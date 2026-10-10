@@ -52,6 +52,14 @@ spec:
                 description:
                   type: string
                   description: Free-form operator-facing label.
+                admins:
+                  type: array
+                  description: |
+                    SPIFFE IDs that administer this domain and every domain
+                    below it. Applied when the domain is created. The
+                    parent domain must already exist.
+                  items:
+                    type: string
             status:
               type: object
               properties:
