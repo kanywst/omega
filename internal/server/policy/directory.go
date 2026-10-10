@@ -3,6 +3,7 @@ package policy
 import (
 	"log/slog"
 	"strings"
+	"time"
 
 	cedar "github.com/cedar-policy/cedar-go"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -11,8 +12,23 @@ import (
 // Entity types the engine derives from control-plane state.
 const (
 	DomainEntityType = "Domain"
+	GroupEntityType  = "Group"
 	SpiffeEntityType = "Spiffe"
 )
+
+// Membership places a principal in a group until ExpiresAt (zero: no
+// expiry). Expiry is checked at evaluation time, not at refresh time.
+type Membership struct {
+	Group     string
+	ExpiresAt time.Time
+}
+
+// directorySnapshot is the projected state one evaluation reads.
+type directorySnapshot struct {
+	trustDomain spiffeid.TrustDomain
+	domains     map[string]bool
+	memberships map[string][]Membership
+}
 
 // Directory is control-plane state projected into the Cedar entity
 // store, so policies can test membership with `in`.
@@ -26,6 +42,14 @@ type Directory struct {
 	// whose labels prefix its SPIFFE ID path: spiffe://td/media/news/web
 	// is in Domain::"media.news", and so in Domain::"media".
 	Domains map[string]string
+	// Groups lists every group id ("<domain>:<name>"); each becomes
+	// Group::"<id>" with no parents, so membership in a domain's group
+	// does not place a principal in that domain.
+	Groups []string
+	// Memberships maps a member's SPIFFE ID to its groups. Any SPIFFE ID
+	// can be a member, a federated peer's included, since an admin named
+	// it explicitly.
+	Memberships map[string][]Membership
 }
 
 // SetDirectory replaces the projected control-plane state.
@@ -41,10 +65,13 @@ func (e *Engine) SetDirectory(d Directory) {
 		ents[uid] = ent
 		domains[name] = true
 	}
+	for _, g := range d.Groups {
+		uid := cedar.NewEntityUID(GroupEntityType, cedar.String(g))
+		ents[uid] = cedar.Entity{UID: uid}
+	}
 	e.mu.Lock()
 	e.directory = ents
-	e.domains = domains
-	e.trustDomain = d.TrustDomain
+	e.snap = directorySnapshot{trustDomain: d.TrustDomain, domains: domains, memberships: d.Memberships}
 	e.rebuildLocked()
 	e.mu.Unlock()
 }
@@ -71,8 +98,8 @@ func (e *Engine) rebuildLocked() {
 // withSPIFFEParents adds each Spiffe UID's domain to its parents,
 // copying ents first if it changes anything. ents, domains and td must
 // come from the same snapshot so a parent always names an entity in ents.
-func withSPIFFEParents(ents cedar.EntityMap, domains map[string]bool, td spiffeid.TrustDomain, uids ...cedar.EntityUID) cedar.EntityMap {
-	if len(domains) == 0 || td.IsZero() {
+func withSPIFFEParents(ents cedar.EntityMap, snap directorySnapshot, now time.Time, uids ...cedar.EntityUID) cedar.EntityMap {
+	if len(snap.domains) == 0 && len(snap.memberships) == 0 {
 		return ents
 	}
 	cloned := false
@@ -80,8 +107,18 @@ func withSPIFFEParents(ents cedar.EntityMap, domains map[string]bool, td spiffei
 		if string(uid.Type) != SpiffeEntityType {
 			continue
 		}
-		dom := domainOfSPIFFEID(string(uid.ID), domains, td)
-		if dom == "" {
+		var add []cedar.EntityUID
+		if !snap.trustDomain.IsZero() {
+			if dom := domainOfSPIFFEID(string(uid.ID), snap.domains, snap.trustDomain); dom != "" {
+				add = append(add, cedar.NewEntityUID(DomainEntityType, cedar.String(dom)))
+			}
+		}
+		for _, m := range snap.memberships[string(uid.ID)] {
+			if m.ExpiresAt.IsZero() || now.Before(m.ExpiresAt) {
+				add = append(add, cedar.NewEntityUID(GroupEntityType, cedar.String(m.Group)))
+			}
+		}
+		if len(add) == 0 {
 			continue
 		}
 		if !cloned {
@@ -92,9 +129,7 @@ func withSPIFFEParents(ents cedar.EntityMap, domains map[string]bool, td spiffei
 		if !ok {
 			ent = cedar.Entity{UID: uid}
 		}
-		parents := ent.Parents.Slice()
-		parents = append(parents, cedar.NewEntityUID(DomainEntityType, cedar.String(dom)))
-		ent.Parents = cedar.NewEntityUIDSet(parents...)
+		ent.Parents = cedar.NewEntityUIDSet(append(ent.Parents.Slice(), add...)...)
 		ents[uid] = ent
 	}
 	return ents

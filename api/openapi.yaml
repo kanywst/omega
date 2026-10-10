@@ -267,6 +267,158 @@ paths:
         "503":
           $ref: "#/components/responses/NotLeader"
 
+  /v1/domains/{name}/groups:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [domains]
+      operationId: listGroups
+      summary: List a domain's groups.
+      description: Member lists are omitted for unauthenticated callers under `--require-auth`.
+      responses:
+        "200":
+          description: Group list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      tags: [domains, leader-only]
+      operationId: createGroup
+      summary: Create a group owned by the domain.
+      description: Under `--require-auth` the caller must administer the domain or an ancestor.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GroupRequest"
+      responses:
+        "201":
+          description: Group created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/domains/{name}/groups/{group}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: group
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [domains]
+      operationId: getGroup
+      summary: Show a group and its members.
+      responses:
+        "200":
+          description: Group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [domains, leader-only]
+      operationId: deleteGroup
+      summary: Delete a group and its memberships.
+      responses:
+        "204":
+          description: Deleted.
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/domains/{name}/groups/{group}/members:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: group
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [domains, leader-only]
+      operationId: putGroupMember
+      summary: Add a member, or change its expiry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GroupMemberRequest"
+      responses:
+        "200":
+          description: The group with its updated members.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+    delete:
+      tags: [domains, leader-only]
+      operationId: removeGroupMember
+      summary: Remove a member.
+      parameters:
+        - name: principal
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The group with its updated members.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
   /v1/attest/k8s:
     post:
       tags: [attest, leader-only]
@@ -1093,6 +1245,69 @@ components:
         principal:
           type: string
           description: SPIFFE ID to grant.
+
+    Group:
+      type: object
+      additionalProperties: false
+      required: [domain, name, created_at]
+      properties:
+        domain:
+          type: string
+        name:
+          type: string
+          description: Policy identity is Group::"<domain>:<name>".
+        description:
+          type: string
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupMember"
+        created_at:
+          type: string
+          format: date-time
+
+    GroupMember:
+      type: object
+      additionalProperties: false
+      required: [principal]
+      properties:
+        principal:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+          description: Omitted for a membership that never expires. Checked at evaluation time.
+
+    GroupRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+
+    GroupMemberRequest:
+      type: object
+      additionalProperties: false
+      required: [principal]
+      properties:
+        principal:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    GroupListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Group"
 
     DomainListResponse:
       type: object

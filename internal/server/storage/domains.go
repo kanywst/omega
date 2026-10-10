@@ -130,6 +130,13 @@ func (s *Store) DeleteDomain(ctx context.Context, name string) error {
 	if children > 0 {
 		return ErrHasChildren
 	}
+	var groups int
+	if err := tx.QueryRowContext(ctx, s.rebind(`SELECT COUNT(*) FROM groups WHERE domain = ?`), name).Scan(&groups); err != nil {
+		return fmt.Errorf("count groups: %w", err)
+	}
+	if groups > 0 {
+		return ErrHasGroups
+	}
 	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM domains WHERE name = ?`), name); err != nil {
 		return fmt.Errorf("delete domain: %w", err)
 	}

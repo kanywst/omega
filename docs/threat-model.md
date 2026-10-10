@@ -341,6 +341,13 @@ A principal that administers one domain tries to create, delete or grant admins 
 - Mitigation today: under `--require-auth` every domain write is authorized against the target's admin chain (the domain and its ancestors) and the `--domain-root-admin` list, using the caller's verified SPIFFE ID. Creating or deleting a domain is authorized against its parent, so a domain's own admins cannot delete it. Every write and every refused attempt is audited with the caller as actor, and only local-trust-domain SPIFFE IDs are placed in a domain, so a federated peer cannot satisfy `principal in Domain::"..."` ([ADR 0014](adr/0014-domain-hierarchy-and-delegation.md)).
 - Residual risk: revoking a principal on a domain does not revoke grants it holds on domains below it; operators must revoke each grant. Without `--require-auth` domain writes are open. `principal in Domain::"..."` policies trust the SPIFFE ID path, so an identity minted under a domain's path is in that domain, which is why issuance must be authenticated too (S3). A delegated admin can delete a leaf domain and so take its workloads out of a central `forbid` written against that domain. Domain admins do not control which SVIDs are issued under their path; issuance and attestation do. A domain created on one replica can be missing on another for up to five seconds, and evaluation fails closed (`503`) once the tree has not reloaded for fifteen seconds. Anyone who can create `OmegaDomain` objects acts with the operator's domain authority.
 
+### E5 — Elevation of privilege through group membership
+
+A principal adds itself, or a principal it controls, to a group that a policy trusts, or keeps a temporary membership past its end.
+
+- Mitigation today: group writes are authorized against the owning domain's admin chain under `--require-auth`, and every change and refused attempt is audited. Membership expiry is checked at evaluation time, so a lapsed membership stops counting at once on every replica ([ADR 0015](adr/0015-groups-with-expiring-membership.md)).
+- Residual risk: a domain's admins control who is in its groups, so a policy that trusts `Group::"media:..."` trusts the media admins. Groups accept federated SPIFFE IDs when an admin lists them. A removal reaches other replicas within the five-second reload interval.
+
 ## Out of scope
 
 These are threats the project deliberately does not address. Each
