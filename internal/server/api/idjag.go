@@ -161,13 +161,13 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	}
 	var proofJKT string
 	if boundJKT != "" || len(r.Header.Values("DPoP")) > 0 {
+		if len(r.Header.Values("DPoP")) == 0 {
+			fail(newOAuthErr(http.StatusBadRequest, "invalid_grant", "the assertion is DPoP-bound and no DPoP proof was sent"), "")
+			return
+		}
 		proofJKT, err = s.verifyDPoPProof(r, issuer+"/oauth2/token")
 		if err != nil {
-			code := "invalid_dpop_proof"
-			if boundJKT != "" {
-				code = "invalid_grant"
-			}
-			fail(newOAuthErr(http.StatusBadRequest, code, "%s", err), "")
+			fail(newOAuthErr(http.StatusBadRequest, "invalid_dpop_proof", "%s", err), "")
 			return
 		}
 		if boundJKT != "" && proofJKT != boundJKT {

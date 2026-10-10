@@ -637,7 +637,9 @@ paths:
         A subject or actor token with `cnf.jkt` needs a DPoP proof for
         that key (`htu` = `<issuer>/v1/token/exchange`); one with
         `cnf.x5t#S256` needs the matching client certificate. Any
-        other `cnf` is refused.
+        other `cnf` is refused. The output keeps the actor token's
+        binding, or the subject token's when the actor is the
+        subject's own principal.
       parameters:
         - name: DPoP
           in: header
@@ -1665,7 +1667,8 @@ components:
           const: "urn:ietf:params:oauth:token-type:jwt"
         token_type:
           type: string
-          const: Bearer
+          enum: [Bearer, DPoP]
+          description: DPoP when the output inherits a cnf.jkt binding.
         expires_in:
           type: integer
           minimum: 0

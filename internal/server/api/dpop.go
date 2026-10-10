@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +27,10 @@ const (
 	// dpopProofWindow bounds how far a proof's iat may be from now, and
 	// how long its jti is remembered.
 	dpopProofWindow = time.Minute
+	dpopMaxJTI      = 256
+	// dpopMaxReplayEntries caps the replay cache; once full, proofs are
+	// refused rather than accepted unchecked.
+	dpopMaxReplayEntries = 100_000
 )
 
 var dpopAlgs = []jose.SignatureAlgorithm{
@@ -40,32 +46,41 @@ func dpopAlgNames() []string {
 	return out
 }
 
-// dpopReplayCache remembers proof jtis for the proof window. It is per
-// process; the endpoints using it are leader-only, so one cache sees
-// every proof in an HA deployment.
+// dpopReplayCache remembers proof jtis for at least twice the proof
+// window, in two generations that rotate every window so eviction costs
+// nothing per request. It is per process; the endpoints using it are
+// leader-only, so one cache sees every proof in an HA deployment.
 type dpopReplayCache struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
+	mu        sync.Mutex
+	cur, prev map[[sha256.Size]byte]struct{}
+	rotated   time.Time
 }
 
 func newDPoPReplayCache() *dpopReplayCache {
-	return &dpopReplayCache{seen: map[string]time.Time{}}
+	return &dpopReplayCache{cur: map[[sha256.Size]byte]struct{}{}, prev: map[[sha256.Size]byte]struct{}{}}
 }
 
+var errReplayCacheFull = errors.New("DPoP replay cache is full; retry later")
+
 // firstUse records key and reports whether it had not been seen.
-func (c *dpopReplayCache) firstUse(key string, now time.Time) bool {
+func (c *dpopReplayCache) firstUse(key string, now time.Time) (bool, error) {
+	h := sha256.Sum256([]byte(key))
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for k, exp := range c.seen {
-		if now.After(exp) {
-			delete(c.seen, k)
-		}
+	if now.Sub(c.rotated) >= dpopProofWindow {
+		c.prev, c.cur, c.rotated = c.cur, map[[sha256.Size]byte]struct{}{}, now
 	}
-	if _, ok := c.seen[key]; ok {
-		return false
+	if _, ok := c.cur[h]; ok {
+		return false, nil
 	}
-	c.seen[key] = now.Add(2 * dpopProofWindow)
-	return true
+	if _, ok := c.prev[h]; ok {
+		return false, nil
+	}
+	if len(c.cur)+len(c.prev) >= dpopMaxReplayEntries {
+		return false, errReplayCacheFull
+	}
+	c.cur[h] = struct{}{}
+	return true, nil
 }
 
 // verifyDPoPProof validates the request's DPoP header for the given
@@ -76,7 +91,7 @@ func (s *Server) verifyDPoPProof(r *http.Request, htu string) (string, error) {
 	if len(vals) != 1 {
 		return "", fmt.Errorf("exactly one DPoP header is required, got %d", len(vals))
 	}
-	jws, err := jose.ParseSigned(vals[0], dpopAlgs)
+	jws, err := jose.ParseSignedCompact(vals[0], dpopAlgs)
 	if err != nil {
 		return "", fmt.Errorf("parse DPoP proof: %w", err)
 	}
@@ -118,30 +133,44 @@ func (s *Server) verifyDPoPProof(r *http.Request, htu string) (string, error) {
 	if d := now.Sub(time.Unix(int64(iat), 0)); d > dpopProofWindow || d < -dpopProofWindow {
 		return "", errors.New("DPoP proof iat is outside the accepted window")
 	}
-	if c.JTI == "" {
-		return "", errors.New("DPoP proof has no jti")
+	if c.JTI == "" || len(c.JTI) > dpopMaxJTI {
+		return "", fmt.Errorf("DPoP proof jti must be 1 to %d bytes", dpopMaxJTI)
 	}
 	sum, err := jwk.Thumbprint(crypto.SHA256)
 	if err != nil {
 		return "", fmt.Errorf("DPoP key thumbprint: %w", err)
 	}
 	jkt := base64.RawURLEncoding.EncodeToString(sum)
-	if !s.dpopReplay.firstUse(jkt+"|"+c.JTI, now) {
+	fresh, err := s.dpopReplay.firstUse(jkt+"|"+c.JTI, now)
+	if err != nil {
+		return "", err
+	}
+	if !fresh {
 		return "", errors.New("DPoP proof jti has already been used")
 	}
 	return jkt, nil
 }
 
-// sameTargetURI compares htu values without query and fragment (RFC
-// 9449 §4.3).
+// sameTargetURI compares htu values per RFC 9449 §4.3: query and
+// fragment ignored, scheme and host case-insensitive, default ports
+// dropped, path compared after decoding.
 func sameTargetURI(got, want string) bool {
-	g, err1 := url.Parse(got)
-	w, err2 := url.Parse(want)
-	if err1 != nil || err2 != nil {
-		return false
+	norm := func(raw string) (string, bool) {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return "", false
+		}
+		scheme := strings.ToLower(u.Scheme)
+		host := strings.ToLower(u.Hostname())
+		defaultPort := (scheme == "https" && u.Port() == "443") || (scheme == "http" && u.Port() == "80")
+		if u.Port() != "" && !defaultPort {
+			host += ":" + u.Port()
+		}
+		return scheme + "://" + host + u.Path, true
 	}
-	g.RawQuery, g.Fragment, w.RawQuery, w.Fragment = "", "", "", ""
-	return g.String() == w.String()
+	g, ok1 := norm(got)
+	w, ok2 := norm(want)
+	return ok1 && ok2 && g == w
 }
 
 // confirmationJKT returns the cnf.jkt of a token's claims, "" when the

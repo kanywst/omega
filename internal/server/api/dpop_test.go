@@ -118,10 +118,11 @@ func TestIDJAGGrantDPoP(t *testing.T) {
 	}{
 		{"no proof", "", "invalid_grant"},
 		{"proof from another key", other.proof(t, "POST", tokenEndpoint, time.Now(), "p2"), "invalid_grant"},
-		{"replayed proof", key.proof(t, "POST", tokenEndpoint, time.Now(), "p1"), "invalid_grant"},
-		{"wrong htu", key.proof(t, "POST", jagOmegaIssuer+"/v1/token/exchange", time.Now(), "p3"), "invalid_grant"},
-		{"wrong htm", key.proof(t, "GET", tokenEndpoint, time.Now(), "p4"), "invalid_grant"},
-		{"stale iat", key.proof(t, "POST", tokenEndpoint, time.Now().Add(-5*time.Minute), "p5"), "invalid_grant"},
+		{"replayed proof", key.proof(t, "POST", tokenEndpoint, time.Now(), "p1"), "invalid_dpop_proof"},
+		{"wrong htu", key.proof(t, "POST", jagOmegaIssuer+"/v1/token/exchange", time.Now(), "p3"), "invalid_dpop_proof"},
+		{"wrong htm", key.proof(t, "GET", tokenEndpoint, time.Now(), "p4"), "invalid_dpop_proof"},
+		{"stale iat", key.proof(t, "POST", tokenEndpoint, time.Now().Add(-5*time.Minute), "p5"), "invalid_dpop_proof"},
+		{"oversized jti", key.proof(t, "POST", tokenEndpoint, time.Now(), strings.Repeat("j", 300)), "invalid_dpop_proof"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +184,28 @@ func TestTokenExchangeHonoursSubjectBinding(t *testing.T) {
 		t.Fatalf("DPoP-bound subject with proof: got %d %v", resp.StatusCode, body)
 	}
 
+	// The key holder exchanging its bound token with itself keeps the binding.
+	selfBody, _ := json.Marshal(api.TokenExchangeRequest{
+		GrantType:         "urn:ietf:params:oauth:grant-type:token-exchange",
+		SubjectToken:      dpopBound.Token,
+		SubjectTokenType:  "urn:ietf:params:oauth:token-type:jwt",
+		ActorToken:        dpopBound.Token,
+		ActorTokenType:    "urn:ietf:params:oauth:token-type:jwt",
+		RequestedSPIFFEID: jagAgent,
+		Audience:          []string{"https://elsewhere.example.com"},
+	})
+	resp, body := postWithDPoP(t, env.srv.URL+"/v1/token/exchange", "application/json", string(selfBody), key.proof(t, "POST", exchangeURL, time.Now(), "x2"))
+	if resp.StatusCode != http.StatusOK || body["token_type"] != "DPoP" {
+		t.Fatalf("self-exchange of a bound token: got %d %v, want 200 DPoP", resp.StatusCode, body)
+	}
+	_, claims, err := env.ca.ParseJWTSVIDClaims(body["access_token"].(string))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cnf, _ := claims["cnf"].(map[string]any); cnf["jkt"] != key.jkt {
+		t.Fatalf("self-exchange dropped the binding: cnf = %v", claims["cnf"])
+	}
+
 	certBound, err := env.ca.IssueJWTSVID(spiffeid.RequireFromString(jagAgent), []string{jagTool}, time.Minute,
 		map[string]any{"cnf": map[string]any{"x5t#S256": "AAAA"}})
 	if err != nil {
@@ -190,5 +213,17 @@ func TestTokenExchangeHonoursSubjectBinding(t *testing.T) {
 	}
 	if resp, body := exchange(certBound.Token, ""); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("cert-bound subject without its cert: got %d %v", resp.StatusCode, body)
+	}
+}
+
+func TestSameTargetURINormalisation(t *testing.T) {
+	if !api.SameTargetURIForTest("https://Omega.Example.com:443/oauth2/token?x=1#f", "https://omega.example.com/oauth2/token") {
+		t.Error("case, default port, query and fragment must not matter")
+	}
+	if api.SameTargetURIForTest("https://omega.example.com:8443/oauth2/token", "https://omega.example.com/oauth2/token") {
+		t.Error("a non-default port must matter")
+	}
+	if api.SameTargetURIForTest("http://omega.example.com/oauth2/token", "https://omega.example.com/oauth2/token") {
+		t.Error("the scheme must matter")
 	}
 }

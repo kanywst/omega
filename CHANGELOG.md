@@ -10,11 +10,11 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ### Added
 
-- **DPoP (RFC 9449) on the ID-JAG grant.** An ID-JAG bound with `cnf.jkt` is redeemed with a DPoP proof for that key, and any valid proof binds the issued JWT-SVID to its key (`cnf.jkt`, `token_type: DPoP`). Proofs are checked for `typ`, signature, `htm`, `htu`, a one-minute `iat` window and `jti` replay. The metadata lists `dpop_signing_alg_values_supported`. See [ADR 0013](docs/adr/0013-dpop-sender-constrained-tokens.md).
+- **DPoP (RFC 9449) on the ID-JAG grant.** An ID-JAG bound with `cnf.jkt` is redeemed with a DPoP proof for that key, and any valid proof binds the issued JWT-SVID to its key (`cnf.jkt`, `token_type: DPoP`). Proofs are checked for compact serialization, `typ`, signature, `htm`, `htu`, a one-minute `iat` window and `jti` replay (hashed, bounded cache). The metadata lists `dpop_signing_alg_values_supported`. See [ADR 0013](docs/adr/0013-dpop-sender-constrained-tokens.md).
 
 ### Security
 
-- **`POST /v1/token/exchange` honours `cnf`.** A subject or actor token bound to a DPoP key or a client certificate was accepted as a bearer token. It now needs a DPoP proof for `cnf.jkt` or the matching client certificate for `cnf.x5t#S256`; any other `cnf` is refused.
+- **`POST /v1/token/exchange` honours `cnf`.** A subject or actor token bound to a DPoP key or a client certificate was accepted as a bearer token. It now needs a DPoP proof for `cnf.jkt` or the matching client certificate for `cnf.x5t#S256`; any other `cnf` is refused. The output keeps the actor's binding (or the subject's, when the actor is the subject's own principal), so a key holder cannot unbind its token by exchanging it with itself.
 
 ### Added
 
