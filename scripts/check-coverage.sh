@@ -10,8 +10,11 @@ PROFILE="${PROFILE:-coverage.out}"
 PKG="${PKG:-./...}"
 
 read -r -a pkgs <<<"$PKG"
-out=$(go test -race -count=1 -covermode=atomic -coverprofile="$PROFILE" "${pkgs[@]}")
-echo "$out"
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+# tee so a failing run still prints its --- FAIL output before exiting.
+go test -race -count=1 -covermode=atomic -coverprofile="$PROFILE" "${pkgs[@]}" | tee "$log"
+out=$(cat "$log")
 
 fail=0
 check() { # name actual floor
