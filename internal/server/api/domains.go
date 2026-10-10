@@ -24,6 +24,20 @@ type domainState struct {
 	rootAdmins []string
 	mu         sync.Mutex
 	loadedAt   time.Time
+	interval   time.Duration
+}
+
+// directoryStaleAfter is how many sync intervals may pass without a
+// successful reload before policy evaluation fails closed.
+const directoryStaleAfter = 3
+
+// directoryStale reports whether the projected tree is too old to
+// evaluate against: a forbid on a domain created since would not apply.
+// It only applies once RunDirectorySync is running.
+func (s *Server) directoryStale() bool {
+	s.domains.mu.Lock()
+	defer s.domains.mu.Unlock()
+	return s.domains.interval > 0 && time.Since(s.domains.loadedAt) > directoryStaleAfter*s.domains.interval
 }
 
 // WithDomainRootAdmins sets the principals that may create top-level
@@ -43,9 +57,11 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 	tree := make(map[string]string, len(items))
 	for _, d := range items {
 		// Derive the parent from the name, as authorization does, and
-		// skip rows an older version stored with an invalid name or a
-		// parent that disagrees with it.
-		if storage.ValidateDomainName(d.Name) != nil {
+		// skip rows an older version stored with an invalid name: no
+		// SPIFFE path can match them, so their workloads are in no
+		// domain. Say so, since a forbid on such a domain covers nothing.
+		if err := storage.ValidateDomainName(d.Name); err != nil {
+			slog.Warn("domain not projected into policy: invalid name from an earlier version; recreate it under a valid name", "domain", d.Name, "err", err)
 			continue
 		}
 		tree[d.Name] = storage.ParentOf(d.Name)
@@ -60,6 +76,9 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 // RunDirectorySync refreshes the projection every interval until ctx is
 // done, so a replica picks up domains another replica created.
 func (s *Server) RunDirectorySync(ctx context.Context, interval time.Duration) {
+	s.domains.mu.Lock()
+	s.domains.interval = interval
+	s.domains.mu.Unlock()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -169,14 +188,11 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
+		ev := storage.AuditEvent{Kind: "domain.create", Actor: caller, Subject: created.Name, Decision: "ok", Payload: mustJSON(created)}
+		if !s.recordOrUndo(w, r, ev, func(ctx context.Context) error { return s.store.DeleteDomain(ctx, created.Name) }) {
+			return
+		}
 		metrics.DomainsCreated.Inc()
-		s.audit(r.Context(), storage.AuditEvent{
-			Kind:     "domain.create",
-			Actor:    caller,
-			Subject:  created.Name,
-			Decision: "ok",
-			Payload:  mustJSON(created),
-		})
 		s.refreshAfterWrite(r.Context())
 		writeJSON(w, http.StatusCreated, created)
 	}
@@ -201,7 +217,17 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeDomainWrite(w, r, "domain.delete", name, storage.ParentOf(name)) {
 		return
 	}
-	err := s.store.DeleteDomain(r.Context(), name)
+	// Keep what is deleted, so a failed audit can put it back.
+	before, err := s.store.GetDomain(r.Context(), name)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	err = s.store.DeleteDomain(r.Context(), name)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
@@ -210,12 +236,10 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
-		s.audit(r.Context(), storage.AuditEvent{
-			Kind:     "domain.delete",
-			Actor:    CallerSPIFFEID(r.Context()),
-			Subject:  name,
-			Decision: "ok",
-		})
+		ev := storage.AuditEvent{Kind: "domain.delete", Actor: CallerSPIFFEID(r.Context()), Subject: name, Decision: "ok", Payload: mustJSON(before)}
+		if !s.recordOrUndo(w, r, ev, func(ctx context.Context) error { _, err := s.store.CreateDomain(ctx, before); return err }) {
+			return
+		}
 		s.refreshAfterWrite(r.Context())
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -242,20 +266,33 @@ func (s *Server) addDomainAdmin(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeDomainWrite(w, r, "domain.admin.add", name, name) {
 		return
 	}
-	err := s.store.AddDomainAdmin(r.Context(), name, req.Principal)
+	before, err := s.store.GetDomain(r.Context(), name)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	already := slices.Contains(before.Admins, req.Principal)
+	err = s.store.AddDomainAdmin(r.Context(), name, req.Principal)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
-		s.audit(r.Context(), storage.AuditEvent{
-			Kind:     "domain.admin.add",
-			Actor:    CallerSPIFFEID(r.Context()),
-			Subject:  name,
-			Decision: "ok",
-			Payload:  mustJSON(map[string]string{"principal": req.Principal}),
-		})
+		ev := storage.AuditEvent{Kind: "domain.admin.add", Actor: CallerSPIFFEID(r.Context()), Subject: name, Decision: "ok", Payload: mustJSON(map[string]string{"principal": req.Principal})}
+		undo := func(ctx context.Context) error {
+			if already {
+				return nil
+			}
+			return s.store.RemoveDomainAdmin(ctx, name, req.Principal)
+		}
+		if !s.recordOrUndo(w, r, ev, undo) {
+			return
+		}
 		s.getDomain(w, r)
 	}
 }
@@ -280,13 +317,25 @@ func (s *Server) removeDomainAdmin(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
-		s.audit(r.Context(), storage.AuditEvent{
-			Kind:     "domain.admin.remove",
-			Actor:    CallerSPIFFEID(r.Context()),
-			Subject:  name,
-			Decision: "ok",
-			Payload:  mustJSON(map[string]string{"principal": principal}),
-		})
+		ev := storage.AuditEvent{Kind: "domain.admin.remove", Actor: CallerSPIFFEID(r.Context()), Subject: name, Decision: "ok", Payload: mustJSON(map[string]string{"principal": principal})}
+		if !s.recordOrUndo(w, r, ev, func(ctx context.Context) error { return s.store.AddDomainAdmin(ctx, name, principal) }) {
+			return
+		}
 		s.getDomain(w, r)
 	}
+}
+
+// recordOrUndo appends the audit row for a committed change. If the
+// row cannot be written it reverts the change with undo and answers 500,
+// so no change to who administers what goes unrecorded.
+func (s *Server) recordOrUndo(w http.ResponseWriter, r *http.Request, ev storage.AuditEvent, undo func(context.Context) error) bool {
+	if err := s.appendAudit(r.Context(), ev); err != nil {
+		ctx := context.WithoutCancel(r.Context())
+		if uerr := undo(ctx); uerr != nil {
+			slog.Error("audit append failed and the change could not be reverted", "kind", ev.Kind, "subject", ev.Subject, "err", uerr)
+		}
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("could not record %s; the change was reverted", ev.Kind))
+		return false
+	}
+	return true
 }

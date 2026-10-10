@@ -42,13 +42,14 @@ func (r *DomainReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// Reconcile makes the Omega control plane match the desired state of
-// the CR. The control plane already enforces uniqueness on domain.name,
-// so the loop is "GET to check existence; POST if missing; record
-// outcome in status".
 // createRetryInterval is how soon a failed create is retried.
 const createRetryInterval = 5 * time.Second
 
+// Reconcile makes the Omega control plane match the desired state of
+// the CR. The control plane already enforces uniqueness on domain.name,
+// so the loop is "GET to check existence; POST if missing; record
+// outcome in status". spec.admins is applied only when the domain is
+// created; later edits are not reconciled.
 func (r *DomainReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 

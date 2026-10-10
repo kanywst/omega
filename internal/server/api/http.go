@@ -168,6 +168,19 @@ func (s *Server) Handler() http.Handler {
 	gated := func(h http.HandlerFunc) http.HandlerFunc {
 		return leaderOnly(s.requireSPIFFEAuth(h))
 	}
+	// fresh fails a policy-evaluating route closed while the projected
+	// domain tree is stale, since a forbid on a domain created since the
+	// last reload would otherwise not apply.
+	fresh := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if s.directoryStale() {
+				w.Header().Set("Retry-After", "5")
+				writeErr(w, http.StatusServiceUnavailable, errors.New("policy directory is stale: the domain tree has not been reloaded recently"))
+				return
+			}
+			h(w, r)
+		}
+	}
 	// issuingOnly fails an issuance / token-exchange route with 501 when
 	// the server runs in spire-upstream identity mode (no local CA). It is
 	// the outermost wrapper so the route reports "not supported here"
@@ -201,11 +214,11 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /v1/attest/k8s", issuingOnly(leaderOnly(s.attestK8s)))
 	handle("GET /v1/bundle", s.getBundle)
 	handle("GET /v1/spiffe-bundle", s.getSPIFFEBundle)
-	handle("POST /access/v1/evaluation", gated(s.evaluateAccess))
-	handle("POST /access/v1/evaluations", gated(s.evaluateAccessBatch))
-	handle("POST /access/v1/search/subject", gated(s.searchSubject))
-	handle("POST /access/v1/search/resource", gated(s.searchResource))
-	handle("POST /access/v1/search/action", gated(s.searchAction))
+	handle("POST /access/v1/evaluation", gated(fresh(s.evaluateAccess)))
+	handle("POST /access/v1/evaluations", gated(fresh(s.evaluateAccessBatch)))
+	handle("POST /access/v1/search/subject", gated(fresh(s.searchSubject)))
+	handle("POST /access/v1/search/resource", gated(fresh(s.searchResource)))
+	handle("POST /access/v1/search/action", gated(fresh(s.searchAction)))
 	// Audit reads expose every decision's subject and full request /
 	// response payload, so when --require-auth is on they are closed to
 	// authenticated callers too. They are NOT leader-gated (reads are
@@ -213,10 +226,10 @@ func (s *Server) Handler() http.Handler {
 	handle("GET /v1/audit", s.requireSPIFFEAuth(s.listAudit))
 	handle("GET /v1/audit/verify", s.requireSPIFFEAuth(s.verifyAudit))
 	handle("POST /v1/svid/jwt", issuingOnly(gated(s.issueJWTSVID)))
-	handle("POST /v1/token/exchange", issuingOnly(gated(s.tokenExchange)))
+	handle("POST /v1/token/exchange", issuingOnly(gated(fresh(s.tokenExchange))))
 	handle("POST /v1/oidc/exchange", issuingOnly(leaderOnly(s.exchangeOIDC)))
 	// Authenticates its own client, so not wrapped in requireSPIFFEAuth.
-	handle("POST /oauth2/token", issuingOnly(leaderOnly(s.oauthToken)))
+	handle("POST /oauth2/token", issuingOnly(leaderOnly(fresh(s.oauthToken))))
 	handle("GET /.well-known/oauth-authorization-server", s.getOAuthASMetadata)
 	handle("GET /v1/jwt/bundle", s.getJWTBundle)
 	handle("GET /v1/federation/bundles", s.getFederationBundles)

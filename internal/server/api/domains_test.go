@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"io"
@@ -11,7 +12,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/kanywst/omega/internal/server/api"
 	"github.com/kanywst/omega/internal/server/identity"
@@ -249,5 +252,43 @@ func TestDomainAdminsHiddenFromAnonymousReads(t *testing.T) {
 		if bytes.Contains(body, []byte(alice)) {
 			t.Errorf("%s leaks admins to an anonymous caller: %s", path, body)
 		}
+	}
+}
+
+func TestPolicyFailsClosedWhenDirectoryIsStale(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := api.NewServer(store, ca, policy.New())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go s.RunDirectorySync(ctx, 20*time.Millisecond)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+
+	eval := func() int {
+		resp, err := http.Post(srv.URL+"/access/v1/evaluation", "application/json",
+			strings.NewReader(`{"subject":{"type":"User","id":"u"},"action":{"name":"read"},"resource":{"type":"Doc","id":"d"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	time.Sleep(60 * time.Millisecond)
+	if code := eval(); code != http.StatusOK {
+		t.Fatalf("fresh directory: status %d", code)
+	}
+	// Reloads now fail, so after three intervals evaluation must stop.
+	_ = store.Close()
+	time.Sleep(150 * time.Millisecond)
+	if code := eval(); code != http.StatusServiceUnavailable {
+		t.Fatalf("stale directory: status %d, want 503", code)
 	}
 }

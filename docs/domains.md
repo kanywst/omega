@@ -61,7 +61,9 @@ flowchart LR
 
 New domains are picked up without a restart: the server reloads the tree after each domain write and every five seconds.
 
-Two things to keep in mind when writing policies. A `Domain::"..."` entity declared in `entities.json` replaces the projected one, so declaring it there can cut the chain to its ancestors. And because an admin of `media` may delete the leaf `media.news`, a central `forbid (principal in Domain::"media.news", ...)` stops matching once that domain is gone; write such rules against a domain the delegated admins cannot delete, or against the SPIFFE ID path itself.
+Domain membership comes from the SPIFFE ID path, so a domain's admins do not decide who is in it: whoever may obtain an SVID under `/media/...` is. Keep issuance authenticated (`--require-auth`) and the attestation templates tight.
+
+Two more things to keep in mind when writing policies. A `Domain::"..."` entity declared in `entities.json` replaces the projected one, so declaring it there can cut the chain to its ancestors. And because an admin of `media` may delete the leaf `media.news`, a central `forbid (principal in Domain::"media.news", ...)` stops matching once that domain is gone; write such rules against a domain the delegated admins cannot delete, or against the SPIFFE ID path itself.
 
 ## Walkthrough
 
@@ -81,6 +83,6 @@ omega domain admins remove media.news spiffe://td/people/news-oncall
 omega domain delete media.news.web
 ```
 
-The Kubernetes operator takes the same fields: `OmegaDomain.spec.admins` sets a domain's admins when it is created, and the parent `OmegaDomain` must exist (the child retries until it does). The operator calls Omega with its own identity, so anyone allowed to create `OmegaDomain` objects in Kubernetes acts with the operator's domain authority; gate that with Kubernetes RBAC.
+The Kubernetes operator takes the same fields: `OmegaDomain.spec.admins` sets a domain's admins when it is created (later edits to it are not applied; use `omega domain admins` instead), and the parent `OmegaDomain` must exist (the child retries until it does). The operator calls Omega with its own identity, so anyone allowed to create `OmegaDomain` objects in Kubernetes acts with the operator's domain authority; gate that with Kubernetes RBAC.
 
 Every create, delete and admin change, and every refused attempt, is written to the audit chain (`domain.create`, `domain.delete`, `domain.admin.add`, `domain.admin.remove`) with the caller as actor. Under `--require-auth`, `GET /v1/domains` returns the `admins` lists only to authenticated callers.

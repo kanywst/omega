@@ -15,6 +15,10 @@ server:
   trustDomain: omega.local
   dataDir: /var/lib/omega
   policyDir: ""      # set to a path inside the container to load *.cedar at boot
+  # SPIFFE IDs that may create top-level domains and administer every
+  # domain (--domain-root-admin). Enforced only with --require-auth; when
+  # the operator creates OmegaDomains, its own SPIFFE ID belongs here.
+  domainRootAdmins: []
   extraArgs: []
   resources:
     limits:
