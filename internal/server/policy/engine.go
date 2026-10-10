@@ -45,6 +45,8 @@ type Engine struct {
 	// store cost O(N^2 log N) in total even though each page evaluates at
 	// most MaxSearchCandidates candidates.
 	byType map[string][]Entity
+	// revision is the bundle revision last loaded with LoadBundle.
+	revision string
 }
 
 // New returns an Engine with an empty policy set and no entities. A
@@ -261,15 +263,23 @@ func (e *Engine) ActionNames() []string {
 // AuthZEN decision. Missing subject/resource type or id is treated as a
 // validation error rather than a silent deny.
 func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
+	resp, _, err := e.EvaluateRevision(req)
+	return resp, err
+}
+
+// EvaluateRevision is Evaluate that also returns the revision of the
+// bundle the decision was made with ("" unless loaded by LoadBundle).
+func (e *Engine) EvaluateRevision(req EvalRequest) (EvalResponse, string, error) {
 	cedarReq, overlays, err := prepare(req)
 	if err != nil {
-		return EvalResponse{}, err
+		return EvalResponse{}, "", err
 	}
 
 	e.mu.RLock()
 	ps := e.policies
 	baseEnts := e.entities
 	snap := e.snap
+	rev := e.revision
 	e.mu.RUnlock()
 
 	// Seed per-request entities for subject/resource attrs so policies can
@@ -295,7 +305,7 @@ func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
 	for _, r := range diag.Reasons {
 		resp.Reasons = append(resp.Reasons, string(r.PolicyID))
 	}
-	return resp, nil
+	return resp, rev, nil
 }
 
 // Validate reports whether Evaluate would reject req as malformed,

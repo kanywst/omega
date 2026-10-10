@@ -35,7 +35,7 @@ type domainEnv struct {
 	store *storage.Store
 }
 
-func newDomainEnv(t *testing.T, cedarSrc string) *domainEnv {
+func newDomainEnv(t *testing.T, cedarSrc string, recorders ...string) *domainEnv {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := storage.Open(filepath.Join(dir, "omega.db"))
@@ -61,6 +61,7 @@ func newDomainEnv(t *testing.T, cedarSrc string) *domainEnv {
 	srv := httptest.NewUnstartedServer(api.NewServer(store, ca, pdp).
 		WithRequireAuth(true).
 		WithDomainRootAdmins([]string{rootAdmin}).
+		WithDecisionRecorders(recorders).
 		Handler())
 	srv.TLS = &tls.Config{
 		MinVersion:   tls.VersionTLS12,

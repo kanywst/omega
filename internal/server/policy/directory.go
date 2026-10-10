@@ -54,6 +54,22 @@ type Directory struct {
 
 // SetDirectory replaces the projected control-plane state.
 func (e *Engine) SetDirectory(d Directory) {
+	ents, snap := buildDirectory(d)
+	e.mu.Lock()
+	e.setDirectoryLocked(d, ents, snap)
+	e.rebuildLocked()
+	e.mu.Unlock()
+}
+
+func (e *Engine) setDirectoryLocked(d Directory, ents cedar.EntityMap, snap directorySnapshot) {
+	e.dirSpec = d
+	e.directory = ents
+	e.snap = snap
+}
+
+// buildDirectory turns d into the Cedar entities and lookup snapshot the
+// engine evaluates against.
+func buildDirectory(d Directory) (cedar.EntityMap, directorySnapshot) {
 	ents := cedar.EntityMap{}
 	domains := make(map[string]bool, len(d.Domains))
 	for name, parent := range d.Domains {
@@ -69,12 +85,7 @@ func (e *Engine) SetDirectory(d Directory) {
 		uid := cedar.NewEntityUID(GroupEntityType, cedar.String(g))
 		ents[uid] = cedar.Entity{UID: uid}
 	}
-	e.mu.Lock()
-	e.dirSpec = d
-	e.directory = ents
-	e.snap = directorySnapshot{trustDomain: d.TrustDomain, domains: domains, memberships: d.Memberships}
-	e.rebuildLocked()
-	e.mu.Unlock()
+	return ents, directorySnapshot{trustDomain: d.TrustDomain, domains: domains, memberships: d.Memberships}
 }
 
 // rebuildLocked merges the static and directory entity maps and

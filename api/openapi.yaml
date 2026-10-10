@@ -1045,10 +1045,11 @@ paths:
       operationId: recordDecisions
       summary: Record decisions a local evaluator made.
       description: |
-        Appends each decision to the audit chain as `access.evaluate`
-        with `source: local`, the caller's SPIFFE ID as actor, and the
-        bundle revision. At most 1000 decisions per batch. A failed append
-        answers 500 so the caller retries the batch.
+        Appends each decision to the audit chain as
+        `access.evaluate.local`, with the caller's SPIFFE ID as actor and
+        the bundle revision. Needs `--require-auth` and a caller listed
+        with `--decision-recorder`. At most 1000 decisions per batch. A
+        failed append answers 500 so the caller retries the batch.
       requestBody:
         required: true
         content:
@@ -1060,6 +1061,8 @@ paths:
           description: All decisions recorded.
         "400":
           $ref: "#/components/responses/BadRequest"
+        "403":
+          description: The caller is not a listed decision recorder, or the server runs without --require-auth.
         "500":
           $ref: "#/components/responses/InternalError"
         "503":

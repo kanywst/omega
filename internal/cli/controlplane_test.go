@@ -92,3 +92,25 @@ func TestControlPlaneTransportRejectsMisuse(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckLocalPDP(t *testing.T) {
+	for _, tc := range []struct {
+		addr, server, cert string
+		remote             bool
+		ok                 bool
+	}{
+		{"127.0.0.1:8181", "https://cp", "c.pem", false, true},
+		{"localhost:8181", "https://cp", "c.pem", false, true},
+		{"[::1]:8181", "https://cp", "c.pem", false, true},
+		{"0.0.0.0:8181", "https://cp", "c.pem", false, false},
+		{":8181", "https://cp", "c.pem", false, false},
+		{"0.0.0.0:8181", "https://cp", "c.pem", true, true},
+		{"127.0.0.1:8181", "http://cp", "c.pem", false, false},
+		{"127.0.0.1:8181", "https://cp", "", false, false},
+		{"nonsense", "https://cp", "c.pem", false, false},
+	} {
+		if err := checkLocalPDP(tc.addr, tc.remote, tc.server, tc.cert); (err == nil) != tc.ok {
+			t.Errorf("%+v: %v", tc, err)
+		}
+	}
+}

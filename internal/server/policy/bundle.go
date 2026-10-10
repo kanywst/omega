@@ -93,10 +93,19 @@ func (e *Engine) LoadBundle(b Bundle) error {
 			dir.Memberships[principal] = append(dir.Memberships[principal], Membership(m))
 		}
 	}
-	if err := e.LoadSources(b.Policies, b.Entities); err != nil {
+	ps, static, err := parseSources(b.Policies, b.Entities)
+	if err != nil {
 		return err
 	}
-	e.SetDirectory(dir)
+	ents, snap := buildDirectory(dir)
+	// One swap, so no evaluation sees new policies with an old directory
+	// or reports a revision other than the one it decided with.
+	e.mu.Lock()
+	e.policies, e.static, e.sources, e.staticRaw = ps, static, b.Policies, b.Entities
+	e.setDirectoryLocked(dir, ents, snap)
+	e.revision = b.Revision
+	e.rebuildLocked()
+	e.mu.Unlock()
 	return nil
 }
 

@@ -2,7 +2,9 @@ package localpdp_test
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,12 +21,17 @@ import (
 )
 
 type controlPlane struct {
-	srv   *httptest.Server
-	store *storage.Store
-	pdp   *policy.Engine
-	api   *api.Server
-	dir   string
+	srv    *httptest.Server
+	store  *storage.Store
+	pdp    *policy.Engine
+	api    *api.Server
+	dir    string
+	client *http.Client
+	// clientFor returns a client presenting an SVID for id.
+	clientFor func(id string) *http.Client
 }
+
+const agentID = "spiffe://omega.local/nodes/n1"
 
 func newControlPlane(t *testing.T, cedarSrc string) *controlPlane {
 	t.Helper()
@@ -49,10 +56,17 @@ func newControlPlane(t *testing.T, cedarSrc string) *controlPlane {
 	if err := pdp.LoadDir(pdir); err != nil {
 		t.Fatal(err)
 	}
-	s := api.NewServer(store, ca, pdp)
-	srv := httptest.NewServer(s.Handler())
+	tca, tcaKey, pool := newTestCA(t)
+	s := api.NewServer(store, ca, pdp).WithRequireAuth(true).WithDecisionRecorders([]string{"spiffe://omega.local/nodes/"})
+	srv := httptest.NewUnstartedServer(s.Handler())
+	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{issue(t, tca, tcaKey, "", net.ParseIP("127.0.0.1"))}, ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert}
+	srv.StartTLS()
 	t.Cleanup(srv.Close)
-	return &controlPlane{srv: srv, store: store, pdp: pdp, api: s, dir: pdir}
+	clientFor := func(id string) *http.Client {
+		cert := issue(t, tca, tcaKey, id, nil)
+		return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, Certificates: []tls.Certificate{cert}}}}
+	}
+	return &controlPlane{srv: srv, store: store, pdp: pdp, api: s, dir: pdir, client: clientFor(agentID), clientFor: clientFor}
 }
 
 func evalReq(id, action string) policy.EvalRequest {
@@ -73,7 +87,7 @@ func TestLocalPDPDecidesLikeTheControlPlaneAndAuditsCentrally(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL})
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client})
 	if _, err := p.Evaluate(evalReq("spiffe://omega.local/media/web", "read")); err == nil {
 		t.Fatal("before the first sync the local PDP must refuse to decide")
 	}
@@ -111,7 +125,7 @@ func TestLocalPDPDecidesLikeTheControlPlaneAndAuditsCentrally(t *testing.T) {
 	}
 	var local int
 	for _, ev := range events {
-		if ev.Kind == "access.evaluate" && strings.Contains(string(ev.Payload), `"source":"local"`) && strings.Contains(string(ev.Payload), rev) {
+		if ev.Kind == "access.evaluate.local" && ev.Actor == agentID && strings.Contains(string(ev.Payload), `"source":"local"`) && strings.Contains(string(ev.Payload), rev) {
 			local++
 		}
 	}
@@ -138,7 +152,7 @@ func TestLocalPDPFailsClosed(t *testing.T) {
 	cp := newControlPlane(t, `permit (principal, action, resource);`)
 	ctx := context.Background()
 
-	stale := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, SyncInterval: 10 * time.Millisecond, MaxAge: 50 * time.Millisecond})
+	stale := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client, SyncInterval: 10 * time.Millisecond, MaxAge: 50 * time.Millisecond})
 	if err := stale.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +161,7 @@ func TestLocalPDPFailsClosed(t *testing.T) {
 		t.Fatal("a bundle older than max-age must not be used")
 	}
 
-	full := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, BufferSize: 2})
+	full := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client, BufferSize: 2})
 	if err := full.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +197,7 @@ func TestLocalPDPFailsClosed(t *testing.T) {
 func TestLocalPDPKeepsDecisionsWhenTheControlPlaneIsDown(t *testing.T) {
 	cp := newControlPlane(t, `permit (principal, action, resource);`)
 	ctx := context.Background()
-	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL})
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +210,71 @@ func TestLocalPDPKeepsDecisionsWhenTheControlPlaneIsDown(t *testing.T) {
 	}
 	if _, _, pending := p.Status(); pending != 1 {
 		t.Fatalf("a failed flush keeps the decision: %d pending", pending)
+	}
+}
+
+func TestLocalPDPRefusesOversizedRequests(t *testing.T) {
+	cp := newControlPlane(t, `permit (principal, action, resource);`)
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client})
+	if err := p.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(p.Handler())
+	t.Cleanup(srv.Close)
+	big := `{"subject":{"type":"Spiffe","id":"x"},"action":{"name":"read"},"resource":{"type":"Doc","id":"d"},"context":{"pad":"` + strings.Repeat("a", localpdp.MaxRequestBytes) + `"}}`
+	resp, err := http.Post(srv.URL+"/access/v1/evaluation", "application/json", strings.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized request: %d", resp.StatusCode)
+	}
+	if _, _, pending := p.Status(); pending != 0 {
+		t.Fatalf("an oversized request must not be decided: %d pending", pending)
+	}
+}
+
+func TestLocalPDPSplitsLargeBacklogs(t *testing.T) {
+	cp := newControlPlane(t, `permit (principal, action, resource);`)
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// About 40 KiB each, so the backlog is several MiB: far more than
+	// one request body the control plane accepts.
+	pad := strings.Repeat("a", 40<<10)
+	const n = 60
+	for range n {
+		req := evalReq("spiffe://omega.local/x", "read")
+		req.Context = map[string]any{"pad": pad}
+		if _, err := p.Evaluate(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.Flush(ctx); err != nil {
+		t.Fatalf("a large backlog must drain in batches: %v", err)
+	}
+	if _, _, pending := p.Status(); pending != 0 {
+		t.Fatalf("pending after flush: %d", pending)
+	}
+}
+
+func TestLocalPDPFromAnUnlistedAgentStaysQueued(t *testing.T) {
+	cp := newControlPlane(t, `permit (principal, action, resource);`)
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.clientFor("spiffe://omega.local/media/web")})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Evaluate(evalReq("spiffe://omega.local/x", "read")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Flush(ctx); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("a workload that is not a decision recorder must be refused: %v", err)
+	}
+	if _, _, pending := p.Status(); pending != 1 {
+		t.Fatalf("refused decisions stay queued, so the PDP eventually fails closed: %d", pending)
 	}
 }

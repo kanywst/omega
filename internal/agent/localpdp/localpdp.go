@@ -49,7 +49,7 @@ type PDP struct {
 	mu       sync.Mutex
 	revision string
 	synced   time.Time
-	pending  []decision
+	pending  []queued
 }
 
 type decision struct {
@@ -57,8 +57,24 @@ type decision struct {
 	DecidedAt time.Time           `json:"decided_at"`
 	Request   policy.EvalRequest  `json:"request"`
 	Response  policy.EvalResponse `json:"response"`
-	revision  string
 }
+
+// queued is a decision encoded for shipping, with the bundle revision
+// it was made with.
+type queued struct {
+	raw      json.RawMessage
+	revision string
+}
+
+const (
+	// MaxRequestBytes caps one evaluation request, so a single decision
+	// always fits in a batch the control plane accepts.
+	MaxRequestBytes = 64 << 10
+	// maxBatchBytes keeps a batch well under the control plane's 1 MiB
+	// body limit; maxBatchDecisions matches its per-batch cap.
+	maxBatchBytes     = 768 << 10
+	maxBatchDecisions = 1000
+)
 
 // New returns a PDP that has not synced yet; it refuses to decide until
 // the first Sync succeeds.
@@ -158,20 +174,26 @@ var ErrUnavailable = errors.New("local pdp unavailable")
 // Evaluate decides locally and queues the decision for the audit chain.
 func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 	p.mu.Lock()
-	synced, rev, queued := p.synced, p.revision, len(p.pending)
+	synced, waiting := p.synced, len(p.pending)
 	p.mu.Unlock()
 	if synced.IsZero() || time.Since(synced) > p.cfg.MaxAge {
 		return policy.EvalResponse{}, fmt.Errorf("%w: the policy bundle has not synced within %s", ErrUnavailable, p.cfg.MaxAge)
 	}
-	if queued >= p.cfg.BufferSize {
-		return policy.EvalResponse{}, fmt.Errorf("%w: %d decisions are waiting to be recorded", ErrUnavailable, queued)
+	if waiting >= p.cfg.BufferSize {
+		return policy.EvalResponse{}, fmt.Errorf("%w: %d decisions are waiting to be recorded", ErrUnavailable, waiting)
 	}
-	resp, err := p.engine.Evaluate(req)
+	// The engine reports the revision it decided with, so a sync racing
+	// this call cannot mislabel the decision.
+	resp, rev, err := p.engine.EvaluateRevision(req)
+	if err != nil {
+		return policy.EvalResponse{}, err
+	}
+	raw, err := json.Marshal(decision{ID: newID(), DecidedAt: time.Now().UTC(), Request: req, Response: resp})
 	if err != nil {
 		return policy.EvalResponse{}, err
 	}
 	p.mu.Lock()
-	p.pending = append(p.pending, decision{ID: newID(), DecidedAt: time.Now().UTC(), Request: req, Response: resp, revision: rev})
+	p.pending = append(p.pending, queued{raw: raw, revision: rev})
 	p.mu.Unlock()
 	return resp, nil
 }
@@ -185,13 +207,21 @@ func (p *PDP) Flush(ctx context.Context) error {
 			p.mu.Unlock()
 			return nil
 		}
-		// A batch carries one bundle revision.
+		// A batch carries one bundle revision and stays under the
+		// control plane's body and count limits.
 		rev := p.pending[0].revision
-		n := 0
-		for n < len(p.pending) && n < 1000 && p.pending[n].revision == rev {
+		n, size := 0, 0
+		for n < len(p.pending) && n < maxBatchDecisions && p.pending[n].revision == rev {
+			if n > 0 && size+len(p.pending[n].raw)+1 > maxBatchBytes {
+				break
+			}
+			size += len(p.pending[n].raw) + 1
 			n++
 		}
-		batch := append([]decision(nil), p.pending[:n]...)
+		batch := make([]json.RawMessage, n)
+		for i := range batch {
+			batch[i] = p.pending[i].raw
+		}
 		p.mu.Unlock()
 
 		body, err := json.Marshal(map[string]any{"bundle_revision": rev, "decisions": batch})
@@ -231,8 +261,12 @@ func (p *PDP) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /access/v1/evaluation", func(w http.ResponseWriter, r *http.Request) {
 		var req policy.EvalRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxRequestBytes)).Decode(&req); err != nil {
+			code := http.StatusBadRequest
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+				code = http.StatusRequestEntityTooLarge
+			}
+			writeJSON(w, code, map[string]string{"error": err.Error()})
 			return
 		}
 		resp, err := p.Evaluate(req)

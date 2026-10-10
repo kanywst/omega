@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -36,6 +38,7 @@ func newAgentCommand() *cobra.Command {
 		pdpSync      time.Duration
 		pdpMaxAge    time.Duration
 		pdpBuffer    int
+		pdpRemote    bool
 		serverCA     string
 		clientCert   string
 		clientKey    string
@@ -82,6 +85,9 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 			}
 
 			if pdpAddr != "" {
+				if err := checkLocalPDP(pdpAddr, pdpRemote, serverURL, clientCert); err != nil {
+					return err
+				}
 				pdp := localpdp.New(localpdp.Config{
 					ServerURL: serverURL, SyncInterval: pdpSync, MaxAge: pdpMaxAge, BufferSize: pdpBuffer,
 					HTTPClient: &http.Client{Transport: transport, Timeout: 10 * time.Second},
@@ -115,6 +121,7 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 	cmd.Flags().StringVar(&pdpAddr, "local-pdp-addr", "", "serve an AuthZEN evaluation endpoint on this address (e.g. 127.0.0.1:8181), deciding locally from the control plane's policy bundle and shipping every decision to its audit chain. Empty disables it.")
 	cmd.Flags().DurationVar(&pdpSync, "policy-sync-interval", 10*time.Second, "how often the local PDP re-fetches the policy bundle")
 	cmd.Flags().DurationVar(&pdpMaxAge, "policy-max-age", time.Minute, "the local PDP refuses to decide (503) when its last successful bundle sync is older than this")
+	cmd.Flags().BoolVar(&pdpRemote, "local-pdp-allow-remote", false, "let --local-pdp-addr bind a non-loopback address; the endpoint has no authentication, so anyone who reaches it can query policy and fill the decision buffer")
 	cmd.Flags().IntVar(&pdpBuffer, "decision-buffer", 10000, "decisions the local PDP may hold before they reach the audit chain; when full it refuses to decide (503)")
 	return cmd
 }
@@ -147,6 +154,27 @@ func parseMappings(specs []string) (workloadapi.Mapping, error) {
 		out[uint32(u)] = id
 	}
 	return out, nil
+}
+
+// checkLocalPDP refuses local PDP settings that cannot work or would
+// expose it: decisions are recorded under the agent's SVID, so the
+// control plane must be reached over https with a client certificate,
+// and the unauthenticated endpoint stays on loopback unless allowed.
+func checkLocalPDP(addr string, allowRemote bool, serverURL, clientCert string) error {
+	if u, err := url.Parse(serverURL); err != nil || u.Scheme != "https" || clientCert == "" {
+		return errors.New("--local-pdp-addr needs an https --server and --client-cert: decisions are recorded under the agent's SVID")
+	}
+	if allowRemote {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("--local-pdp-addr: %w", err)
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("--local-pdp-addr %q is not a loopback address; pass --local-pdp-allow-remote to expose the unauthenticated endpoint", addr)
+	}
+	return nil
 }
 
 func runAgent(ctx context.Context, socketPath, serverURL string, mapping workloadapi.Mapping, transport http.RoundTripper) error {
