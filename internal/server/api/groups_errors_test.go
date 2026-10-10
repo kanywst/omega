@@ -3,6 +3,7 @@ package api_test
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/kanywst/omega/internal/server/api"
 	"github.com/kanywst/omega/internal/server/storage"
@@ -44,6 +45,7 @@ func TestDomainAndGroupErrorPaths(t *testing.T) {
 		{"remove without a principal", "DELETE", g + "/oncall/members", nil, http.StatusBadRequest},
 		{"remove a non-member", "DELETE", g + "/oncall/members?principal=spiffe://omega.local/x", nil, http.StatusNotFound},
 		{"remove from a missing group", "DELETE", g + "/nope/members?principal=spiffe://omega.local/x", nil, http.StatusNotFound},
+		{"expiry beyond the maximum lifetime", "PUT", g + "/oncall/members", api.GroupMemberRequest{Principal: alice, ExpiresAt: time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC)}, http.StatusBadRequest},
 		{"list groups", "GET", g, nil, http.StatusOK},
 		{"update a member's expiry", "PUT", g + "/oncall/members", api.GroupMemberRequest{Principal: alice}, http.StatusOK},
 		{"re-put the same member", "PUT", g + "/oncall/members", api.GroupMemberRequest{Principal: alice}, http.StatusOK},

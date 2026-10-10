@@ -372,6 +372,10 @@ paths:
       tags: [domains, leader-only]
       operationId: putGroupMember
       summary: Add a member, or change its expiry.
+      description: |
+        Replaces the membership: omitting `expires_at` makes it
+        permanent. `expires_at` must be in the future and at most 366
+        days ahead.
       requestBody:
         required: true
         content:
