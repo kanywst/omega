@@ -56,6 +56,11 @@ var (
 		Help: "Total audit log entries appended, by kind.",
 	}, []string{"kind"})
 
+	DomainsUnprojected = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "omega_domains_unprojected",
+		Help: "Stored domains left out of policy evaluation because their names are invalid; a forbid on them matches nothing.",
+	})
+
 	DomainsCreated = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "omega_domains_created_total",
 		Help: "Total domains created via the admin API.",
@@ -65,7 +70,7 @@ var (
 func init() {
 	Registry.MustRegister(
 		BuildInfo, HTTPRequests, HTTPLatency,
-		SVIDIssued, Decisions, DecisionLatency, AuditAppended, DomainsCreated,
+		SVIDIssued, Decisions, DecisionLatency, AuditAppended, DomainsCreated, DomainsUnprojected,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)

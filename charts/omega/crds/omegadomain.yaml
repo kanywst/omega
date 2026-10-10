@@ -46,6 +46,8 @@ spec:
               properties:
                 domainName:
                   type: string
+                  maxLength: 253
+                  pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9_-]*[a-z0-9])?)*$'
                   description: |
                     SPIFFE-style namespace identifier (e.g. "media.news").
                     Defaults to metadata.name when empty.
@@ -64,6 +66,7 @@ spec:
                     domain authority.
                   items:
                     type: string
+                    pattern: '^spiffe://[^/]+(/.*)?$'
             status:
               type: object
               properties:

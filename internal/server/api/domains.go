@@ -60,6 +60,7 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 		return err
 	}
 	tree := make(map[string]string, len(items))
+	var skipped int
 	for _, d := range items {
 		// Derive the parent from the name, as authorization does, and
 		// skip rows an older version stored with an invalid name: no
@@ -67,11 +68,21 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 		// domain. Say so, since a forbid on such a domain covers nothing.
 		if err := storage.ValidateDomainName(d.Name); err != nil {
 			slog.Warn("domain not projected into policy: invalid name from an earlier version; recreate it under a valid name", "domain", d.Name, "err", err)
+			skipped++
 			continue
 		}
 		tree[d.Name] = storage.ParentOf(d.Name)
 	}
-	s.policy.SetDirectory(policy.Directory{TrustDomain: s.ca.TrustDomain(), Domains: tree})
+	metrics.DomainsUnprojected.Set(float64(skipped))
+	td := s.ca.TrustDomain()
+	if td.IsZero() && len(tree) > 0 {
+		// Membership is derived from SPIFFE IDs in the local trust
+		// domain; without one, no workload would be in any domain and
+		// a forbid on a domain would match nothing. Refuse, so the
+		// tree goes stale and evaluation fails closed.
+		return errors.New("domains exist but the identity source reports no trust domain")
+	}
+	s.policy.SetDirectory(policy.Directory{TrustDomain: td, Domains: tree})
 	s.domains.mu.Lock()
 	s.domains.loadedAt = time.Now()
 	s.domains.mu.Unlock()
@@ -337,11 +348,15 @@ func (s *Server) recordOrUndo(w http.ResponseWriter, r *http.Request, ev storage
 			return false
 		}
 		// The append may have committed despite the error (a lost
-		// connection on commit), so record the revert as well, best
-		// effort: then the chain never shows a change that is not live.
+		// connection on commit), so record the revert too. If that also
+		// fails the chain may show the change as applied; say so.
 		rev := ev
 		rev.Decision = "reverted"
-		s.audit(ctx, rev)
+		if rerr := s.appendAudit(ctx, rev); rerr != nil {
+			slog.Error("change reverted but the revert could not be recorded", "kind", ev.Kind, "subject", ev.Subject, "err", rerr)
+			writeErr(w, http.StatusInternalServerError, fmt.Errorf("could not record %s; the change was reverted, but the audit log may still show it as applied", ev.Kind))
+			return false
+		}
 		writeErr(w, http.StatusInternalServerError, fmt.Errorf("could not record %s; the change was reverted", ev.Kind))
 		return false
 	}
