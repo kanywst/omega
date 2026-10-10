@@ -70,6 +70,7 @@ func (e *Engine) SetDirectory(d Directory) {
 		ents[uid] = cedar.Entity{UID: uid}
 	}
 	e.mu.Lock()
+	e.dirSpec = d
 	e.directory = ents
 	e.snap = directorySnapshot{trustDomain: d.TrustDomain, domains: domains, memberships: d.Memberships}
 	e.rebuildLocked()

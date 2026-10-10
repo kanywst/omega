@@ -73,3 +73,4 @@ index to avoid collisions.
 | [0013](0013-dpop-sender-constrained-tokens.md) | Verify DPoP proofs and honour sender-constrained tokens | Accepted |
 | [0014](0014-domain-hierarchy-and-delegation.md) | Domain hierarchy with delegated administration | Accepted |
 | [0015](0015-groups-with-expiring-membership.md) | Domain-owned groups with expiring membership | Accepted |
+| [0016](0016-local-policy-decisions.md) | Local policy decisions on the node, audited centrally | Accepted |

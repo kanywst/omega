@@ -226,6 +226,13 @@ trusted.
   as good as the web-PKI roots in play; `https_spiffe` avoids that at
   the cost of seeding the peer's bundle out of band.
 
+### T4 — Tampering with or bypassing local decisions
+
+An attacker on a node feeds the local PDP a different policy, keeps it deciding after a revocation, or makes it decide without the decision reaching the audit chain.
+
+- Mitigation today: the agent fetches the bundle from the control plane (over mTLS with `--server-ca` / `--client-cert`), refuses a bundle whose content does not match its revision, refuses to decide once its last sync is older than `--policy-max-age`, and refuses while `--decision-buffer` decisions are unrecorded. Recorded decisions carry the agent's SPIFFE ID as actor and the bundle revision ([ADR 0016](adr/0016-local-policy-decisions.md)).
+- Residual risk: a node cut off from the control plane keeps deciding with its last bundle for up to `--policy-max-age`, so a revocation can reach it that late. Queued decisions are lost if the agent dies before a flush. The revision is a content hash, not a signature, so it detects corruption, not a compromised transport; use TLS to the control plane. Root on the node can replace the agent altogether.
+
 ### R1 — Repudiating an authorization decision
 
 A workload (or operator) denies that a given allow / deny decision

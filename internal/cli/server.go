@@ -331,7 +331,7 @@ func newServerCommand() *cobra.Command {
 			// Both reloads are atomic and fail-closed — a bad file leaves
 			// the previous material installed.
 			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
-			if (auditKeyring != nil || reloadUpstream != nil) && len(sighupSignals) > 0 {
+			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "") && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)
 				signal.Notify(hup, sighupSignals...)
 				go func() {
@@ -350,6 +350,17 @@ func newServerCommand() *cobra.Command {
 							}
 							if reloadUpstream != nil {
 								reloadUpstream()
+							}
+							// Reload the Cedar policies too, so local
+							// evaluators pick up a new bundle revision
+							// without a restart. A bad file leaves the
+							// previous policy set in force.
+							if policyDir != "" {
+								if err := pdp.LoadDir(policyDir); err != nil {
+									fmt.Fprintf(os.Stderr, "omega server: policy reload failed, keeping the previous policies: %v\n", err)
+								} else {
+									fmt.Fprintf(os.Stderr, "omega server: policies reloaded from %s\n", policyDir)
+								}
 							}
 						}
 					}
