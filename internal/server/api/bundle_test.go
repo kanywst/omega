@@ -2,12 +2,16 @@ package api_test
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kanywst/omega/internal/server/api"
+	"github.com/kanywst/omega/internal/server/identity"
 	"github.com/kanywst/omega/internal/server/policy"
+	"github.com/kanywst/omega/internal/server/storage"
 )
 
 func TestPolicyBundleEndpoint(t *testing.T) {
@@ -37,7 +41,7 @@ func TestPolicyBundleEndpoint(t *testing.T) {
 }
 
 func TestRecordDecisionsValidation(t *testing.T) {
-	env := newDomainEnv(t, "")
+	env := newDomainEnv(t, "", "spiffe://omega.local/nodes/")
 	agent := env.as(t, "spiffe://omega.local/nodes/n1")
 	u := env.srv.URL + "/v1/audit/decisions"
 	ok := api.LocalDecision{
@@ -69,11 +73,63 @@ func TestRecordDecisionsValidation(t *testing.T) {
 	events, _ := env.store.ListAudit(t.Context(), 0, 10)
 	var found bool
 	for _, ev := range events {
-		if ev.Kind == "access.evaluate" && ev.Actor == "spiffe://omega.local/nodes/n1" && strings.Contains(string(ev.Payload), `"bundle_revision":"r1"`) {
+		if ev.Kind == "access.evaluate.local" && ev.Actor == "spiffe://omega.local/nodes/n1" && strings.Contains(string(ev.Payload), `"bundle_revision":"r1"`) {
 			found = true
 		}
 	}
 	if !found {
 		t.Error("the decision is recorded with the agent as actor")
+	}
+}
+
+func TestRecordDecisionsNeedsAListedRecorder(t *testing.T) {
+	env := newDomainEnv(t, "", "spiffe://omega.local/nodes/", "spiffe://omega.local/edge/gw")
+	batch := api.DecisionBatch{Decisions: []api.LocalDecision{{
+		ID: "d1", DecidedAt: time.Now(),
+		Request: policy.EvalRequest{Subject: policy.Entity{Type: "User", ID: "u"}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"}},
+	}}}
+	for id, want := range map[string]int{
+		"spiffe://omega.local/nodes/n2":  http.StatusOK,
+		"spiffe://omega.local/edge/gw":   http.StatusOK,
+		"spiffe://omega.local/edge/gw2":  http.StatusForbidden,
+		"spiffe://omega.local/nodes":     http.StatusForbidden,
+		"spiffe://omega.local/media/web": http.StatusForbidden,
+	} {
+		if code, body := call(t, env.as(t, id), "POST", env.srv.URL+"/v1/audit/decisions", batch); code != want {
+			t.Errorf("%s: %d %s, want %d", id, code, body, want)
+		}
+	}
+	events, _ := env.store.ListAudit(t.Context(), 0, 50)
+	var denied int
+	for _, ev := range events {
+		if ev.Kind == "access.evaluate.local" && ev.Decision == "deny" && ev.Subject == "" {
+			denied++
+		}
+	}
+	if denied != 3 {
+		t.Errorf("refused recorders are audited: %d", denied)
+	}
+}
+
+func TestRecordDecisionsRefusedWithoutRequireAuth(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(api.NewServer(store, ca, policy.New()).WithDecisionRecorders([]string{"spiffe://omega.local/nodes/"}).Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Post(srv.URL+"/v1/audit/decisions", "application/json", strings.NewReader(`{"decisions":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("without --require-auth: %d", resp.StatusCode)
 	}
 }

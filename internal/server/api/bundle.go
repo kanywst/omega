@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,8 +14,33 @@ import (
 	"github.com/kanywst/omega/internal/server/storage"
 )
 
+// localDecisionKind is the audit kind of a decision a node made, kept
+// apart from access.evaluate so the two are never confused.
+const localDecisionKind = "access.evaluate.local"
+
 // maxDecisionBatch caps one POST /v1/audit/decisions body.
 const maxDecisionBatch = 1000
+
+// WithDecisionRecorders sets who may record local decisions: each entry
+// is a SPIFFE ID, or a prefix ending in "/" that matches every ID below
+// it. Recording also needs --require-auth, since the rows are attributed
+// to the caller's verified SPIFFE ID.
+func (s *Server) WithDecisionRecorders(ids []string) *Server {
+	s.decisionRecorders = slices.Clone(ids)
+	return s
+}
+
+func (s *Server) mayRecordDecisions(caller string) bool {
+	if !s.requireAuth || caller == "" {
+		return false
+	}
+	for _, r := range s.decisionRecorders {
+		if caller == r || (strings.HasSuffix(r, "/") && strings.HasPrefix(caller, r)) {
+			return true
+		}
+	}
+	return false
+}
 
 // getPolicyBundle serves the policy set and directory a local evaluator
 // needs. The revision is the ETag, so an unchanged bundle costs a 304.
@@ -53,6 +79,12 @@ type DecisionBatch struct {
 // 500 so the agent keeps the batch and retries; the decision id lets a
 // reader spot a row written twice by such a retry.
 func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
+	agent := CallerSPIFFEID(r.Context())
+	if !s.mayRecordDecisions(agent) {
+		s.audit(r.Context(), storage.AuditEvent{Kind: localDecisionKind, Actor: agent, Decision: "deny"})
+		writeErr(w, http.StatusForbidden, errors.New("recording local decisions needs --require-auth and a caller listed in --decision-recorder"))
+		return
+	}
 	var batch DecisionBatch
 	if !decodeJSONBody(w, r, &batch) {
 		return
@@ -75,7 +107,6 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	agent := CallerSPIFFEID(r.Context())
 	for i, d := range batch.Decisions {
 		decision := "deny"
 		if d.Response.Decision {
@@ -94,7 +125,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.appendAudit(r.Context(), storage.AuditEvent{
-			Kind:     "access.evaluate",
+			Kind:     localDecisionKind,
 			Actor:    agent,
 			Subject:  d.Request.Subject.ID,
 			Decision: decision,

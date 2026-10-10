@@ -57,6 +57,7 @@ type Server struct {
 	dpopReplay            *replayCache
 	clientAssertionReplay *replayCache
 	domains               domainState
+	decisionRecorders     []string
 	// auditFault, set only by tests, makes appendAudit fail.
 	auditFault              func(storage.AuditEvent) error
 	spiffeBundleRefreshHint time.Duration

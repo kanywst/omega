@@ -2,11 +2,11 @@ package cli
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -38,6 +38,7 @@ func newAgentCommand() *cobra.Command {
 		pdpSync      time.Duration
 		pdpMaxAge    time.Duration
 		pdpBuffer    int
+		pdpRemote    bool
 		serverCA     string
 		clientCert   string
 		clientKey    string
@@ -78,12 +79,15 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				_ = shutdownTracing(flushCtx)
 			}()
 
-			transport, err := controlPlaneTransport(serverCA, clientCert, clientKey)
+			transport, err := controlPlaneTransport(serverURL, serverCA, clientCert, clientKey)
 			if err != nil {
 				return err
 			}
 
 			if pdpAddr != "" {
+				if err := checkLocalPDP(pdpAddr, pdpRemote, serverURL, clientCert); err != nil {
+					return err
+				}
 				pdp := localpdp.New(localpdp.Config{
 					ServerURL: serverURL, SyncInterval: pdpSync, MaxAge: pdpMaxAge, BufferSize: pdpBuffer,
 					HTTPClient: &http.Client{Transport: transport, Timeout: 10 * time.Second},
@@ -117,6 +121,7 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 	cmd.Flags().StringVar(&pdpAddr, "local-pdp-addr", "", "serve an AuthZEN evaluation endpoint on this address (e.g. 127.0.0.1:8181), deciding locally from the control plane's policy bundle and shipping every decision to its audit chain. Empty disables it.")
 	cmd.Flags().DurationVar(&pdpSync, "policy-sync-interval", 10*time.Second, "how often the local PDP re-fetches the policy bundle")
 	cmd.Flags().DurationVar(&pdpMaxAge, "policy-max-age", time.Minute, "the local PDP refuses to decide (503) when its last successful bundle sync is older than this")
+	cmd.Flags().BoolVar(&pdpRemote, "local-pdp-allow-remote", false, "let --local-pdp-addr bind a non-loopback address; the endpoint has no authentication, so anyone who reaches it can query policy and fill the decision buffer")
 	cmd.Flags().IntVar(&pdpBuffer, "decision-buffer", 10000, "decisions the local PDP may hold before they reach the audit chain; when full it refuses to decide (503)")
 	return cmd
 }
@@ -151,39 +156,25 @@ func parseMappings(specs []string) (workloadapi.Mapping, error) {
 	return out, nil
 }
 
-// controlPlaneTransport builds the transport the agent uses for the
-// control plane: the default one, or TLS with an optional server CA and
-// client certificate.
-func controlPlaneTransport(caFile, certFile, keyFile string) (http.RoundTripper, error) {
-	if caFile == "" && certFile == "" && keyFile == "" {
-		return http.DefaultTransport, nil
+// checkLocalPDP refuses local PDP settings that cannot work or would
+// expose it: decisions are recorded under the agent's SVID, so the
+// control plane must be reached over https with a client certificate,
+// and the unauthenticated endpoint stays on loopback unless allowed.
+func checkLocalPDP(addr string, allowRemote bool, serverURL, clientCert string) error {
+	if u, err := url.Parse(serverURL); err != nil || u.Scheme != "https" || clientCert == "" {
+		return errors.New("--local-pdp-addr needs an https --server and --client-cert: decisions are recorded under the agent's SVID")
 	}
-	if (certFile == "") != (keyFile == "") {
-		return nil, errors.New("--client-cert and --client-key must be set together")
+	if allowRemote {
+		return nil
 	}
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if caFile != "" {
-		// #nosec G304 -- operator-supplied --server-ca path.
-		pem, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read --server-ca: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("--server-ca %q contains no PEM certificates", caFile)
-		}
-		cfg.RootCAs = pool
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("--local-pdp-addr: %w", err)
 	}
-	if certFile != "" {
-		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-		if err != nil {
-			return nil, fmt.Errorf("load --client-cert/--client-key: %w", err)
-		}
-		cfg.Certificates = []tls.Certificate{cert}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("--local-pdp-addr %q is not a loopback address; pass --local-pdp-allow-remote to expose the unauthenticated endpoint", addr)
 	}
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig = cfg
-	return t, nil
+	return nil
 }
 
 func runAgent(ctx context.Context, socketPath, serverURL string, mapping workloadapi.Mapping, transport http.RoundTripper) error {
