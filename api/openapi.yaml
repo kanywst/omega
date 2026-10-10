@@ -854,7 +854,7 @@ components:
           enum: ["urn:ietf:params:oauth:client-assertion-type:jwt-spiffe"]
         client_assertion:
           type: string
-          description: The client's JWT-SVID with the issuer as its only audience.
+          description: The client's JWT-SVID with the issuer as its only audience. Single use; a replayed jti is refused.
         client_id:
           type: string
           description: Optional; must equal the authenticated SPIFFE ID.

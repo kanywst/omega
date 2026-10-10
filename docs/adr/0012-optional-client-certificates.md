@@ -19,7 +19,9 @@ That made two things impossible under `--require-auth`:
 
 Authorization does not move. Routes gated by `--require-auth` already check the verified chain per request (`requireSPIFFEAuth`), so they keep answering `401` without a client SVID. Ungated routes, and `POST /oauth2/token`, which authenticates its own client, become reachable without one.
 
-Under `--require-auth` a `spiffe_jwt` client assertion is a real credential: the server only mints a JWT-SVID for the caller's own identity, and the grant refuses assertions that carry `act` (delegated tokens) or `cnf` (cert-bound tokens), so a JWT-SVID for client C without `act` comes from C. The ID-JAG metadata advertises `spiffe_x509` when `--client-ca` is set and `spiffe_jwt` when the listener admits connections without a certificate.
+Under `--require-auth` a `spiffe_jwt` client assertion is a real credential: the server only mints a JWT-SVID for the caller's own identity, and the grant refuses assertions that carry `act` (delegated tokens) or `cnf` (cert-bound tokens), so a JWT-SVID for client C without `act` comes from C. The grant is refused in spire-upstream mode, so this rests on Omega's own issuance policy, not an upstream issuer's.
+
+The trade-off is that `spiffe_jwt` is a bearer credential where `spiffe_x509` is proof of possession. To bound that, a client assertion must be short-lived (`exp - iat` within `--id-jag-max-assertion-ttl`) and is single use: its `jti` is remembered per client until it can no longer validate, so a leaked assertion cannot be replayed. The ID-JAG metadata advertises `spiffe_x509` when `--client-ca` is set and `spiffe_jwt` when the listener admits connections without a certificate.
 
 It is refused without `--require-auth`. There the handshake is the only gate on write, issuance and PDP routes, and dropping it would turn a certificate-gated server into one that mints any identity for any caller.
 

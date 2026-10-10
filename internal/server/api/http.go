@@ -55,6 +55,7 @@ type Server struct {
 	idJAGMTLS               bool
 	idJAGJWT                bool
 	dpopReplay              *replayCache
+	clientAssertionReplay   *replayCache
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
 	entityStoreSearch       bool

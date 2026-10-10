@@ -55,6 +55,9 @@ func (s *Server) WithIDJAG(cfg IDJAGConfig) *Server {
 	}
 	s.idJAGMTLS = cfg.MTLSClientAuth
 	s.idJAGJWT = cfg.JWTClientAuth
+	// A client assertion lives at most MaxAssertionTTL, and go-jose
+	// accepts it up to 30s past exp, so remember its jti a little longer.
+	s.clientAssertionReplay = newReplayCache(s.idJAGMaxAssertionTTL + time.Minute)
 	return s
 }
 
@@ -378,8 +381,9 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		if !okExp || !okIat {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must carry iat and exp")
 		}
-		if jti, _ := claims["jti"].(string); jti == "" {
-			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must carry jti")
+		jti, _ := claims["jti"].(string)
+		if jti == "" || len(jti) > dpopMaxJTI {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must carry a jti of at most %d bytes", dpopMaxJTI)
 		}
 		if life := exp.Sub(iat); life > s.idJAGMaxAssertionTTL {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion lifetime %s exceeds the accepted maximum %s", life, s.idJAGMaxAssertionTTL)
@@ -394,6 +398,15 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		}
 		if _, ok := claims["cnf"]; ok {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must not carry cnf")
+		}
+		// A JWT-SVID assertion is a bearer credential, so it is single use:
+		// a leaked one cannot be replayed within its lifetime.
+		fresh, err := s.clientAssertionReplay.firstUse(parsed.String()+"|"+jti, time.Now())
+		if err != nil {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusServiceUnavailable, "temporarily_unavailable", "%s", err)
+		}
+		if !fresh {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion has already been used")
 		}
 		id, method = parsed, authMethodSPIFFEJWT
 	case hasCert:

@@ -170,7 +170,7 @@ omega server \
 | `--id-jag-max-assertion-ttl` | Rejects ID-JAGs, and JWT-SVID client assertions, whose `exp - iat` is longer. Default 5m. |
 | `--policy-dir` | Must contain a permit for the grant. Every grant is evaluated as `Action::"token.id_jag"` with `context.idp` and `context.requested_audience`, independent of `--enforce-token-exchange-policy`; with no permit every grant is denied, and `token.exchange` permits do not apply. |
 | `--require-auth` + `--client-ca` | Required. Binds the ID-JAG to the agent: by default clients authenticate with their mTLS X.509-SVID (`spiffe_x509`). |
-| `--client-cert-optional` | Optional. Also admits clients without a cert, which then authenticate with a JWT-SVID client assertion (`spiffe_jwt`). Gated routes still require a client SVID. See [ADR 0012](adr/0012-optional-client-certificates.md). |
+| `--client-cert-optional` | Optional. Also admits clients without a cert, which then authenticate with a short-lived, single-use JWT-SVID client assertion (`spiffe_jwt`), a bearer credential rather than mTLS proof of possession. Gated routes still require a client SVID. See [ADR 0012](adr/0012-optional-client-certificates.md). |
 | `--id-jag-insecure-client-binding` | Development only. Lets `--id-jag-idp` start without `--require-auth`; clients then use a JWT-SVID client assertion that any caller could mint, so the binding does not hold. |
 
 Clients discover the endpoint at `GET /.well-known/oauth-authorization-server`. The document lists the jwt-bearer grant, the `urn:ietf:params:oauth:grant-profile:id-jag` profile and the one SPIFFE authentication method that works on this listener, but never the trusted issuers.

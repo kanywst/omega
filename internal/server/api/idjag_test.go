@@ -691,3 +691,15 @@ func TestIDJAGGrantJWTClientUnderRequireAuth(t *testing.T) {
 		t.Errorf("auth methods with optional client certs: %v", md.TokenEndpointAuthMethodsSupported)
 	}
 }
+
+func TestIDJAGClientAssertionIsSingleUse(t *testing.T) {
+	env := newJAGEnv(t, "")
+	form := env.baseForm(t, env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims()))
+	if resp, body := postToken(t, env.srv.URL, form); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first use: got %d %v", resp.StatusCode, body)
+	}
+	resp, body := postToken(t, env.srv.URL, form)
+	if resp.StatusCode != http.StatusUnauthorized || body["error"] != "invalid_client" {
+		t.Fatalf("replayed client assertion: got %d %v, want 401 invalid_client", resp.StatusCode, body)
+	}
+}
