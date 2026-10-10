@@ -325,6 +325,13 @@ own SVID and asks for a delegated token in someone else's name.
   server, this baseline holds. Cross-issuer delegation chains are
   not supported today.
 
+### E3 — Elevation of privilege via a forged or misdirected ID-JAG
+
+A client presents an ID-JAG that was minted for another client, another authorization server, or not as a grant at all (an ID token), to obtain a token in a user's name.
+
+- Mitigation today: `POST /oauth2/token` requires client authentication by SPIFFE ID and an ID-JAG whose `client_id` equals it, whose single `aud` is Omega's issuer, whose JOSE `typ` is `oauth-id-jag+jwt`, and whose signature verifies against an IdP trusted with `--id-jag-idp`. Under `--require-auth` the client is the verified mTLS X.509-SVID. The issued token is capped at the ID-JAG's lifetime, its audience comes only from the ID-JAG's `resource`, and every grant and refusal is audited ([ADR 0011](adr/0011-id-jag-authorization-grant.md)).
+- Residual risk: without `--require-auth` the client binding does not hold, because any caller can mint the client's JWT-SVID; the server warns at startup and the mode is for development only. With it, a stolen ID-JAG is still usable by its bound client until it expires, because `jti` is not tracked (the draft allows re-presentation). `cnf`-bound ID-JAGs are rejected until DPoP verification lands. The IdP's own decision on which client may act for which user is trusted as-is.
+
 ## Out of scope
 
 These are threats the project deliberately does not address. Each

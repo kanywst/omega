@@ -8,6 +8,12 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **ID-JAG authorization grant on `POST /oauth2/token`.** Omega now accepts an Identity Assertion JWT Authorization Grant (draft-ietf-oauth-identity-assertion-authz-grant) from an IdP trusted with `--id-jag-idp`, presented as an RFC 7523 jwt-bearer assertion. The client authenticates with its SPIFFE ID, either an mTLS X.509-SVID or a JWT-SVID `client_assertion` of type `jwt-spiffe` (draft-ietf-oauth-spiffe-client-auth), and must match the ID-JAG's `client_id`. The binding holds under `--require-auth` (mTLS only); without it the server warns that the grant is for development. The response is a JWT-SVID for the client whose `act` names the user, capped at the ID-JAG's lifetime and usable as the subject token of `POST /v1/token/exchange`. Grants and refusals are audited as `token.id_jag`, and `--enforce-token-exchange-policy` gates them as `token.exchange` with `context.grant == "id-jag"`. `GET /.well-known/oauth-authorization-server` advertises the endpoint. See [ADR 0011](docs/adr/0011-id-jag-authorization-grant.md).
+- `--id-jag-max-assertion-ttl` (default 5m) rejects ID-JAGs with a longer lifetime.
+- [docs/id-jag.md](docs/id-jag.md) and `examples/id-jag/` walk through the flow end to end.
+
 ## [0.6.0] - 2026-10-07
 
 Adds the AuthZEN 1.0 evaluation semantics (§7.1.2) to batch
