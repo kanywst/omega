@@ -16,8 +16,10 @@ server:
   dataDir: /var/lib/omega
   policyDir: ""      # set to a path inside the container to load *.cedar at boot
   # SPIFFE IDs that may create top-level domains and administer every
-  # domain (--domain-root-admin). Enforced only with --require-auth; when
-  # the operator creates OmegaDomains, its own SPIFFE ID belongs here.
+  # domain (--domain-root-admin). Enforced only with --require-auth.
+  # Prefer making the operator an admin of one parent domain over listing
+  # it here: whoever may create OmegaDomain objects acts with the
+  # operator's domain authority, and spec.admins can name anyone.
   domainRootAdmins: []
   extraArgs: []
   resources:

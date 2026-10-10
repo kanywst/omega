@@ -242,7 +242,9 @@ func (s *Store) ListDomains(ctx context.Context) ([]Domain, error) {
 }
 
 // lockDomain checks that name exists inside tx, taking the given row
-// lock on Postgres. SQLite serialises write transactions instead.
+// lock on Postgres. On SQLite every transaction holds the write lock from
+// BEGIN (_txlock=immediate), so the check and the write cannot interleave
+// with another transaction.
 func (s *Store) lockDomain(ctx context.Context, tx *sql.Tx, name, lock string) error {
 	q := `SELECT 1 FROM domains WHERE name = ?`
 	if s.driver == driverPostgres {

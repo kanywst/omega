@@ -73,7 +73,11 @@ func Open(spec string) (*Store, error) {
 }
 
 func openSQLite(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
+	// _txlock=immediate takes the write lock at BEGIN, so a transaction
+	// that reads before it writes (a parent check, say) cannot be
+	// overtaken between its read and its write; busy_timeout makes the
+	// second writer wait instead of failing at once with SQLITE_BUSY.
+	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}

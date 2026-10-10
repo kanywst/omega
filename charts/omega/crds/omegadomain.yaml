@@ -56,8 +56,12 @@ spec:
                   type: array
                   description: |
                     SPIFFE IDs that administer this domain and every domain
-                    below it. Applied when the domain is created. The
-                    parent domain must already exist.
+                    below it. Applied only when the domain is created; later
+                    edits, including removals, are not reconciled. The
+                    parent domain must already exist. The operator creates
+                    the domain with its own identity, so permission to
+                    create OmegaDomain objects carries the operator's
+                    domain authority.
                   items:
                     type: string
             status:

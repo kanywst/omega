@@ -333,7 +333,15 @@ func (s *Server) recordOrUndo(w http.ResponseWriter, r *http.Request, ev storage
 		ctx := context.WithoutCancel(r.Context())
 		if uerr := undo(ctx); uerr != nil {
 			slog.Error("audit append failed and the change could not be reverted", "kind", ev.Kind, "subject", ev.Subject, "err", uerr)
+			writeErr(w, http.StatusInternalServerError, fmt.Errorf("could not record %s, and reverting the change failed (%v); check the current state before retrying", ev.Kind, uerr))
+			return false
 		}
+		// The append may have committed despite the error (a lost
+		// connection on commit), so record the revert as well, best
+		// effort: then the chain never shows a change that is not live.
+		rev := ev
+		rev.Decision = "reverted"
+		s.audit(ctx, rev)
 		writeErr(w, http.StatusInternalServerError, fmt.Errorf("could not record %s; the change was reverted", ev.Kind))
 		return false
 	}
