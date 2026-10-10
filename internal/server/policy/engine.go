@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	cedar "github.com/cedar-policy/cedar-go"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 // Engine holds a Cedar PolicySet plus the static entity map. It is safe
@@ -28,10 +29,11 @@ type Engine struct {
 	// static is the entity map from entities.json, directory the one
 	// projected from control-plane state (SetDirectory); entities is
 	// their union, with static winning on a UID collision.
-	static    cedar.EntityMap
-	directory cedar.EntityMap
-	domains   map[string]bool
-	entities  cedar.EntityMap
+	static      cedar.EntityMap
+	directory   cedar.EntityMap
+	domains     map[string]bool
+	trustDomain spiffeid.TrustDomain
+	entities    cedar.EntityMap
 	// byType is the entity map indexed by Cedar entity type, each bucket
 	// sorted by id. Built once per load rather than per call: the map is
 	// immutable between LoadDir calls, and Search reads it once per page,
@@ -226,6 +228,7 @@ func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
 	e.mu.RLock()
 	ps := e.policies
 	baseEnts := e.entities
+	domains, td := e.domains, e.trustDomain
 	e.mu.RUnlock()
 
 	// Seed per-request entities for subject/resource attrs so policies can
@@ -244,7 +247,7 @@ func (e *Engine) Evaluate(req EvalRequest) (EvalResponse, error) {
 		}
 	}
 
-	ents = e.withSPIFFEParents(ents, cedarReq.Principal, cedarReq.Resource)
+	ents = withSPIFFEParents(ents, domains, td, cedarReq.Principal, cedarReq.Resource)
 
 	ok, diag := cedar.Authorize(ps, ents, cedarReq)
 	resp := EvalResponse{Decision: bool(ok)}

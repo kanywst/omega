@@ -136,3 +136,33 @@ func TestPostgresAuditChainAndForward(t *testing.T) {
 		t.Errorf("after upsert: got %d, want 5", seq)
 	}
 }
+
+// TestPostgresDomainCreateDeleteRace races creating a child against
+// deleting its parent and checks no child is ever left without one.
+func TestPostgresDomainCreateDeleteRace(t *testing.T) {
+	s := openPostgresStore(t)
+	ctx := context.Background()
+	for i := 0; i < 30; i++ {
+		if _, err := s.CreateDomain(ctx, storage.Domain{Name: "race"}); err != nil {
+			t.Fatalf("round %d: create parent: %v", i, err)
+		}
+		done := make(chan struct{}, 2)
+		go func() { _, _ = s.CreateDomain(ctx, storage.Domain{Name: "race.child"}); done <- struct{}{} }()
+		go func() { _ = s.DeleteDomain(ctx, "race"); done <- struct{}{} }()
+		<-done
+		<-done
+		list, err := s.ListDomains(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := map[string]bool{}
+		for _, d := range list {
+			names[d.Name] = true
+		}
+		if names["race.child"] && !names["race"] {
+			t.Fatalf("round %d: race.child exists without its parent", i)
+		}
+		_ = s.DeleteDomain(ctx, "race.child")
+		_ = s.DeleteDomain(ctx, "race")
+	}
+}

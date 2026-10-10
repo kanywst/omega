@@ -481,8 +481,22 @@ func (s *Server) getDomain(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
+		if s.hideAdmins(r) {
+			d.Admins = nil
+		}
 		writeJSON(w, http.StatusOK, d)
 	}
+}
+
+// hideAdmins reports whether the domain admin lists must be withheld:
+// under --require-auth they are only shown to an authenticated caller,
+// since they name the identities worth targeting.
+func (s *Server) hideAdmins(r *http.Request) bool {
+	if !s.requireAuth {
+		return false
+	}
+	_, err := spiffeIDFromTLS(r.TLS)
+	return err != nil
 }
 
 func (s *Server) listDomains(w http.ResponseWriter, r *http.Request) {
@@ -493,6 +507,11 @@ func (s *Server) listDomains(w http.ResponseWriter, r *http.Request) {
 	}
 	if items == nil {
 		items = []storage.Domain{}
+	}
+	if s.hideAdmins(r) {
+		for i := range items {
+			items[i].Admins = nil
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

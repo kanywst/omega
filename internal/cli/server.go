@@ -523,9 +523,14 @@ func newServerCommand() *cobra.Command {
 			if requireAuth && len(domainRootAdmins) == 0 {
 				fmt.Fprintln(os.Stderr, "omega server: no --domain-root-admin set: under --require-auth nobody can create a top-level domain until one is configured")
 			}
-			// Project the domain tree into the policy engine now and keep
-			// it current, so `principal in Domain::"..."` reflects domains
-			// created through any replica.
+			// Project the domain tree into the policy engine before serving,
+			// so no request is evaluated without it (a forbid on a Domain
+			// would otherwise not apply), then keep it current so
+			// `principal in Domain::"..."` reflects domains created through
+			// any replica.
+			if err := apiServer.RefreshDirectory(ctx); err != nil {
+				return fmt.Errorf("load domain tree: %w", err)
+			}
 			go apiServer.RunDirectorySync(ctx, 5*time.Second)
 
 			srv := &http.Server{

@@ -73,14 +73,20 @@ func (s *Store) CreateDomain(ctx context.Context, d Domain) (Domain, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 	if parent != "" {
-		var one int
-		err := tx.QueryRowContext(ctx, s.rebind(`SELECT 1 FROM domains WHERE name = ?`), parent).Scan(&one)
-		if errors.Is(err, sql.ErrNoRows) {
+		// FOR SHARE (Postgres) holds the parent until commit, so a
+		// concurrent DeleteDomain of it waits and then sees this child.
+		err := s.lockDomain(ctx, tx, parent, "FOR SHARE")
+		if errors.Is(err, ErrNotFound) {
 			return Domain{}, fmt.Errorf("%w: %q", ErrParentNotFound, parent)
 		}
 		if err != nil {
 			return Domain{}, fmt.Errorf("query parent: %w", err)
 		}
+	}
+	// Grants never outlive their domain, but clear any a crashed or
+	// pre-upgrade delete left behind so a re-created name starts clean.
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM domain_admins WHERE domain = ?`), d.Name); err != nil {
+		return Domain{}, fmt.Errorf("clear admins: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		s.rebind(`INSERT INTO domains(name, parent, description, created_at) VALUES (?, ?, ?, ?)`),
@@ -112,6 +118,11 @@ func (s *Store) DeleteDomain(ctx context.Context, name string) error {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// FOR UPDATE (Postgres) waits for any create still holding this row
+	// as its parent, so the child count below includes it.
+	if err := s.lockDomain(ctx, tx, name, "FOR UPDATE"); err != nil {
+		return err
+	}
 	var children int
 	if err := tx.QueryRowContext(ctx, s.rebind(`SELECT COUNT(*) FROM domains WHERE parent = ?`), name).Scan(&children); err != nil {
 		return fmt.Errorf("count children: %w", err)
@@ -119,12 +130,8 @@ func (s *Store) DeleteDomain(ctx context.Context, name string) error {
 	if children > 0 {
 		return ErrHasChildren
 	}
-	res, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM domains WHERE name = ?`), name)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM domains WHERE name = ?`), name); err != nil {
 		return fmt.Errorf("delete domain: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
 	}
 	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM domain_admins WHERE domain = ?`), name); err != nil {
 		return fmt.Errorf("delete admins: %w", err)
@@ -138,14 +145,27 @@ func (s *Store) AddDomainAdmin(ctx context.Context, domain, principal string) er
 	if !s.IsLeader() {
 		return ErrNotLeader
 	}
-	if _, err := s.GetDomain(ctx, domain); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Same lock as CreateDomain's parent check: a concurrent delete of
+	// the domain cannot strand this grant.
+	if err := s.lockDomain(ctx, tx, domain, "FOR SHARE"); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, s.rebind(`INSERT INTO domain_admins(domain, principal) VALUES (?, ?)`), domain, principal)
-	if err != nil && !isUniqueViolation(err) {
-		return fmt.Errorf("insert admin: %w", err)
+	var exists int
+	err = tx.QueryRowContext(ctx, s.rebind(`SELECT COUNT(*) FROM domain_admins WHERE domain = ? AND principal = ?`), domain, principal).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("query admin: %w", err)
 	}
-	return nil
+	if exists == 0 {
+		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO domain_admins(domain, principal) VALUES (?, ?)`), domain, principal); err != nil {
+			return fmt.Errorf("insert admin: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // RemoveDomainAdmin revokes principal's admin rights on domain.
@@ -219,6 +239,47 @@ func (s *Store) ListDomains(ctx context.Context) ([]Domain, error) {
 		out[i].Admins = admins[out[i].Name]
 	}
 	return out, nil
+}
+
+// lockDomain checks that name exists inside tx, taking the given row
+// lock on Postgres. SQLite serialises write transactions instead.
+func (s *Store) lockDomain(ctx context.Context, tx *sql.Tx, name, lock string) error {
+	q := `SELECT 1 FROM domains WHERE name = ?`
+	if s.driver == driverPostgres {
+		q += " " + lock
+	}
+	var one int
+	err := tx.QueryRowContext(ctx, s.rebind(q), name).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// AdminsOf returns the admins of each named domain in one query.
+func (s *Store) AdminsOf(ctx context.Context, names []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(names) == 0 {
+		return out, nil
+	}
+	q := `SELECT domain, principal FROM domain_admins WHERE domain IN (?` + strings.Repeat(", ?", len(names)-1) + `)`
+	args := make([]any, len(names))
+	for i, n := range names {
+		args[i] = n
+	}
+	rows, err := s.db.QueryContext(ctx, s.rebind(q), args...)
+	if err != nil {
+		return nil, fmt.Errorf("query admins: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d, p string
+		if err := rows.Scan(&d, &p); err != nil {
+			return nil, fmt.Errorf("scan admin: %w", err)
+		}
+		out[d] = append(out[d], p)
+	}
+	return out, rows.Err()
 }
 
 // adminsByDomain returns admins grouped by domain, for one domain or,

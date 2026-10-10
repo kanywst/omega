@@ -42,9 +42,15 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 	}
 	tree := make(map[string]string, len(items))
 	for _, d := range items {
-		tree[d.Name] = d.Parent
+		// Derive the parent from the name, as authorization does, and
+		// skip rows an older version stored with an invalid name or a
+		// parent that disagrees with it.
+		if storage.ValidateDomainName(d.Name) != nil {
+			continue
+		}
+		tree[d.Name] = storage.ParentOf(d.Name)
 	}
-	s.policy.SetDirectory(policy.Directory{Domains: tree})
+	s.policy.SetDirectory(policy.Directory{TrustDomain: s.ca.TrustDomain(), Domains: tree})
 	s.domains.mu.Lock()
 	s.domains.loadedAt = time.Now()
 	s.domains.mu.Unlock()
@@ -87,15 +93,16 @@ func (s *Server) mayAdminister(ctx context.Context, caller, domain string) (bool
 	if slices.Contains(s.domains.rootAdmins, caller) {
 		return true, nil
 	}
+	var chain []string
 	for name := domain; name != ""; name = storage.ParentOf(name) {
-		d, err := s.store.GetDomain(ctx, name)
-		if errors.Is(err, storage.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return false, err
-		}
-		if slices.Contains(d.Admins, caller) {
+		chain = append(chain, name)
+	}
+	admins, err := s.store.AdminsOf(ctx, chain)
+	if err != nil {
+		return false, err
+	}
+	for _, name := range chain {
+		if slices.Contains(admins[name], caller) {
 			return true, nil
 		}
 	}
@@ -103,14 +110,23 @@ func (s *Server) mayAdminister(ctx context.Context, caller, domain string) (bool
 }
 
 // authorizeDomainWrite writes 403 (or 500) and returns false unless the
-// caller may administer domain.
-func (s *Server) authorizeDomainWrite(w http.ResponseWriter, r *http.Request, domain string) bool {
-	ok, err := s.mayAdminister(r.Context(), CallerSPIFFEID(r.Context()), domain)
+// caller may administer domain. A refusal is audited under kind with
+// target as its subject.
+func (s *Server) authorizeDomainWrite(w http.ResponseWriter, r *http.Request, kind, target, domain string) bool {
+	caller := CallerSPIFFEID(r.Context())
+	ok, err := s.mayAdminister(r.Context(), caller, domain)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return false
 	}
 	if !ok {
+		s.audit(r.Context(), storage.AuditEvent{
+			Kind:     kind,
+			Actor:    caller,
+			Subject:  target,
+			Decision: "deny",
+			Payload:  mustJSON(map[string]string{"reason": "not an admin of the domain or any ancestor"}),
+		})
 		target := domain
 		if target == "" {
 			target = "a top-level domain"
@@ -137,7 +153,7 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Creating a domain is administering its parent.
-	if !s.authorizeDomainWrite(w, r, storage.ParentOf(d.Name)) {
+	if !s.authorizeDomainWrite(w, r, "domain.create", d.Name, storage.ParentOf(d.Name)) {
 		return
 	}
 	caller := CallerSPIFFEID(r.Context())
@@ -151,7 +167,7 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, storage.ErrParentNotFound):
 		writeErr(w, http.StatusBadRequest, err)
 	case err != nil:
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, http.StatusInternalServerError, err)
 	default:
 		metrics.DomainsCreated.Inc()
 		s.audit(r.Context(), storage.AuditEvent{
@@ -166,9 +182,23 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request) {
+// domainPathName reads and validates the {name} path value, writing 400
+// on a bad name so nothing downstream runs for it.
+func domainPathName(w http.ResponseWriter, r *http.Request) (string, bool) {
 	name := r.PathValue("name")
-	if !s.authorizeDomainWrite(w, r, storage.ParentOf(name)) {
+	if err := storage.ValidateDomainName(name); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return "", false
+	}
+	return name, true
+}
+
+func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request) {
+	name, ok := domainPathName(w, r)
+	if !ok {
+		return
+	}
+	if !s.authorizeDomainWrite(w, r, "domain.delete", name, storage.ParentOf(name)) {
 		return
 	}
 	err := s.store.DeleteDomain(r.Context(), name)
@@ -197,7 +227,10 @@ type DomainAdminRequest struct {
 }
 
 func (s *Server) addDomainAdmin(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name, ok := domainPathName(w, r)
+	if !ok {
+		return
+	}
 	var req DomainAdminRequest
 	if !decodeJSONBody(w, r, &req) {
 		return
@@ -206,7 +239,7 @@ func (s *Server) addDomainAdmin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("principal: %w", err))
 		return
 	}
-	if !s.authorizeDomainWrite(w, r, name) {
+	if !s.authorizeDomainWrite(w, r, "domain.admin.add", name, name) {
 		return
 	}
 	err := s.store.AddDomainAdmin(r.Context(), name, req.Principal)
@@ -228,13 +261,16 @@ func (s *Server) addDomainAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeDomainAdmin(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name, ok := domainPathName(w, r)
+	if !ok {
+		return
+	}
 	principal := strings.TrimSpace(r.URL.Query().Get("principal"))
 	if principal == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("principal query parameter is required"))
 		return
 	}
-	if !s.authorizeDomainWrite(w, r, name) {
+	if !s.authorizeDomainWrite(w, r, "domain.admin.remove", name, name) {
 		return
 	}
 	err := s.store.RemoveDomainAdmin(r.Context(), name, principal)

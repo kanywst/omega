@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	cedar "github.com/cedar-policy/cedar-go"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 // Entity types the engine derives from control-plane state.
@@ -15,6 +16,9 @@ const (
 // Directory is control-plane state projected into the Cedar entity
 // store, so policies can test membership with `in`.
 type Directory struct {
+	// TrustDomain is the local trust domain. Only SPIFFE IDs in it are
+	// placed in a domain; a federated peer's IDs never are.
+	TrustDomain spiffeid.TrustDomain
 	// Domains maps each domain name to its parent ("" at the top level).
 	// Each becomes Domain::"<name>" whose parent is Domain::"<parent>",
 	// and a Spiffe principal or resource is placed in the deepest domain
@@ -39,6 +43,7 @@ func (e *Engine) SetDirectory(d Directory) {
 	e.mu.Lock()
 	e.directory = ents
 	e.domains = domains
+	e.trustDomain = d.TrustDomain
 	e.rebuildLocked()
 	e.mu.Unlock()
 }
@@ -58,12 +63,10 @@ func (e *Engine) rebuildLocked() {
 }
 
 // withSPIFFEParents adds each Spiffe UID's domain to its parents,
-// copying ents first if it changes anything.
-func (e *Engine) withSPIFFEParents(ents cedar.EntityMap, uids ...cedar.EntityUID) cedar.EntityMap {
-	e.mu.RLock()
-	domains := e.domains
-	e.mu.RUnlock()
-	if len(domains) == 0 {
+// copying ents first if it changes anything. ents, domains and td must
+// come from the same snapshot so a parent always names an entity in ents.
+func withSPIFFEParents(ents cedar.EntityMap, domains map[string]bool, td spiffeid.TrustDomain, uids ...cedar.EntityUID) cedar.EntityMap {
+	if len(domains) == 0 || td.IsZero() {
 		return ents
 	}
 	cloned := false
@@ -71,7 +74,7 @@ func (e *Engine) withSPIFFEParents(ents cedar.EntityMap, uids ...cedar.EntityUID
 		if string(uid.Type) != SpiffeEntityType {
 			continue
 		}
-		dom := domainOfSPIFFEID(string(uid.ID), domains)
+		dom := domainOfSPIFFEID(string(uid.ID), domains, td)
 		if dom == "" {
 			continue
 		}
@@ -92,17 +95,14 @@ func (e *Engine) withSPIFFEParents(ents cedar.EntityMap, uids ...cedar.EntityUID
 }
 
 // domainOfSPIFFEID returns the deepest known domain whose labels are a
-// prefix of the SPIFFE ID's path segments, or "".
-func domainOfSPIFFEID(id string, domains map[string]bool) string {
-	rest, ok := strings.CutPrefix(id, "spiffe://")
-	if !ok {
+// prefix of the SPIFFE ID's path segments, or "". The ID must be a
+// canonical SPIFFE ID in the local trust domain.
+func domainOfSPIFFEID(raw string, domains map[string]bool, td spiffeid.TrustDomain) string {
+	id, err := spiffeid.FromString(raw)
+	if err != nil || !id.MemberOf(td) || id.Path() == "" {
 		return ""
 	}
-	i := strings.IndexByte(rest, '/')
-	if i < 0 {
-		return ""
-	}
-	segs := strings.Split(strings.Trim(rest[i:], "/"), "/")
+	segs := strings.Split(strings.TrimPrefix(id.Path(), "/"), "/")
 	// A path segment holding a dot is not a domain label, so it and
 	// everything after it cannot be part of the match.
 	for n, seg := range segs {

@@ -184,3 +184,70 @@ func TestDomainHierarchyReachesPolicy(t *testing.T) {
 		t.Errorf("domain.create rows with the caller as actor: %d", creates)
 	}
 }
+
+func TestDomainHardening(t *testing.T) {
+	env := newDomainEnv(t, "")
+	base := env.srv.URL + "/v1/domains"
+	root, b := env.as(t, rootAdmin), env.as(t, bob)
+	if code, body := call(t, root, "POST", base, storage.Domain{Name: "media", Admins: []string{alice}}); code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+
+	// A denied write is audited.
+	if code, _ := call(t, b, "POST", base+"/media/admins", api.DomainAdminRequest{Principal: bob}); code != http.StatusForbidden {
+		t.Fatalf("bob grant: %d", code)
+	}
+	events, _ := env.store.ListAudit(t.Context(), 0, 20)
+	var denied bool
+	for _, ev := range events {
+		if ev.Kind == "domain.admin.add" && ev.Decision == "deny" && ev.Actor == bob && ev.Subject == "media" {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Error("the refused grant must be audited")
+	}
+
+	// An invalid path name is rejected before any lookup.
+	if code, _ := call(t, root, "DELETE", base+"/Not..Valid", nil); code != http.StatusBadRequest {
+		t.Errorf("invalid name: %d", code)
+	}
+
+	// Admin lists are only shown to authenticated callers.
+	_, body := call(t, b, "GET", base+"/media", nil)
+	if !bytes.Contains(body, []byte(alice)) {
+		t.Errorf("an authenticated caller sees the admins: %s", body)
+	}
+}
+
+func TestDomainAdminsHiddenFromAnonymousReads(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.CreateDomain(t.Context(), storage.Domain{Name: "media", Admins: []string{alice}}); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tca := newTestCA(t)
+	srv := httptest.NewUnstartedServer(api.NewServer(store, ca, policy.New()).WithRequireAuth(true).Handler())
+	srv.TLS = &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{tca.issue(t, "omega-server", "", []net.IP{net.ParseIP("127.0.0.1")})},
+		ClientCAs:    tca.pool,
+		ClientAuth:   tls.VerifyClientCertIfGiven,
+	}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	for _, path := range []string{"/v1/domains/media", "/v1/domains"} {
+		_, body := call(t, clientWith(tca, nil), "GET", srv.URL+path, nil)
+		if bytes.Contains(body, []byte(alice)) {
+			t.Errorf("%s leaks admins to an anonymous caller: %s", path, body)
+		}
+	}
+}

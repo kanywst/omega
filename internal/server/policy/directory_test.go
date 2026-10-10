@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+
 	"github.com/kanywst/omega/internal/server/policy"
 )
 
@@ -23,17 +25,19 @@ func engineWith(t *testing.T, cedarSrc string) *policy.Engine {
 
 func TestSPIFFEPrincipalInDomainHierarchy(t *testing.T) {
 	e := engineWith(t, `permit (principal in Domain::"media", action == Action::"read", resource);`)
-	e.SetDirectory(policy.Directory{Domains: map[string]string{"media": "", "media.news": "media", "sports": ""}})
+	e.SetDirectory(policy.Directory{TrustDomain: spiffeid.RequireTrustDomainFromString("omega.local"), Domains: map[string]string{"media": "", "media.news": "media", "sports": ""}})
 
 	cases := []struct {
 		id   string
 		want bool
 	}{
-		{"spiffe://omega.local/media/news/web", true},  // media.news -> media
-		{"spiffe://omega.local/media/web", true},       // media
-		{"spiffe://omega.local/sports/web", false},     // another domain
-		{"spiffe://omega.local/media.news/web", false}, // a dotted segment is not a label path
-		{"spiffe://omega.local/mediax/web", false},     // label prefix, not segment prefix
+		{"spiffe://omega.local/media/news/web", true},   // media.news -> media
+		{"spiffe://omega.local/media/web", true},        // media
+		{"spiffe://omega.local/sports/web", false},      // another domain
+		{"spiffe://omega.local/media.news/web", false},  // a dotted segment is not a label path
+		{"spiffe://omega.local/mediax/web", false},      // label prefix, not segment prefix
+		{"spiffe://peer.example/media/news/web", false}, // a federated peer's ID is never local
+		{"spiffe://omega.local//media/web", false},      // not a canonical SPIFFE ID
 	}
 	for _, tc := range cases {
 		resp, err := e.Evaluate(policy.EvalRequest{
@@ -52,7 +56,7 @@ func TestSPIFFEPrincipalInDomainHierarchy(t *testing.T) {
 
 func TestResourceDomainAndDomainEntitiesSearchable(t *testing.T) {
 	e := engineWith(t, `permit (principal, action == Action::"read", resource in Domain::"media");`)
-	e.SetDirectory(policy.Directory{Domains: map[string]string{"media": "", "media.news": "media"}})
+	e.SetDirectory(policy.Directory{TrustDomain: spiffeid.RequireTrustDomainFromString("omega.local"), Domains: map[string]string{"media": "", "media.news": "media"}})
 	resp, err := e.Evaluate(policy.EvalRequest{
 		Subject:  policy.Entity{Type: "User", ID: "u"},
 		Action:   policy.Action{Name: "read"},
