@@ -51,6 +51,8 @@ tags:
     description: RFC 8693 token exchange with nested `act` claims.
   - name: oidc-federation
     description: External OIDC IdP federation for Human principals.
+  - name: id-jag
+    description: Identity Assertion JWT Authorization Grant (ID-JAG) redemption for AI agents. See docs/id-jag.md.
   - name: audit
     description: Tamper-evident audit log readout and verification.
   - name: oidc
@@ -653,6 +655,82 @@ paths:
         "503":
           $ref: "#/components/responses/NotLeader"
 
+  /oauth2/token:
+    post:
+      tags: [id-jag, leader-only]
+      operationId: oauthToken
+      summary: Redeem an ID-JAG for a delegated JWT-SVID (RFC 7523 jwt-bearer).
+      description: |
+        Enabled by `--id-jag-idp` (requires `--issuer-url`). The client
+        authenticates by its SPIFFE ID, either with a verified mTLS
+        X.509-SVID (`spiffe_x509`) or a JWT-SVID `client_assertion` of
+        type `urn:ietf:params:oauth:client-assertion-type:jwt-spiffe`
+        whose only `aud` is the issuer (`spiffe_jwt`). Under
+        `--require-auth` only `spiffe_x509` is accepted.
+
+        The ID-JAG must carry `typ: oauth-id-jag+jwt`, an `aud` equal
+        to the issuer, a `client_id` equal to the authenticated SPIFFE
+        ID, `jti`, `iat`, `exp` and a `resource`, and verify against a
+        trusted IdP. The issued JWT-SVID is for the client, names the
+        user in `act`, and expires no later than the ID-JAG. Every
+        grant and refusal after `grant_type` is recognised is audited
+        as `token.id_jag`. Returns `404 Not Found` when no ID-JAG IdP
+        is configured and `501` in spire-upstream mode.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/OAuthTokenRequest"
+      responses:
+        "200":
+          description: Delegated JWT-SVID.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-store]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthTokenResponse"
+        "400":
+          description: invalid_request, unsupported_grant_type, invalid_grant, invalid_target or invalid_scope (RFC 6749 §5.2).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "401":
+          description: invalid_client.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /.well-known/oauth-authorization-server:
+    get:
+      tags: [id-jag]
+      operationId: getOAuthASMetadata
+      summary: RFC 8414 authorization server metadata for the ID-JAG grant.
+      description: |
+        Served only when `--id-jag-idp` and `--issuer-url` are set and
+        omega issues its own SVIDs. Advertises the one SPIFFE client
+        authentication method that can succeed on this listener and
+        never lists the trusted issuers.
+      responses:
+        "200":
+          description: Metadata document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthASMetadata"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/audit:
     get:
       tags: [audit]
@@ -730,6 +808,97 @@ paths:
 
 components:
   schemas:
+    OAuthTokenRequest:
+      type: object
+      required: [grant_type, assertion]
+      properties:
+        grant_type:
+          type: string
+          enum: ["urn:ietf:params:oauth:grant-type:jwt-bearer"]
+        assertion:
+          type: string
+          description: The ID-JAG.
+        client_assertion_type:
+          type: string
+          enum: ["urn:ietf:params:oauth:client-assertion-type:jwt-spiffe"]
+        client_assertion:
+          type: string
+          description: The client's JWT-SVID with the issuer as its only audience.
+        client_id:
+          type: string
+          description: Optional; must equal the authenticated SPIFFE ID.
+        resource:
+          type: array
+          items:
+            type: string
+          description: RFC 8707. Must be a subset of the ID-JAG's resource.
+        scope:
+          type: string
+          description: Must be a subset of the ID-JAG's scope.
+
+    OAuthTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [access_token, token_type, expires_in, resource, spiffe_id, delegation_chain, kid]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+        scope:
+          type: string
+        resource:
+          type: array
+          items:
+            type: string
+        spiffe_id:
+          type: string
+        delegation_chain:
+          type: array
+          items:
+            type: string
+          description: Root (the user) to leaf (the client).
+        kid:
+          type: string
+
+    OAuthError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+        error_description:
+          type: string
+
+    OAuthASMetadata:
+      type: object
+      additionalProperties: false
+      required: [issuer, token_endpoint, jwks_uri, grant_types_supported, authorization_grant_profiles_supported, token_endpoint_auth_methods_supported]
+      properties:
+        issuer:
+          type: string
+        token_endpoint:
+          type: string
+        jwks_uri:
+          type: string
+        grant_types_supported:
+          type: array
+          items:
+            type: string
+        authorization_grant_profiles_supported:
+          type: array
+          items:
+            type: string
+        token_endpoint_auth_methods_supported:
+          type: array
+          items:
+            type: string
+            enum: [spiffe_x509, spiffe_jwt]
+
     Error:
       type: object
       additionalProperties: false
