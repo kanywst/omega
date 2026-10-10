@@ -46,12 +46,27 @@ spec:
               properties:
                 domainName:
                   type: string
+                  maxLength: 253
+                  pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9_-]*[a-z0-9])?)*$'
                   description: |
                     SPIFFE-style namespace identifier (e.g. "media.news").
                     Defaults to metadata.name when empty.
                 description:
                   type: string
                   description: Free-form operator-facing label.
+                admins:
+                  type: array
+                  description: |
+                    SPIFFE IDs that administer this domain and every domain
+                    below it. Applied only when the domain is created; later
+                    edits, including removals, are not reconciled. The
+                    parent domain must already exist. The operator creates
+                    the domain with its own identity, so permission to
+                    create OmegaDomain objects carries the operator's
+                    domain authority.
+                  items:
+                    type: string
+                    pattern: '^spiffe://[^/]+(/.*)?$'
             status:
               type: object
               properties:

@@ -2,9 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmissuerv1alpha1 "github.com/cert-manager/issuer-lib/api/v1alpha1"
@@ -47,6 +49,9 @@ func newOperatorCommand() *cobra.Command {
 		leaderElect bool
 		omegaURL    string
 		electionID  string
+		serverCA    string
+		clientCert  string
+		clientKey   string
 	)
 
 	cmd := &cobra.Command{
@@ -72,9 +77,14 @@ Out-of-cluster runs use the default kubeconfig (KUBECONFIG env or
 				return fmt.Errorf("manager: %w", err)
 			}
 
+			transport, err := controlPlaneTransport(omegaURL, serverCA, clientCert, clientKey)
+			if err != nil {
+				return err
+			}
 			if err := (&controller.DomainReconciler{
-				Client:   mgr.GetClient(),
-				OmegaURL: omegaURL,
+				Client:     mgr.GetClient(),
+				OmegaURL:   omegaURL,
+				HTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: transport},
 			}).SetupWithManager(mgr); err != nil {
 				return fmt.Errorf("setup OmegaDomain controller: %w", err)
 			}
@@ -124,6 +134,9 @@ Out-of-cluster runs use the default kubeconfig (KUBECONFIG env or
 	cmd.Flags().BoolVar(&leaderElect, "leader-elect", false, "enable leader election for HA operator deployments")
 	cmd.Flags().StringVar(&electionID, "leader-election-id", "omega-operator.kanywst.github.io", "lease name used for leader election")
 	cmd.Flags().StringVar(&omegaURL, "omega-url", "http://omega-server:8080", "Omega control plane base URL the reconciler talks to")
+	cmd.Flags().StringVar(&serverCA, "server-ca", "", "PEM CA bundle that verifies the control plane's TLS certificate")
+	cmd.Flags().StringVar(&clientCert, "client-cert", "", "client certificate (the operator's SVID) presented to a --require-auth control plane; re-read when it changes")
+	cmd.Flags().StringVar(&clientKey, "client-key", "", "private key for --client-cert")
 
 	return cmd
 }

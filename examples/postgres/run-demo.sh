@@ -73,6 +73,9 @@ curl -fsS -X POST "http://127.0.0.1:$SERVER_PORT/access/v1/evaluation" \
 	-d '{"subject":{"type":"User","id":"alice"},"action":{"name":"read"},"resource":{"type":"Doc","id":"x"}}' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:$SERVER_PORT/v1/domains" \
 	-H "Content-Type: application/json" \
+	-d '{"name":"media","description":"media"}' >/dev/null
+curl -fsS -X POST "http://127.0.0.1:$SERVER_PORT/v1/domains" \
+	-H "Content-Type: application/json" \
 	-d '{"name":"media.news","description":"news"}' >/dev/null
 
 echo "[demo] restarting server to prove durability"
