@@ -13,6 +13,10 @@ import (
 	"github.com/kanywst/omega/internal/server/storage"
 )
 
+// MaxMembershipLifetime bounds a membership's expires_at. Longer-lived
+// access is a membership without expiry, reviewed like any other.
+const MaxMembershipLifetime = 366 * 24 * time.Hour
+
 // GroupRequest is the body of POST /v1/domains/{name}/groups.
 type GroupRequest struct {
 	Name        string `json:"name"`
@@ -66,7 +70,7 @@ func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
 		if !s.recordOrUndo(w, r, s.groupEvent(r, "group.create", id, nil), func(ctx context.Context) error {
-			return s.store.DeleteGroup(ctx, domain, req.Name)
+			return s.store.DeleteEmptyGroup(ctx, domain, req.Name)
 		}) {
 			return
 		}
@@ -100,17 +104,7 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
-		restore := func(ctx context.Context) error {
-			if _, err := s.store.CreateGroup(ctx, before); err != nil {
-				return err
-			}
-			for _, m := range before.Members {
-				if err := s.store.PutGroupMember(ctx, domain, group, m); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
+		restore := func(ctx context.Context) error { return s.store.RestoreGroup(ctx, before) }
 		if !s.recordOrUndo(w, r, s.groupEvent(r, "group.delete", id, map[string]any{"members": before.Members}), restore) {
 			return
 		}
@@ -172,30 +166,26 @@ func (s *Server) putGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("principal: %w", err))
 		return
 	}
-	if !req.ExpiresAt.IsZero() && !req.ExpiresAt.After(time.Now()) {
-		writeErr(w, http.StatusBadRequest, errors.New("expires_at must be in the future"))
-		return
+	if !req.ExpiresAt.IsZero() {
+		now := time.Now()
+		if !req.ExpiresAt.After(now) {
+			writeErr(w, http.StatusBadRequest, errors.New("expires_at must be in the future"))
+			return
+		}
+		if req.ExpiresAt.After(now.Add(MaxMembershipLifetime)) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("expires_at must be within %s; omit it for a membership without expiry", MaxMembershipLifetime))
+			return
+		}
 	}
 	id := domain + ":" + group
 	if !s.authorizeDomainWrite(w, r, "group.member.add", id, domain) {
 		return
 	}
-	before, err := s.store.GetGroup(r.Context(), domain, group)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, fmt.Errorf("group %q does not exist", id))
-		return
+	written := storage.GroupMember{Principal: req.Principal, ExpiresAt: req.ExpiresAt.UTC()}
+	if req.ExpiresAt.IsZero() {
+		written.ExpiresAt = time.Time{}
 	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	var prior *storage.GroupMember
-	for i := range before.Members {
-		if before.Members[i].Principal == req.Principal {
-			prior = &before.Members[i]
-		}
-	}
-	err = s.store.PutGroupMember(r.Context(), domain, group, storage.GroupMember{Principal: req.Principal, ExpiresAt: req.ExpiresAt.UTC()})
+	prior, err := s.store.PutGroupMember(r.Context(), domain, group, written)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, fmt.Errorf("group %q does not exist", id))
@@ -203,14 +193,11 @@ func (s *Server) putGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
 		payload := map[string]any{"principal": req.Principal}
-		if !req.ExpiresAt.IsZero() {
-			payload["expires_at"] = req.ExpiresAt.UTC()
+		if !written.ExpiresAt.IsZero() {
+			payload["expires_at"] = written.ExpiresAt
 		}
 		undo := func(ctx context.Context) error {
-			if prior != nil {
-				return s.store.PutGroupMember(ctx, domain, group, *prior)
-			}
-			return s.store.RemoveGroupMember(ctx, domain, group, req.Principal)
+			return s.store.SwapGroupMember(ctx, domain, group, req.Principal, &written, prior)
 		}
 		if !s.recordOrUndo(w, r, s.groupEvent(r, "group.member.add", id, payload), undo) {
 			return
@@ -234,29 +221,16 @@ func (s *Server) removeGroupMember(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeDomainWrite(w, r, "group.member.remove", id, domain) {
 		return
 	}
-	before, err := s.store.GetGroup(r.Context(), domain, group)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, fmt.Errorf("group %q does not exist", id))
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	var prior storage.GroupMember
-	for _, m := range before.Members {
-		if m.Principal == principal {
-			prior = m
-		}
-	}
-	err = s.store.RemoveGroupMember(r.Context(), domain, group, principal)
+	removed, err := s.store.RemoveGroupMember(r.Context(), domain, group, principal)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, fmt.Errorf("%q is not a member of %q", principal, id))
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
-		undo := func(ctx context.Context) error { return s.store.PutGroupMember(ctx, domain, group, prior) }
+		undo := func(ctx context.Context) error {
+			return s.store.SwapGroupMember(ctx, domain, group, principal, nil, &removed)
+		}
 		if !s.recordOrUndo(w, r, s.groupEvent(r, "group.member.remove", id, map[string]any{"principal": principal}), undo) {
 			return
 		}

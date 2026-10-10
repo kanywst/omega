@@ -48,7 +48,9 @@ sequenceDiagram
   Note over P: the next evaluation ignores the membership
 ```
 
-`expires_at` is checked each time a request is evaluated, so access ends at that moment on every replica, with no refresh involved. The membership row stays until someone removes it or re-adds the member with a new expiry.
+`expires_at` is checked each time a request is evaluated, so PDP decisions stop counting the membership at that moment on every replica, with no refresh involved. It may be at most 366 days ahead; access meant to last longer is a membership without expiry, reviewed like any other. Tokens already issued through `/v1/token/exchange` or `/oauth2/token` were authorized once at issuance and stay valid until their own expiry, so keep their lifetimes short where group membership is what grants them.
+
+A `PUT` replaces the membership: sending it again without `expires_at` makes the membership permanent, so include the new expiry when extending a time-bound one. The row stays until someone removes it or re-adds the member.
 
 ## Walkthrough
 

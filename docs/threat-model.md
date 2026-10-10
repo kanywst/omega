@@ -346,7 +346,7 @@ A principal that administers one domain tries to create, delete or grant admins 
 A principal adds itself, or a principal it controls, to a group that a policy trusts, or keeps a temporary membership past its end.
 
 - Mitigation today: group writes are authorized against the owning domain's admin chain under `--require-auth`, and every change and refused attempt is audited. Membership expiry is checked at evaluation time, so a lapsed membership stops counting at once on every replica ([ADR 0015](adr/0015-groups-with-expiring-membership.md)).
-- Residual risk: a domain's admins control who is in its groups, so a policy that trusts `Group::"media:..."` trusts the media admins. Groups accept federated SPIFFE IDs when an admin lists them. A removal reaches other replicas within the five-second reload interval.
+- Residual risk: a domain's admins control who is in its groups, so a policy that trusts `Group::"media:..."` trusts the media admins. Groups accept federated SPIFFE IDs when an admin lists them. A removal reaches other replicas within the five-second reload interval. Expiry ends a membership for PDP decisions at once, but a token issued while it was active stays valid until the token itself expires.
 
 ## Out of scope
 

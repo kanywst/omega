@@ -106,16 +106,144 @@ func (s *Store) DeleteGroup(ctx context.Context, domain, name string) error {
 	return tx.Commit()
 }
 
-// PutGroupMember adds principal to a group, or updates its expiry.
-func (s *Store) PutGroupMember(ctx context.Context, domain, name string, m GroupMember) error {
+// ErrChanged is returned by a compare-and-undo when the row no longer
+// holds the value the change being undone wrote.
+var ErrChanged = errors.New("changed since; not reverted")
+
+// PutGroupMember adds principal to a group, or replaces its expiry, and
+// returns the membership it replaced (nil if there was none).
+func (s *Store) PutGroupMember(ctx context.Context, domain, name string, m GroupMember) (*GroupMember, error) {
 	if !s.IsLeader() {
-		return ErrNotLeader
+		return nil, ErrNotLeader
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.lockGroup(ctx, tx, domain, name); err != nil {
+		return nil, err
+	}
+	prior, err := s.memberTx(ctx, tx, domain, name, m.Principal)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO group_members(domain, grp, principal, expires_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (domain, grp, principal) DO UPDATE SET expires_at = excluded.expires_at`),
+		domain, name, m.Principal, nanos(m.ExpiresAt),
+	); err != nil {
+		return nil, fmt.Errorf("upsert member: %w", err)
+	}
+	return prior, tx.Commit()
+}
+
+// RemoveGroupMember removes principal from a group and returns the
+// membership it removed.
+func (s *Store) RemoveGroupMember(ctx context.Context, domain, name, principal string) (GroupMember, error) {
+	if !s.IsLeader() {
+		return GroupMember{}, ErrNotLeader
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return GroupMember{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	prior, err := s.memberTx(ctx, tx, domain, name, principal)
+	if err != nil {
+		return GroupMember{}, err
+	}
+	if prior == nil {
+		return GroupMember{}, ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ? AND principal = ?`), domain, name, principal); err != nil {
+		return GroupMember{}, fmt.Errorf("delete member: %w", err)
+	}
+	return *prior, tx.Commit()
+}
+
+// SwapGroupMember sets principal's membership to want (nil removes it),
+// but only while it still equals expect (nil: absent). It undoes a
+// change without overwriting a later one.
+func (s *Store) SwapGroupMember(ctx context.Context, domain, name, principal string, expect, want *GroupMember) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := s.lockGroup(ctx, tx, domain, name); err != nil {
+		return err
+	}
+	cur, err := s.memberTx(ctx, tx, domain, name, principal)
+	if err != nil {
+		return err
+	}
+	if !sameMember(cur, expect) {
+		return ErrChanged
+	}
+	if want == nil {
+		_, err = tx.ExecContext(ctx, s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ? AND principal = ?`), domain, name, principal)
+	} else {
+		_, err = tx.ExecContext(ctx, s.rebind(`INSERT INTO group_members(domain, grp, principal, expires_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (domain, grp, principal) DO UPDATE SET expires_at = excluded.expires_at`),
+			domain, name, principal, nanos(want.ExpiresAt))
+	}
+	if err != nil {
+		return fmt.Errorf("swap member: %w", err)
+	}
+	return tx.Commit()
+}
+
+// DeleteEmptyGroup deletes a group only if it has no members, undoing a
+// create without discarding members added since.
+func (s *Store) DeleteEmptyGroup(ctx context.Context, domain, name string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var n int
+	if err := tx.QueryRowContext(ctx, s.rebind(`SELECT COUNT(*) FROM group_members WHERE domain = ? AND grp = ?`), domain, name).Scan(&n); err != nil {
+		return fmt.Errorf("count members: %w", err)
+	}
+	if n > 0 {
+		return ErrChanged
+	}
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM groups WHERE domain = ? AND name = ?`), domain, name); err != nil {
+		return fmt.Errorf("delete group: %w", err)
+	}
+	return tx.Commit()
+}
+
+// RestoreGroup re-creates a deleted group with its members in one
+// transaction. It fails with ErrAlreadyExists if the name was reused.
+func (s *Store) RestoreGroup(ctx context.Context, g Group) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.lockDomain(ctx, tx, g.Domain, "FOR SHARE"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		s.rebind(`INSERT INTO groups(domain, name, description, created_at) VALUES (?, ?, ?, ?)`),
+		g.Domain, g.Name, g.Description, g.CreatedAt.UnixNano(),
+	); err != nil {
+		if isUniqueViolation(err) {
+			return ErrAlreadyExists
+		}
+		return fmt.Errorf("insert group: %w", err)
+	}
+	for _, m := range g.Members {
+		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO group_members(domain, grp, principal, expires_at) VALUES (?, ?, ?, ?)`),
+			g.Domain, g.Name, m.Principal, nanos(m.ExpiresAt)); err != nil {
+			return fmt.Errorf("insert member: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) lockGroup(ctx context.Context, tx *sql.Tx, domain, name string) error {
 	q := `SELECT 1 FROM groups WHERE domain = ? AND name = ?`
 	if s.driver == driverPostgres {
 		q += " FOR SHARE"
@@ -127,35 +255,38 @@ func (s *Store) PutGroupMember(ctx context.Context, domain, name string, m Group
 		}
 		return fmt.Errorf("query group: %w", err)
 	}
-	var exp int64
-	if !m.ExpiresAt.IsZero() {
-		exp = m.ExpiresAt.UnixNano()
-	}
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ? AND principal = ?`), domain, name, m.Principal); err != nil {
-		return fmt.Errorf("replace member: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		s.rebind(`INSERT INTO group_members(domain, grp, principal, expires_at) VALUES (?, ?, ?, ?)`),
-		domain, name, m.Principal, exp,
-	); err != nil {
-		return fmt.Errorf("insert member: %w", err)
-	}
-	return tx.Commit()
+	return nil
 }
 
-// RemoveGroupMember removes principal from a group.
-func (s *Store) RemoveGroupMember(ctx context.Context, domain, name, principal string) error {
-	if !s.IsLeader() {
-		return ErrNotLeader
+func (s *Store) memberTx(ctx context.Context, tx *sql.Tx, domain, name, principal string) (*GroupMember, error) {
+	var exp int64
+	err := tx.QueryRowContext(ctx, s.rebind(`SELECT expires_at FROM group_members WHERE domain = ? AND grp = ? AND principal = ?`),
+		domain, name, principal).Scan(&exp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
-	res, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ? AND principal = ?`), domain, name, principal)
 	if err != nil {
-		return fmt.Errorf("delete member: %w", err)
+		return nil, fmt.Errorf("query member: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+	m := &GroupMember{Principal: principal}
+	if exp != 0 {
+		m.ExpiresAt = time.Unix(0, exp).UTC()
 	}
-	return nil
+	return m, nil
+}
+
+func sameMember(a, b *GroupMember) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Principal == b.Principal && a.ExpiresAt.Equal(b.ExpiresAt)
+}
+
+func nanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
 }
 
 // GetGroup returns one group with its members.

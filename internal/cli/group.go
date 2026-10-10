@@ -18,7 +18,7 @@ func newGroupCommand() *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&serverURL, "server", "http://127.0.0.1:8080", "control plane HTTP base URL")
 	groupsURL := func(domain string) string {
-		return strings.TrimRight(serverURL, "/") + "/v1/domains/" + domain + "/groups"
+		return strings.TrimRight(serverURL, "/") + "/v1/domains/" + url.PathEscape(domain) + "/groups"
 	}
 
 	var description string
@@ -41,7 +41,7 @@ func newGroupCommand() *cobra.Command {
 		Short: "Show a group and its members",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(c *cobra.Command, args []string) error {
-			return doGET(c.OutOrStdout(), groupsURL(args[0])+"/"+args[1])
+			return doGET(c.OutOrStdout(), groupsURL(args[0])+"/"+url.PathEscape(args[1]))
 		},
 	}
 	list := &cobra.Command{
@@ -57,7 +57,7 @@ func newGroupCommand() *cobra.Command {
 		Short: "Delete a group and its memberships",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(c *cobra.Command, args []string) error {
-			return doRequest(c.OutOrStdout(), http.MethodDelete, groupsURL(args[0])+"/"+args[1], nil)
+			return doRequest(c.OutOrStdout(), http.MethodDelete, groupsURL(args[0])+"/"+url.PathEscape(args[1]), nil)
 		},
 	}
 
@@ -76,7 +76,7 @@ func newGroupCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return doRequest(c.OutOrStdout(), http.MethodPut, groupsURL(args[0])+"/"+args[1]+"/members", body)
+			return doRequest(c.OutOrStdout(), http.MethodPut, groupsURL(args[0])+"/"+url.PathEscape(args[1])+"/members", body)
 		},
 	}
 	add.Flags().DurationVar(&expiresIn, "expires-in", 0, "end the membership after this long (e.g. 8h); 0 means no expiry")
@@ -85,7 +85,7 @@ func newGroupCommand() *cobra.Command {
 		Short: "Remove a member",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(c *cobra.Command, args []string) error {
-			u := groupsURL(args[0]) + "/" + args[1] + "/members?principal=" + url.QueryEscape(args[2])
+			u := groupsURL(args[0]) + "/" + url.PathEscape(args[1]) + "/members?principal=" + url.QueryEscape(args[2])
 			return doRequest(c.OutOrStdout(), http.MethodDelete, u, nil)
 		},
 	}
