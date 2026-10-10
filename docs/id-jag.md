@@ -67,14 +67,14 @@ Steps 1 to 5 happen at the IdP and are not Omega's concern. Omega's part starts 
 
 ## What Omega checks
 
-Every check below must pass. Once the request is recognised as a jwt-bearer grant, every refusal writes a `token.id_jag` deny row to the audit chain. When the ID-JAG itself fails validation the client only sees `assertion could not be validated`; the reason is in the audit row, so a client cannot probe which issuers Omega trusts.
+Every check below must pass. Once the client has authenticated, every refusal writes a `token.id_jag` deny row to the audit chain; requests that fail client authentication are only counted in the route metrics, so they cannot grow the chain. When the ID-JAG itself fails validation the client only sees `assertion could not be validated`; the reason is in the audit row, so a client cannot probe which issuers Omega trusts.
 
 ```mermaid
 flowchart TD
   R[POST /oauth2/token] --> F{form-encoded,<br/>grant_type = jwt-bearer,<br/>no repeated params?}
   F -- no --> E1[400 invalid_request /<br/>unsupported_grant_type]
   F -- yes --> C{client authenticated by SPIFFE ID?<br/>mTLS X.509-SVID, or JWT-SVID<br/>client_assertion: sole aud = Omega issuer,<br/>no act / cnf, own trust domain}
-  C -- no --> E2[401 invalid_client]
+  C -- no --> E2[401 invalid_client<br/>not audited]
   C -- yes --> V{ID-JAG verifies?<br/>iss is a trusted --id-jag-idp,<br/>signature by its JWKS,<br/>typ = oauth-id-jag+jwt,<br/>aud = exactly Omega issuer,<br/>exp / iat valid}
   V -- no --> E3[400 invalid_grant + audit deny]
   V -- yes --> B{profile rules<br/>sub, jti present,<br/>exp - iat within max TTL,<br/>client_id = authenticated SPIFFE ID,<br/>no cnf}

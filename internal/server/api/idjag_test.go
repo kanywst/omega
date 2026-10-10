@@ -540,8 +540,8 @@ func TestIDJAGGrantAuditsRefusals(t *testing.T) {
 			deny++
 		}
 	}
-	if deny != 2 {
-		t.Fatalf("want 2 token.id_jag deny rows (invalid_client, invalid_scope), got %d", deny)
+	if deny != 1 {
+		t.Fatalf("want 1 token.id_jag deny row (invalid_scope; unauthenticated requests are not audited), got %d", deny)
 	}
 }
 

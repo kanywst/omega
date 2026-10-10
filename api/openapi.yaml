@@ -677,7 +677,7 @@ paths:
         user in `act`, and expires no later than the ID-JAG. Every
         grant is evaluated by Cedar as `Action::"token.id_jag"` with
         default deny. Every grant
-        and refusal after `grant_type` is recognised is audited as
+        and every refusal from an authenticated client is audited as
         `token.id_jag`, and the token is withheld (`500`) if the
         record cannot be written. Returns `404 Not Found` when no ID-JAG IdP
         is configured and `501` in spire-upstream mode.

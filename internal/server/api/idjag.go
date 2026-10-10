@@ -108,9 +108,19 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Every refusal from here on is an ID-JAG attempt and is audited.
-	audit := map[string]any{}
-	var client, user string
+	// Unauthenticated requests are not audited, so they cannot grow the
+	// chain; the route's request metrics still count the 401s.
+	clientID, authMethod, oerr := s.authenticateSPIFFEClient(r, form, issuer)
+	if oerr != nil {
+		writeOAuthErr(w, oerr)
+		return
+	}
+
+	// Every refusal from here on is an authenticated client's ID-JAG
+	// attempt and is audited.
+	client := clientID.String()
+	var user string
+	audit := map[string]any{"client_auth": authMethod}
 	fail := func(e *oauthError, detail string) {
 		audit["error"] = e.code
 		if detail != "" {
@@ -119,14 +129,6 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		s.auditIDJAG(r, "deny", client, user, audit)
 		writeOAuthErr(w, e)
 	}
-
-	clientID, authMethod, oerr := s.authenticateSPIFFEClient(r, form, issuer)
-	if oerr != nil {
-		fail(oerr, oerr.desc)
-		return
-	}
-	client = clientID.String()
-	audit["client_auth"] = authMethod
 	assertion := form.Get("assertion")
 	if assertion == "" {
 		fail(newOAuthErr(http.StatusBadRequest, "invalid_request", "assertion is required"), "")
@@ -239,7 +241,6 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		fail(newOAuthErr(http.StatusBadRequest, "invalid_request", "%s", err), "")
 		return
 	}
-	metrics.SVIDIssued.WithLabelValues("jwt-id-jag").Inc()
 	audit["ttl_seconds"] = int(ttl / time.Second)
 	audit["kid"] = svid.KeyID
 	// The token is released only once its grant is on the audit chain.
@@ -247,6 +248,7 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		writeOAuthErr(w, newOAuthErr(http.StatusInternalServerError, "server_error", "could not record the grant"))
 		return
 	}
+	metrics.SVIDIssued.WithLabelValues("jwt-id-jag").Inc()
 
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, OAuthTokenResponse{
