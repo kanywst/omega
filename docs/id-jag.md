@@ -81,9 +81,12 @@ flowchart TD
   B -- no --> E3
   B -- yes --> N{ID-JAG grants a resource, and<br/>requested resource / scope only narrow it?}
   N -- no --> E4[400 invalid_target / invalid_scope + audit deny]
-  N -- yes --> P{--enforce-token-exchange-policy?<br/>Cedar token.exchange,<br/>context.grant = id-jag}
-  P -- deny --> E3
-  P -- allow or off --> I[issue JWT-SVID for the client<br/>act.sub = user SPIFFE ID<br/>ttl = ID-JAG remaining life<br/>audit allow]
+  N -- yes --> P{Cedar permits token.exchange<br/>with context.grant = id-jag?<br/>default deny, always evaluated}
+  P -- no --> E3
+  P -- yes --> I[issue JWT-SVID for the client<br/>act.sub = user SPIFFE ID<br/>ttl = ID-JAG remaining life]
+  I --> AU{allow row appended<br/>to the audit chain?}
+  AU -- no --> E5[500 server_error,<br/>token withheld]
+  AU -- yes --> OK[200 token]
 ```
 
 Three checks carry most of the weight:
@@ -156,7 +159,6 @@ omega server \
   --issuer-url https://omega.example.com \
   --id-jag-idp 'name=corp,issuer=https://idp.example.com,template=spiffe://omega.example.com/humans/{idp}/{sub}' \
   --id-jag-max-assertion-ttl 5m \
-  --enforce-token-exchange-policy \
   --policy-dir ./policies
 ```
 
@@ -165,12 +167,12 @@ omega server \
 | `--issuer-url` | Required. An ID-JAG's `aud` must equal it, and so must the sole `aud` of a JWT-SVID client assertion. |
 | `--id-jag-idp` | Repeatable. Trusts one IdP; its discovery document and JWKS are fetched on first use. One issuer per entry, and with several entries every template must contain `{idp}`. |
 | `--id-jag-max-assertion-ttl` | Rejects ID-JAGs whose `exp - iat` is longer. Default 5m. |
-| `--enforce-token-exchange-policy` | Evaluates each grant as `Action::"token.exchange"` with `context.grant == "id-jag"` and `context.idp`. |
+| `--policy-dir` | Must contain a permit for the grant. Every grant is evaluated as `Action::"token.exchange"` with `context.grant == "id-jag"` and `context.idp`, independent of `--enforce-token-exchange-policy`; with no permit every grant is denied. |
 | `--require-auth` + `--client-ca` | Production. Clients authenticate with their mTLS X.509-SVID (`spiffe_x509`), which is what binds the ID-JAG to the agent. Without `--require-auth` any caller can mint a JWT-SVID for any SPIFFE ID, so the server warns that the grant is for development only. |
 
 Clients discover the endpoint at `GET /.well-known/oauth-authorization-server`. The document lists the jwt-bearer grant, the `urn:ietf:params:oauth:grant-profile:id-jag` profile and the one SPIFFE authentication method that works on this listener, but never the trusted issuers.
 
-A policy that lets only AI agents acting for a federated human use the grant (the one the demo loads):
+Without a permit the grant is refused, so a deployment ships at least one. This one, which the demo loads, lets only AI agents acting for a federated human use the grant:
 
 ```text
 permit (

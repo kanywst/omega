@@ -107,8 +107,15 @@ type jagEnv struct {
 	idp   *jagIDP
 }
 
+// permitIDJAG lets any client redeem an ID-JAG; the grant is always
+// policy-gated, so every test server needs some permit.
+const permitIDJAG = `permit (principal, action == Action::"token.exchange", resource) when { context has grant && context.grant == "id-jag" };`
+
 func newJAGEnv(t *testing.T, cedarSrc string) *jagEnv {
 	t.Helper()
+	if cedarSrc == "" {
+		cedarSrc = permitIDJAG
+	}
 	return newJAGEnvWith(t, cedarSrc, nil)
 }
 
@@ -154,7 +161,6 @@ func newJAGEnvWith(t *testing.T, cedarSrc string, tca *testCA) *jagEnv {
 		if err := pdp.LoadDir(pdir); err != nil {
 			t.Fatalf("load policy: %v", err)
 		}
-		s = s.WithEnforceTokenExchangePolicy(true)
 	}
 	srv := httptest.NewUnstartedServer(s.Handler())
 	if tca != nil {
@@ -541,7 +547,7 @@ func TestIDJAGGrantAuditsRefusals(t *testing.T) {
 
 func TestIDJAGGrantMTLSClient(t *testing.T) {
 	tca := newTestCA(t)
-	env := newJAGEnvWith(t, "", tca)
+	env := newJAGEnvWith(t, permitIDJAG, tca)
 	agentCert := tca.issue(t, "agent", jagAgent, nil)
 	client := clientWith(tca, &agentCert)
 	jag := env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims())
@@ -589,5 +595,25 @@ func TestIDJAGGrantMTLSClient(t *testing.T) {
 	}
 	if len(md.TokenEndpointAuthMethodsSupported) != 1 || md.TokenEndpointAuthMethodsSupported[0] != "spiffe_x509" {
 		t.Errorf("auth methods under mTLS: %v", md.TokenEndpointAuthMethodsSupported)
+	}
+}
+
+func TestIDJAGGrantDeniedWithoutPolicy(t *testing.T) {
+	env := newJAGEnvWith(t, "", nil)
+	resp, body := postToken(t, env.srv.URL, env.baseForm(t, env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims())))
+	if resp.StatusCode != http.StatusBadRequest || body["error"] != "invalid_grant" {
+		t.Fatalf("no permit policy: got %d %v, want 400 invalid_grant", resp.StatusCode, body)
+	}
+}
+
+func TestIDJAGGrantWithholdsTokenWhenAuditFails(t *testing.T) {
+	env := newJAGEnv(t, "")
+	jag := env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims())
+	if err := env.store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	resp, body := postToken(t, env.srv.URL, env.baseForm(t, jag))
+	if resp.StatusCode != http.StatusInternalServerError || body["access_token"] != nil {
+		t.Fatalf("audit unavailable: got %d %v, want 500 with no token", resp.StatusCode, body)
 	}
 }

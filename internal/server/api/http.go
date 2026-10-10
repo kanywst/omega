@@ -428,6 +428,12 @@ func (s *Server) getJWTBundle(w http.ResponseWriter, _ *http.Request) {
 // caller's response - the HTTP request has already succeeded by the time
 // audit is called.
 func (s *Server) audit(ctx context.Context, ev storage.AuditEvent) {
+	_ = s.appendAudit(ctx, ev)
+}
+
+// appendAudit is audit for callers that must not proceed when the
+// record could not be written.
+func (s *Server) appendAudit(ctx context.Context, ev storage.AuditEvent) error {
 	ctx, span := tracer.Start(ctx, "audit.append",
 		trace.WithAttributes(
 			attribute.String("audit.kind", ev.Kind),
@@ -440,9 +446,10 @@ func (s *Server) audit(ctx context.Context, ev storage.AuditEvent) {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "audit append failed")
 		slog.Error("audit append failed", "kind", ev.Kind, "err", err)
-		return
+		return err
 	}
 	metrics.AuditAppended.WithLabelValues(ev.Kind).Inc()
+	return nil
 }
 
 func mustJSON(v any) json.RawMessage {

@@ -673,8 +673,11 @@ paths:
         ID, `jti`, `iat`, `exp` and a `resource`, and verify against a
         trusted IdP. The issued JWT-SVID is for the client, names the
         user in `act`, and expires no later than the ID-JAG. Every
-        grant and refusal after `grant_type` is recognised is audited
-        as `token.id_jag`. Returns `404 Not Found` when no ID-JAG IdP
+        grant is evaluated by Cedar (`token.exchange`,
+        `context.grant == "id-jag"`) with default deny. Every grant
+        and refusal after `grant_type` is recognised is audited as
+        `token.id_jag`, and the token is withheld (`500`) if the
+        record cannot be written. Returns `404 Not Found` when no ID-JAG IdP
         is configured and `501` in spire-upstream mode.
       requestBody:
         required: true

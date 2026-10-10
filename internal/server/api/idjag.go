@@ -176,8 +176,10 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	chain := []string{user, client}
 	audit["chain"] = chain
 
-	policyDecision := "skipped"
-	if s.enforceExchangePolicy {
+	// Always gated, regardless of --enforce-token-exchange-policy: unlike
+	// /v1/token/exchange there is no baseline rule to fall back on, so
+	// Cedar's default deny applies until an operator writes a permit.
+	{
 		resp, err := s.policy.Evaluate(policy.EvalRequest{
 			Subject: policy.Entity{
 				Type: "Spiffe",
@@ -210,9 +212,8 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 			fail(newOAuthErr(http.StatusBadRequest, "invalid_grant", "denied by policy"), "")
 			return
 		}
-		policyDecision = "allow"
 	}
-	audit["policy"] = policyDecision
+	audit["policy"] = "allow"
 
 	// Like /v1/token/exchange, the delegated token never outlives the grant.
 	ttl := time.Until(claims.ExpiresAt)
@@ -241,7 +242,11 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	metrics.SVIDIssued.WithLabelValues("jwt-id-jag").Inc()
 	audit["ttl_seconds"] = int(ttl / time.Second)
 	audit["kid"] = svid.KeyID
-	s.auditIDJAG(r, "allow", client, user, audit)
+	// The token is released only once its grant is on the audit chain.
+	if err := s.appendAudit(r.Context(), idJAGEvent("allow", client, user, audit)); err != nil {
+		writeOAuthErr(w, newOAuthErr(http.StatusInternalServerError, "server_error", "could not record the grant"))
+		return
+	}
 
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, OAuthTokenResponse{
@@ -272,13 +277,17 @@ func renderUserID(template string, claims *oidc.Claims, td spiffeid.TrustDomain)
 }
 
 func (s *Server) auditIDJAG(r *http.Request, decision, client, user string, payload map[string]any) {
-	s.audit(r.Context(), storage.AuditEvent{
+	s.audit(r.Context(), idJAGEvent(decision, client, user, payload))
+}
+
+func idJAGEvent(decision, client, user string, payload map[string]any) storage.AuditEvent {
+	return storage.AuditEvent{
 		Kind:     "token.id_jag",
 		Actor:    client,
 		Subject:  user,
 		Decision: decision,
 		Payload:  mustJSON(payload),
-	})
+	}
 }
 
 // parseTokenForm reads the body only; every parameter except the
