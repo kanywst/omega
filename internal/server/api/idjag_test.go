@@ -122,6 +122,13 @@ func newJAGEnv(t *testing.T, cedarSrc string) *jagEnv {
 // newJAGEnvWith serves over mTLS with --require-auth when tca is non-nil.
 func newJAGEnvWith(t *testing.T, cedarSrc string, tca *testCA) *jagEnv {
 	t.Helper()
+	return newJAGEnvTLS(t, cedarSrc, tca, false)
+}
+
+// newJAGEnvTLS also lets the listener accept connections without a
+// client cert (--client-cert-optional) when certOptional is set.
+func newJAGEnvTLS(t *testing.T, cedarSrc string, tca *testCA, certOptional bool) *jagEnv {
+	t.Helper()
 	dir := t.TempDir()
 	store, err := storage.Open(filepath.Join(dir, "omega.db"))
 	if err != nil {
@@ -152,7 +159,7 @@ func newJAGEnvWith(t *testing.T, cedarSrc string, tca *testCA) *jagEnv {
 	pdp := policy.New()
 	s := api.NewServer(store, ca, pdp).
 		WithRequireAuth(tca != nil).
-		WithIDJAG(api.IDJAGConfig{Registry: reg, MTLSClientAuth: tca != nil})
+		WithIDJAG(api.IDJAGConfig{Registry: reg, MTLSClientAuth: tca != nil, JWTClientAuth: tca == nil || certOptional})
 	if cedarSrc != "" {
 		pdir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(pdir, "p.cedar"), []byte(cedarSrc), 0o644); err != nil {
@@ -169,6 +176,9 @@ func newJAGEnvWith(t *testing.T, cedarSrc string, tca *testCA) *jagEnv {
 			Certificates: []tls.Certificate{tca.issue(t, "omega-server", "", []net.IP{net.ParseIP("127.0.0.1")})},
 			ClientCAs:    tca.pool,
 			ClientAuth:   tls.RequireAndVerifyClientCert,
+		}
+		if certOptional {
+			srv.TLS.ClientAuth = tls.VerifyClientCertIfGiven
 		}
 		srv.StartTLS()
 	} else {
@@ -637,5 +647,47 @@ func TestIDJAGClientAssertionLifetimeCap(t *testing.T) {
 	resp, body := postToken(t, env.srv.URL, form)
 	if resp.StatusCode != http.StatusUnauthorized || body["error"] != "invalid_client" {
 		t.Fatalf("hour-long client assertion: got %d %v, want 401 invalid_client", resp.StatusCode, body)
+	}
+}
+
+func TestIDJAGGrantJWTClientUnderRequireAuth(t *testing.T) {
+	tca := newTestCA(t)
+	env := newJAGEnvTLS(t, permitIDJAG, tca, true)
+	noCert := clientWith(tca, nil)
+	jag := env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims())
+
+	resp, body := postTokenWith(t, noCert, env.srv.URL, env.baseForm(t, jag))
+	if resp.StatusCode != http.StatusOK || body["spiffe_id"] != jagAgent {
+		t.Fatalf("spiffe_jwt without a cert: got %d %v", resp.StatusCode, body)
+	}
+
+	form := env.baseForm(t, jag)
+	form.Set("client_assertion", env.clientAssertionWith(t, jagAgent, map[string]any{"act": map[string]any{"sub": "spiffe://omega.local/humans/x"}}))
+	resp, body = postTokenWith(t, noCert, env.srv.URL, form)
+	if resp.StatusCode != http.StatusUnauthorized || body["error"] != "invalid_client" {
+		t.Fatalf("delegated token as assertion: got %d %v", resp.StatusCode, body)
+	}
+
+	// Gated routes still demand a verified client SVID.
+	r, err := noCert.Post(env.srv.URL+"/v1/svid/jwt", "application/json", strings.NewReader(`{"spiffe_id":"`+jagAgent+`","audience":["x"]}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("gated route without a cert: status %d, want 401", r.StatusCode)
+	}
+
+	mresp, err := noCert.Get(env.srv.URL + "/.well-known/oauth-authorization-server")
+	if err != nil {
+		t.Fatalf("metadata: %v", err)
+	}
+	defer mresp.Body.Close()
+	var md api.OAuthASMetadata
+	if err := json.NewDecoder(mresp.Body).Decode(&md); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if strings.Join(md.TokenEndpointAuthMethodsSupported, ",") != "spiffe_x509,spiffe_jwt" {
+		t.Errorf("auth methods with optional client certs: %v", md.TokenEndpointAuthMethodsSupported)
 	}
 }

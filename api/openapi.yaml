@@ -680,8 +680,9 @@ paths:
         X.509-SVID (`spiffe_x509`) or a JWT-SVID `client_assertion` of
         type `urn:ietf:params:oauth:client-assertion-type:jwt-spiffe`
         whose only `aud` is the issuer (`spiffe_jwt`). Under
-        `--require-auth` only `spiffe_x509` is accepted, and the
-        server refuses `--id-jag-idp` without `--require-auth` unless
+        `--require-auth` a client without a certificate can use
+        `spiffe_jwt` only when the listener runs with
+        `--client-cert-optional`, and the server refuses `--id-jag-idp` without `--require-auth` unless
         `--id-jag-insecure-client-binding` is set.
 
         The ID-JAG must carry `typ: oauth-id-jag+jwt`, an `aud` equal

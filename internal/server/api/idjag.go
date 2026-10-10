@@ -36,11 +36,13 @@ const (
 
 // IDJAGConfig wires the ID-JAG grant. Registry entries must set
 // RequiredTyp = IDJAGTyp, ExactAudience, and omega's issuer URL as the
-// only audience. MTLSClientAuth decides whether spiffe_x509 is advertised.
+// only audience. MTLSClientAuth and JWTClientAuth say which client
+// authentication methods the listener lets through, for the metadata.
 type IDJAGConfig struct {
 	Registry        *oidc.Registry
 	MaxAssertionTTL time.Duration
 	MTLSClientAuth  bool
+	JWTClientAuth   bool
 }
 
 // WithIDJAG enables POST /oauth2/token and the RFC 8414 metadata.
@@ -52,6 +54,7 @@ func (s *Server) WithIDJAG(cfg IDJAGConfig) *Server {
 		s.idJAGMaxAssertionTTL = DefaultIDJAGMaxAssertionTTL
 	}
 	s.idJAGMTLS = cfg.MTLSClientAuth
+	s.idJAGJWT = cfg.JWTClientAuth
 	return s
 }
 
@@ -343,8 +346,9 @@ func parseTokenForm(w http.ResponseWriter, r *http.Request) (url.Values, *oauthE
 
 // authenticateSPIFFEClient accepts exactly one of spiffe_x509 (verified
 // mTLS client SVID) or spiffe_jwt (JWT-SVID client_assertion whose sole
-// aud is omega's issuer). Under --require-auth only spiffe_x509 binds the
-// client: there, every connection already carries a verified SVID.
+// aud is omega's issuer). spiffe_jwt binds the client only under
+// --require-auth, where a JWT-SVID without act can come from the client
+// alone; reaching it there needs --client-cert-optional.
 func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issuer string) (spiffeid.ID, string, *oauthError) {
 	assertionType := form.Get("client_assertion_type")
 	assertion := form.Get("client_assertion")
@@ -358,9 +362,6 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 	case assertionType != "" || assertion != "":
 		if hasCert {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusBadRequest, "invalid_request", "use one client authentication method: mTLS or client_assertion, not both")
-		}
-		if s.requireAuth {
-			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "this server authenticates clients by mTLS X.509-SVID only")
 		}
 		if assertionType != clientAssertionTypeSPIFFE {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion_type must be %q", clientAssertionTypeSPIFFE)
@@ -511,10 +512,12 @@ func (s *Server) getOAuthASMetadata(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("OAuth authorization server metadata is served only when the ID-JAG grant is configured (--id-jag-idp with --issuer-url)"))
 		return
 	}
-	// With mTLS every connection carries a cert, so only spiffe_x509 can succeed.
-	methods := []string{authMethodSPIFFEJWT}
+	var methods []string
 	if s.idJAGMTLS {
-		methods = []string{authMethodSPIFFEX509}
+		methods = append(methods, authMethodSPIFFEX509)
+	}
+	if s.idJAGJWT {
+		methods = append(methods, authMethodSPIFFEJWT)
 	}
 	writeJSON(w, http.StatusOK, OAuthASMetadata{
 		Issuer:                              iss,

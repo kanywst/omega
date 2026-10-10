@@ -231,7 +231,7 @@ func writeTestKeypair(t *testing.T, dir string) (certPath, keyPath string) {
 // No TLS flags => nil config => plaintext listener (backward-compatible
 // default).
 func TestBuildServerTLS_PlaintextDefault(t *testing.T) {
-	cfg, err := buildServerTLS("", "", "")
+	cfg, err := buildServerTLS("", "", "", false)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestBuildServerTLS_PlaintextDefault(t *testing.T) {
 func TestBuildServerTLS_ClientCANeedsServerCert(t *testing.T) {
 	dir := t.TempDir()
 	caPath, _ := writeTestKeypair(t, dir)
-	if _, err := buildServerTLS("", "", caPath); err == nil {
+	if _, err := buildServerTLS("", "", caPath, false); err == nil {
 		t.Fatal("expected error: --client-ca without --tls-cert/--tls-key")
 	}
 }
@@ -254,7 +254,7 @@ func TestBuildServerTLS_ClientCANeedsServerCert(t *testing.T) {
 func TestBuildServerTLS_ServerOnly(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := writeTestKeypair(t, dir)
-	cfg, err := buildServerTLS(certPath, keyPath, "")
+	cfg, err := buildServerTLS(certPath, keyPath, "", false)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestBuildServerTLS_MutualTLS(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := writeTestKeypair(t, dir)
 	caPath := certPath // any PEM with a cert works as a client CA bundle
-	cfg, err := buildServerTLS(certPath, keyPath, caPath)
+	cfg, err := buildServerTLS(certPath, keyPath, caPath, false)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -291,5 +291,20 @@ func TestServerCommandRequireAuthNeedsClientCA(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "client-ca") {
 		t.Fatalf("error should mention --client-ca, got: %v", err)
+	}
+}
+
+func TestBuildServerTLSClientCertOptional(t *testing.T) {
+	if _, err := buildServerTLS("", "", "", true); err == nil {
+		t.Fatal("--client-cert-optional without --client-ca must fail")
+	}
+	dir := t.TempDir()
+	certPath, keyPath := writeTestKeypair(t, dir)
+	cfg, err := buildServerTLS(certPath, keyPath, certPath, true)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cfg.ClientAuth != tls.VerifyClientCertIfGiven || cfg.ClientCAs == nil {
+		t.Fatalf("expected optional client certs, got ClientAuth=%v", cfg.ClientAuth)
 	}
 }

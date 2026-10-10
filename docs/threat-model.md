@@ -157,6 +157,7 @@ open CA. This is the threat the startup warning names.
   set — bind to loopback or a private network in the meantime.
 - Out-of-tree mitigation: restrict who can reach `--http-addr` at the
   network layer (NetworkPolicy, security group, mesh authorization).
+- `--client-cert-optional` ([ADR 0012](adr/0012-optional-client-certificates.md)) moves the client-certificate requirement from the handshake to the gated routes: they still require a verified SVID, while ungated routes such as `/metrics` become reachable without one.
 
 ### T1 — Tampering with the audit log
 

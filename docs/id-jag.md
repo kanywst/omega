@@ -170,6 +170,7 @@ omega server \
 | `--id-jag-max-assertion-ttl` | Rejects ID-JAGs, and JWT-SVID client assertions, whose `exp - iat` is longer. Default 5m. |
 | `--policy-dir` | Must contain a permit for the grant. Every grant is evaluated as `Action::"token.id_jag"` with `context.idp` and `context.requested_audience`, independent of `--enforce-token-exchange-policy`; with no permit every grant is denied, and `token.exchange` permits do not apply. |
 | `--require-auth` + `--client-ca` | Required. Clients authenticate with their mTLS X.509-SVID (`spiffe_x509`), which is what binds the ID-JAG to the agent. |
+| `--client-cert-optional` | Optional. Also admits clients without a cert, which then authenticate with a JWT-SVID client assertion (`spiffe_jwt`). Gated routes still require a client SVID. See [ADR 0012](adr/0012-optional-client-certificates.md). |
 | `--id-jag-insecure-client-binding` | Development only. Lets `--id-jag-idp` start without `--require-auth`; clients then use a JWT-SVID client assertion that any caller could mint, so the binding does not hold. |
 
 Clients discover the endpoint at `GET /.well-known/oauth-authorization-server`. The document lists the jwt-bearer grant, the `urn:ietf:params:oauth:grant-profile:id-jag` profile and the one SPIFFE authentication method that works on this listener, but never the trusted issuers.
@@ -235,6 +236,6 @@ These follow from the draft or are deliberate. ADR 0011 explains each.
 | `jti` is required but not tracked for replay | The draft lets a client re-present the same ID-JAG until it expires. Binding to the client's SPIFFE ID is what stops theft. |
 | DPoP-bound tokens need a DPoP-aware resource server | An ID-JAG bound with `cnf.jkt` is redeemed with a DPoP proof for that key, and the issued token is bound to it (`token_type: DPoP`). The resource server must verify the proof; see [ADR 0013](adr/0013-dpop-sender-constrained-tokens.md). |
 | An ID-JAG without `resource` is refused | The token's audience must come from the IdP's decision, not from the client. |
-| JWT-SVID client authentication cannot bind the client in production | Under `--require-auth` the listener requires a client cert, so only `spiffe_x509` is accepted. Without it the server refuses to start unless `--id-jag-insecure-client-binding` is set. |
+| JWT-SVID client authentication needs `--client-cert-optional` in production | Under `--require-auth` the listener requires a client cert by default, so only `spiffe_x509` gets through. `--client-cert-optional` admits JWT-SVID clients too ([ADR 0012](adr/0012-optional-client-certificates.md)), at the cost of making ungated routes such as `/metrics` reachable without a cert. |
 | Omega only receives ID-JAGs | Issuing them is the IdP's job; Omega is not an end-user IdP. |
 | The draft is not final | Claim names may still change; this endpoint tracks the draft. |

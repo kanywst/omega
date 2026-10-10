@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. The rule that rejects `cnf`-bound ID-JAGs is replaced by [ADR 0013](0013-dpop-sender-constrained-tokens.md), which verifies DPoP proofs.
+Accepted. The rule that rejects `cnf`-bound ID-JAGs is replaced by [ADR 0013](0013-dpop-sender-constrained-tokens.md), which verifies DPoP proofs. The client-authentication consequence is amended by [ADR 0012](0012-optional-client-certificates.md): with `--client-cert-optional`, `spiffe_jwt` also works under `--require-auth`.
 
 ## Context
 
