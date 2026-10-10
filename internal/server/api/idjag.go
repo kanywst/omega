@@ -122,6 +122,9 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	// chain; the route's request metrics still count the 401s.
 	clientID, authMethod, oerr := s.authenticateSPIFFEClient(r, form, issuer)
 	if oerr != nil {
+		if !clientID.IsZero() {
+			s.auditIDJAG(r, "deny", clientID.String(), "", map[string]any{"client_auth": authMethod, "error": oerr.code, "detail": oerr.desc})
+		}
 		writeOAuthErr(w, oerr)
 		return
 	}
@@ -370,6 +373,12 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		if hasCert {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusBadRequest, "invalid_request", "use one client authentication method: mTLS or client_assertion, not both")
 		}
+		// Only accept the method the operator enabled and the metadata
+		// advertises, even if an embedder fronts this server with a laxer
+		// TLS ClientAuth than the CLI configures.
+		if !s.idJAGJWT {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "spiffe_jwt client authentication is not enabled on this server")
+		}
 		if assertionType != clientAssertionTypeSPIFFE {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion_type must be %q", clientAssertionTypeSPIFFE)
 		}
@@ -407,7 +416,9 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		// a leaked one cannot be replayed within its lifetime.
 		fresh, err := s.clientAssertionReplay.firstUseBy(parsed.String(), jti, time.Now())
 		if errors.Is(err, errReplayOwnerQuota) {
-			return spiffeid.ID{}, "", newOAuthErr(http.StatusTooManyRequests, "temporarily_unavailable", "%s", err)
+			// Authenticated by signature already, so hand the ID back for
+			// the audit row.
+			return parsed, authMethodSPIFFEJWT, newOAuthErr(http.StatusTooManyRequests, "invalid_request", "%s", err)
 		}
 		if err != nil {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusServiceUnavailable, "temporarily_unavailable", "%s", err)

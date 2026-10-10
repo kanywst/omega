@@ -122,12 +122,12 @@ func newJAGEnv(t *testing.T, cedarSrc string) *jagEnv {
 // newJAGEnvWith serves over mTLS with --require-auth when tca is non-nil.
 func newJAGEnvWith(t *testing.T, cedarSrc string, tca *testCA) *jagEnv {
 	t.Helper()
-	return newJAGEnvTLS(t, cedarSrc, tca, false)
+	return newJAGEnvTLS(t, cedarSrc, tca, false, tca == nil)
 }
 
 // newJAGEnvTLS also lets the listener accept connections without a
 // client cert (--client-cert-optional) when certOptional is set.
-func newJAGEnvTLS(t *testing.T, cedarSrc string, tca *testCA, certOptional bool) *jagEnv {
+func newJAGEnvTLS(t *testing.T, cedarSrc string, tca *testCA, certOptional, jwtAuth bool) *jagEnv {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := storage.Open(filepath.Join(dir, "omega.db"))
@@ -159,7 +159,7 @@ func newJAGEnvTLS(t *testing.T, cedarSrc string, tca *testCA, certOptional bool)
 	pdp := policy.New()
 	s := api.NewServer(store, ca, pdp).
 		WithRequireAuth(tca != nil).
-		WithIDJAG(api.IDJAGConfig{Registry: reg, MTLSClientAuth: tca != nil, JWTClientAuth: tca == nil || certOptional})
+		WithIDJAG(api.IDJAGConfig{Registry: reg, MTLSClientAuth: tca != nil, JWTClientAuth: jwtAuth})
 	if cedarSrc != "" {
 		pdir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(pdir, "p.cedar"), []byte(cedarSrc), 0o644); err != nil {
@@ -652,7 +652,7 @@ func TestIDJAGClientAssertionLifetimeCap(t *testing.T) {
 
 func TestIDJAGGrantJWTClientUnderRequireAuth(t *testing.T) {
 	tca := newTestCA(t)
-	env := newJAGEnvTLS(t, permitIDJAG, tca, true)
+	env := newJAGEnvTLS(t, permitIDJAG, tca, true, true)
 	noCert := clientWith(tca, nil)
 	jag := env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims())
 
@@ -701,5 +701,16 @@ func TestIDJAGClientAssertionIsSingleUse(t *testing.T) {
 	resp, body := postToken(t, env.srv.URL, form)
 	if resp.StatusCode != http.StatusUnauthorized || body["error"] != "invalid_client" {
 		t.Fatalf("replayed client assertion: got %d %v, want 401 invalid_client", resp.StatusCode, body)
+	}
+}
+
+func TestIDJAGJWTClientAuthOnlyWhenEnabled(t *testing.T) {
+	tca := newTestCA(t)
+	// A listener that admits cert-less connections although the operator
+	// did not enable spiffe_jwt, as an embedder with a laxer TLS config.
+	env := newJAGEnvTLS(t, permitIDJAG, tca, true, false)
+	resp, body := postTokenWith(t, clientWith(tca, nil), env.srv.URL, env.baseForm(t, env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims())))
+	if resp.StatusCode != http.StatusUnauthorized || body["error"] != "invalid_client" {
+		t.Fatalf("spiffe_jwt while disabled: got %d %v, want 401 invalid_client", resp.StatusCode, body)
 	}
 }

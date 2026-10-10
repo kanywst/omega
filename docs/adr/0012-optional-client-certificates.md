@@ -17,7 +17,7 @@ That made two things impossible under `--require-auth`:
 
 `--client-cert-optional`, valid only with `--client-ca` and `--require-auth`, switches the listener to `tls.VerifyClientCertIfGiven`. A certificate that is presented is still verified against `--client-ca`; a connection without one is accepted.
 
-Authorization does not move. Routes gated by `--require-auth` already check the verified chain per request (`requireSPIFFEAuth`), so they keep answering `401` without a client SVID. Ungated routes, and `POST /oauth2/token`, which authenticates its own client, become reachable without one.
+Authorization does not move. Routes gated by `--require-auth` already check the verified chain per request (`requireSPIFFEAuth`), so they keep answering `401` without a client SVID. The ungated routes become reachable without one: `GET /healthz`, `GET /v1/leader`, `GET /v1/domains` and `GET /v1/domains/{name}` (domain data), `GET /v1/bundle`, `GET /v1/spiffe-bundle`, `GET /v1/jwt/bundle`, `GET /v1/federation/bundles` (federation peers), the `/.well-known/` discovery documents, `GET /metrics`, and the enrollment paths `POST /v1/attest/k8s` and `POST /v1/oidc/exchange`. So does `POST /oauth2/token`, which authenticates its own client.
 
 Under `--require-auth` a `spiffe_jwt` client assertion is a real credential: the server only mints a JWT-SVID for the caller's own identity, and the grant refuses assertions that carry `act` (delegated tokens) or `cnf` (cert-bound tokens), so a JWT-SVID for client C without `act` comes from C. The grant is refused in spire-upstream mode, so this rests on Omega's own issuance policy, not an upstream issuer's.
 
@@ -36,7 +36,7 @@ Easier:
 
 Harder:
 
-- With the flag, ungated routes, including `/metrics`, are reachable by anyone who can reach the listener. Operators who relied on the handshake to hide them must restrict them at the network layer or leave the flag off.
+- With the flag, the ungated routes listed above, including domain data, federation peer lists and `/metrics`, are anonymous reads for anyone who can reach the listener. Operators who relied on the handshake to hide them must restrict them at the network layer or leave the flag off.
 - The enrollment paths become reachable without a certificate, as they already are on a listener without `--client-ca`. Their failed attempts append audit deny rows, and `POST /v1/attest/k8s` costs a TokenReview call per request, so an unauthenticated caller can generate both.
 - Every new ungated route is now reachable without a certificate in this mode, so the "wrap it" rule for write and PDP routes in the project guide matters more.
 

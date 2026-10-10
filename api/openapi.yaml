@@ -738,7 +738,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
         "429":
-          description: The client has too many unexpired single-use client assertions on record.
+          description: invalid_request; the client has too many unexpired single-use client assertions on record. Audited.
           content:
             application/json:
               schema:
