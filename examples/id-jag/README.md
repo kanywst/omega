@@ -15,7 +15,7 @@ It builds and starts three processes, then runs the agent:
 | Process | Role |
 | --- | --- |
 | `idp/` | Stand-in enterprise IdP. Signs an ID token for the user and exchanges it (RFC 8693) for an ID-JAG whose `aud` is Omega's issuer and whose `client_id` is the agent's SPIFFE ID. |
-| `omega server --id-jag-idp ...` | Trusts that IdP for ID-JAGs, gates the grant with `policies/token-exchange.cedar`, and audits it. |
+| `omega server --id-jag-idp ...` | Trusts that IdP for ID-JAGs, gates the grant with `policies/id-jag.cedar`, and audits it. Runs with `--id-jag-insecure-client-binding` because the demo has no mTLS. |
 | `../mcp-a2a-delegation/tool-server` | MCP tool that verifies the JWT-SVID against Omega's JWKS and echoes the delegation chain. |
 
 ## Walkthrough
@@ -24,4 +24,4 @@ It builds and starts three processes, then runs the agent:
 
 ## Against a real IdP
 
-Point `--id-jag-idp` at an IdP that issues ID-JAGs for Omega's `--issuer-url`, and register the agent there with Omega as the target and its SPIFFE ID as the client identifier the IdP puts in `client_id`. In production run Omega with `--require-auth` and `--client-ca`, and have the agent authenticate with the X.509-SVID it gets from the SPIFFE Workload API. The demo uses the open `POST /v1/svid/jwt` instead, which is why Omega logs a development-only warning.
+Point `--id-jag-idp` at an IdP that issues ID-JAGs for Omega's `--issuer-url`, and register the agent there with Omega as the target and its SPIFFE ID as the client identifier the IdP puts in `client_id`. In production run Omega with `--require-auth` and `--client-ca`, and have the agent authenticate with the X.509-SVID it gets from the SPIFFE Workload API. The demo uses the open `POST /v1/svid/jwt` with `--id-jag-insecure-client-binding` instead, which is why Omega logs a development-only warning.

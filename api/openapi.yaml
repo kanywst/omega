@@ -666,15 +666,17 @@ paths:
         X.509-SVID (`spiffe_x509`) or a JWT-SVID `client_assertion` of
         type `urn:ietf:params:oauth:client-assertion-type:jwt-spiffe`
         whose only `aud` is the issuer (`spiffe_jwt`). Under
-        `--require-auth` only `spiffe_x509` is accepted.
+        `--require-auth` only `spiffe_x509` is accepted, and the
+        server refuses `--id-jag-idp` without `--require-auth` unless
+        `--id-jag-insecure-client-binding` is set.
 
         The ID-JAG must carry `typ: oauth-id-jag+jwt`, an `aud` equal
         to the issuer, a `client_id` equal to the authenticated SPIFFE
         ID, `jti`, `iat`, `exp` and a `resource`, and verify against a
         trusted IdP. The issued JWT-SVID is for the client, names the
         user in `act`, and expires no later than the ID-JAG. Every
-        grant is evaluated by Cedar (`token.exchange`,
-        `context.grant == "id-jag"`) with default deny. Every grant
+        grant is evaluated by Cedar as `Action::"token.id_jag"` with
+        default deny. Every grant
         and refusal after `grant_type` is recognised is audited as
         `token.id_jag`, and the token is withheld (`500`) if the
         record cannot be written. Returns `404 Not Found` when no ID-JAG IdP

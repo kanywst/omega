@@ -28,6 +28,7 @@ const (
 	authMethodSPIFFEJWT       = "spiffe_jwt"
 
 	IDJAGTyp                    = "oauth-id-jag+jwt"
+	actionIDJAG                 = "token.id_jag"
 	DefaultIDJAGMaxAssertionTTL = 5 * time.Minute
 
 	maxFormBodyBytes = 64 << 10
@@ -176,9 +177,9 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	chain := []string{user, client}
 	audit["chain"] = chain
 
-	// Always gated, regardless of --enforce-token-exchange-policy: unlike
-	// /v1/token/exchange there is no baseline rule to fall back on, so
-	// Cedar's default deny applies until an operator writes a permit.
+	// Always gated, under its own action so that existing token.exchange
+	// permits cannot authorize it: Cedar's default deny applies until an
+	// operator writes a token.id_jag permit.
 	{
 		resp, err := s.policy.Evaluate(policy.EvalRequest{
 			Subject: policy.Entity{
@@ -191,12 +192,11 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 					"scope":            scope,
 				},
 			},
-			Action:   policy.Action{Name: "token.exchange"},
+			Action:   policy.Action{Name: actionIDJAG},
 			Resource: policy.Entity{Type: "Spiffe", ID: client},
 			Context: map[string]any{
 				"delegation_depth":   1,
 				"requested_audience": resources,
-				"grant":              "id-jag",
 				"idp":                claims.IDPName,
 			},
 		})
@@ -340,8 +340,16 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		if err != nil {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion: %s", err)
 		}
-		if _, ok := claimExpiry(claims); !ok {
-			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion has no exp claim")
+		exp, okExp := claimExpiry(claims)
+		iat, okIat := claimNumericDate(claims, "iat")
+		if !okExp || !okIat {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must carry iat and exp")
+		}
+		if jti, _ := claims["jti"].(string); jti == "" {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion must carry jti")
+		}
+		if life := exp.Sub(iat); life > s.idJAGMaxAssertionTTL {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion lifetime %s exceeds the accepted maximum %s", life, s.idJAGMaxAssertionTTL)
 		}
 		if aud := audienceValues(claims["aud"]); len(aud) != 1 || aud[0] != issuer {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusUnauthorized, "invalid_client", "client_assertion aud must be exactly %q", issuer)

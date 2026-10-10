@@ -68,56 +68,57 @@ func buildK8sClient(kubeconfig string) (kubernetes.Interface, error) {
 
 func newServerCommand() *cobra.Command {
 	var (
-		dataDir                 string
-		dbDSN                   string
-		httpAddr                string
-		trustDomain             string
-		issuerURL               string
-		policyDir               string
-		otlpEndpoint            string
-		otlpInsecure            bool
-		federateWith            []string
-		federationAllowInsecure bool
-		webhookURL              string
-		webhookSecret           string
-		auditBatch              int
-		auditPoll               time.Duration
-		haLeaderKey             int64
-		haPollEvery             time.Duration
-		enforceTokenExchangePol bool
-		entityStoreSearch       bool
-		spiffeBundleRefreshHint time.Duration
-		k8sAttestEnable         bool
-		k8sSVIDTemplate         string
-		k8sTokenAudiences       []string
-		k8sKubeconfig           string
-		auditOTLPEndpoint       string
-		auditOTLPInsecure       bool
-		auditOTLPHeaders        []string
-		oidcIDPs                []string
-		idJAGIDPs               []string
-		idJAGMaxAssertionTTL    time.Duration
-		identitySource          string
-		identitySourceBundle    string
-		identitySourceJWTBundle string
-		identitySourceWLAPI     string
-		identitySourceWLAPIJWT  bool
-		caBackend               string
-		caVaultPKIAddr          string
-		caVaultPKIToken         string
-		caVaultPKITokenFile     string
-		caVaultPKIMount         string
-		caVaultPKIRole          string
-		caVaultPKICACertFile    string
-		caStepCAURL             string
-		caStepCAProvisioner     string
-		caStepCAKeyFile         string
-		caStepCACACertFile      string
-		tlsCertFile             string
-		tlsKeyFile              string
-		clientCAFile            string
-		requireAuth             bool
-		auditHMACKeyFile        string
+		dataDir                    string
+		dbDSN                      string
+		httpAddr                   string
+		trustDomain                string
+		issuerURL                  string
+		policyDir                  string
+		otlpEndpoint               string
+		otlpInsecure               bool
+		federateWith               []string
+		federationAllowInsecure    bool
+		webhookURL                 string
+		webhookSecret              string
+		auditBatch                 int
+		auditPoll                  time.Duration
+		haLeaderKey                int64
+		haPollEvery                time.Duration
+		enforceTokenExchangePol    bool
+		entityStoreSearch          bool
+		spiffeBundleRefreshHint    time.Duration
+		k8sAttestEnable            bool
+		k8sSVIDTemplate            string
+		k8sTokenAudiences          []string
+		k8sKubeconfig              string
+		auditOTLPEndpoint          string
+		auditOTLPInsecure          bool
+		auditOTLPHeaders           []string
+		oidcIDPs                   []string
+		idJAGIDPs                  []string
+		idJAGMaxAssertionTTL       time.Duration
+		idJAGInsecureClientBinding bool
+		identitySource             string
+		identitySourceBundle       string
+		identitySourceJWTBundle    string
+		identitySourceWLAPI        string
+		identitySourceWLAPIJWT     bool
+		caBackend                  string
+		caVaultPKIAddr             string
+		caVaultPKIToken            string
+		caVaultPKITokenFile        string
+		caVaultPKIMount            string
+		caVaultPKIRole             string
+		caVaultPKICACertFile       string
+		caStepCAURL                string
+		caStepCAProvisioner        string
+		caStepCAKeyFile            string
+		caStepCACACertFile         string
+		tlsCertFile                string
+		tlsKeyFile                 string
+		clientCAFile               string
+		requireAuth                bool
+		auditHMACKeyFile           string
 	)
 
 	cmd := &cobra.Command{
@@ -459,7 +460,10 @@ func newServerCommand() *cobra.Command {
 					return errors.New("id-jag-idp: the grant issues JWT-SVIDs, which spire-upstream mode does not")
 				}
 				if !requireAuth {
-					fmt.Fprintln(os.Stderr, "omega server: WARNING: --id-jag-idp without --require-auth does not bind ID-JAGs to their client: any caller can mint the client's JWT-SVID. Use only for development.")
+					if !idJAGInsecureClientBinding {
+						return errors.New("id-jag-idp: requires --require-auth, which binds each ID-JAG to its client's mTLS X.509-SVID; pass --id-jag-insecure-client-binding to run without it for development")
+					}
+					fmt.Fprintln(os.Stderr, "omega server: WARNING: --id-jag-insecure-client-binding: ID-JAGs are not bound to their client, any caller can mint the client's JWT-SVID. Development only.")
 				}
 				cfgs, err := parseIDJAGIDPFlags(idJAGIDPs, iss)
 				if err != nil {
@@ -628,9 +632,11 @@ func newServerCommand() *cobra.Command {
 		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key is required and takes one or more values separated by ';'; it is the set of `aud` values an incoming ID token must match, so tokens minted for other relying parties at the same issuer are rejected. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")
 
 	cmd.Flags().StringArrayVar(&idJAGIDPs, "id-jag-idp", nil,
-		"trust an IdP to issue ID-JAGs (Identity Assertion JWT Authorization Grants) for omega (repeatable). Format: 'name=corp,issuer=https://idp.example.com,template=spiffe://<td>/humans/{idp}/{sub}'. Enables POST /oauth2/token: a client authenticated by its SPIFFE ID (mTLS X.509-SVID, or a JWT-SVID client_assertion of type jwt-spiffe) presents the ID-JAG as a jwt-bearer assertion and receives a JWT-SVID whose act claim names the user. Requires --issuer-url; the ID-JAG's aud must equal it and its client_id must equal the client's SPIFFE ID. The client binding holds only with --require-auth (mTLS); without it the grant is for development. Every grant is evaluated by Cedar as token.exchange with context.grant == \"id-jag\" (default deny), so --policy-dir needs a permit.")
+		"trust an IdP to issue ID-JAGs (Identity Assertion JWT Authorization Grants) for omega (repeatable). Format: 'name=corp,issuer=https://idp.example.com,template=spiffe://<td>/humans/{idp}/{sub}'. Enables POST /oauth2/token: a client authenticated by its SPIFFE ID (mTLS X.509-SVID, or a JWT-SVID client_assertion of type jwt-spiffe) presents the ID-JAG as a jwt-bearer assertion and receives a JWT-SVID whose act claim names the user. Requires --issuer-url; the ID-JAG's aud must equal it and its client_id must equal the client's SPIFFE ID. Requires --require-auth (the client binding is its mTLS X.509-SVID) unless --id-jag-insecure-client-binding is set. Every grant is evaluated by Cedar as Action::\"token.id_jag\" (default deny), so --policy-dir needs a permit.")
 	cmd.Flags().DurationVar(&idJAGMaxAssertionTTL, "id-jag-max-assertion-ttl", api.DefaultIDJAGMaxAssertionTTL,
-		"reject ID-JAGs whose exp - iat exceeds this. Issued tokens never outlive the ID-JAG.")
+		"reject ID-JAGs, and JWT-SVID client assertions, whose exp - iat exceeds this. Issued tokens never outlive the ID-JAG.")
+	cmd.Flags().BoolVar(&idJAGInsecureClientBinding, "id-jag-insecure-client-binding", false,
+		"allow --id-jag-idp without --require-auth. Clients then authenticate with a JWT-SVID anyone can mint, so an ID-JAG is not bound to its client. Development and demos only.")
 
 	cmd.Flags().BoolVar(&k8sAttestEnable, "k8s-attest", false,
 		"enable the POST /v1/attest/k8s endpoint: workloads present a ServiceAccount projected token + CSR, omega validates the token via TokenReview, and issues an X.509-SVID derived from the (namespace, serviceaccount[, podname]) triple.")

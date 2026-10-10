@@ -109,7 +109,7 @@ type jagEnv struct {
 
 // permitIDJAG lets any client redeem an ID-JAG; the grant is always
 // policy-gated, so every test server needs some permit.
-const permitIDJAG = `permit (principal, action == Action::"token.exchange", resource) when { context has grant && context.grant == "id-jag" };`
+const permitIDJAG = `permit (principal, action == Action::"token.id_jag", resource);`
 
 func newJAGEnv(t *testing.T, cedarSrc string) *jagEnv {
 	t.Helper()
@@ -460,8 +460,8 @@ func TestIDJAGGrantRequestValidation(t *testing.T) {
 }
 
 func TestIDJAGGrantPolicyGate(t *testing.T) {
-	allowAI := `permit (principal is Spiffe, action == Action::"token.exchange", resource is Spiffe)
-when { principal has kind && principal.kind == "ai" && context.grant == "id-jag" };`
+	allowAI := `permit (principal is Spiffe, action == Action::"token.id_jag", resource is Spiffe)
+when { principal has kind && principal.kind == "ai" };`
 	env := newJAGEnv(t, allowAI)
 	resp, body := postToken(t, env.srv.URL, env.baseForm(t, env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims())))
 	if resp.StatusCode != http.StatusOK {
@@ -615,5 +615,27 @@ func TestIDJAGGrantWithholdsTokenWhenAuditFails(t *testing.T) {
 	resp, body := postToken(t, env.srv.URL, env.baseForm(t, jag))
 	if resp.StatusCode != http.StatusInternalServerError || body["access_token"] != nil {
 		t.Fatalf("audit unavailable: got %d %v, want 500 with no token", resp.StatusCode, body)
+	}
+}
+
+func TestIDJAGGrantIgnoresTokenExchangePermits(t *testing.T) {
+	env := newJAGEnv(t, `permit (principal, action == Action::"token.exchange", resource);`)
+	resp, body := postToken(t, env.srv.URL, env.baseForm(t, env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims())))
+	if resp.StatusCode != http.StatusBadRequest || body["error"] != "invalid_grant" {
+		t.Fatalf("token.exchange permit must not authorize an ID-JAG grant: got %d %v", resp.StatusCode, body)
+	}
+}
+
+func TestIDJAGClientAssertionLifetimeCap(t *testing.T) {
+	env := newJAGEnv(t, "")
+	long, err := env.ca.IssueJWTSVID(spiffeid.RequireFromString(jagAgent), []string{jagOmegaIssuer}, time.Hour, nil)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	form := env.baseForm(t, env.idp.sign(t, api.IDJAGTyp, env.idp.validClaims()))
+	form.Set("client_assertion", long.Token)
+	resp, body := postToken(t, env.srv.URL, form)
+	if resp.StatusCode != http.StatusUnauthorized || body["error"] != "invalid_client" {
+		t.Fatalf("hour-long client assertion: got %d %v, want 401 invalid_client", resp.StatusCode, body)
 	}
 }

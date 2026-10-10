@@ -50,14 +50,14 @@ echo "[demo] starting IdP on :$IDP_PORT"
 echo $! >"$DEMO_DIR/idp.pid"
 wait_up "http://127.0.0.1:$IDP_PORT/healthz"
 
-echo "[demo] starting omega on :$SERVER_PORT (trusting the IdP for ID-JAGs, policy gate ON)"
+echo "[demo] starting omega on :$SERVER_PORT (trusting the IdP for ID-JAGs; dev-mode client binding)"
 "$DEMO_DIR/omega" server \
 	--http-addr "127.0.0.1:$SERVER_PORT" \
 	--trust-domain omega.local \
 	--issuer-url "$ISSUER" \
 	--data-dir "$DEMO_DIR/server" \
 	--policy-dir "$EXAMPLE_DIR/policies" \
-	--enforce-token-exchange-policy \
+	--id-jag-insecure-client-binding \
 	--id-jag-idp "name=corp,issuer=http://127.0.0.1:$IDP_PORT,template=spiffe://omega.local/humans/{idp}/{sub}" \
 	>"$DEMO_DIR/server.log" 2>&1 &
 echo $! >"$DEMO_DIR/server.pid"

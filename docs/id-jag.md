@@ -81,7 +81,7 @@ flowchart TD
   B -- no --> E3
   B -- yes --> N{ID-JAG grants a resource, and<br/>requested resource / scope only narrow it?}
   N -- no --> E4[400 invalid_target / invalid_scope + audit deny]
-  N -- yes --> P{Cedar permits token.exchange<br/>with context.grant = id-jag?<br/>default deny, always evaluated}
+  N -- yes --> P{Cedar permits<br/>Action token.id_jag?<br/>default deny, always evaluated}
   P -- no --> E3
   P -- yes --> I[issue JWT-SVID for the client<br/>act.sub = user SPIFFE ID<br/>ttl = ID-JAG remaining life]
   I --> AU{allow row appended<br/>to the audit chain?}
@@ -157,6 +157,7 @@ flowchart LR
 ```bash
 omega server \
   --issuer-url https://omega.example.com \
+  --require-auth --client-ca ./trust-bundle.pem --tls-cert ./server.pem --tls-key ./server-key.pem \
   --id-jag-idp 'name=corp,issuer=https://idp.example.com,template=spiffe://omega.example.com/humans/{idp}/{sub}' \
   --id-jag-max-assertion-ttl 5m \
   --policy-dir ./policies
@@ -166,9 +167,10 @@ omega server \
 | --- | --- |
 | `--issuer-url` | Required. An ID-JAG's `aud` must equal it, and so must the sole `aud` of a JWT-SVID client assertion. |
 | `--id-jag-idp` | Repeatable. Trusts one IdP; its discovery document and JWKS are fetched on first use. One issuer per entry, and with several entries every template must contain `{idp}`. |
-| `--id-jag-max-assertion-ttl` | Rejects ID-JAGs whose `exp - iat` is longer. Default 5m. |
-| `--policy-dir` | Must contain a permit for the grant. Every grant is evaluated as `Action::"token.exchange"` with `context.grant == "id-jag"` and `context.idp`, independent of `--enforce-token-exchange-policy`; with no permit every grant is denied. |
-| `--require-auth` + `--client-ca` | Production. Clients authenticate with their mTLS X.509-SVID (`spiffe_x509`), which is what binds the ID-JAG to the agent. Without `--require-auth` any caller can mint a JWT-SVID for any SPIFFE ID, so the server warns that the grant is for development only. |
+| `--id-jag-max-assertion-ttl` | Rejects ID-JAGs, and JWT-SVID client assertions, whose `exp - iat` is longer. Default 5m. |
+| `--policy-dir` | Must contain a permit for the grant. Every grant is evaluated as `Action::"token.id_jag"` with `context.idp` and `context.requested_audience`, independent of `--enforce-token-exchange-policy`; with no permit every grant is denied, and `token.exchange` permits do not apply. |
+| `--require-auth` + `--client-ca` | Required. Clients authenticate with their mTLS X.509-SVID (`spiffe_x509`), which is what binds the ID-JAG to the agent. |
+| `--id-jag-insecure-client-binding` | Development only. Lets `--id-jag-idp` start without `--require-auth`; clients then use a JWT-SVID client assertion that any caller could mint, so the binding does not hold. |
 
 Clients discover the endpoint at `GET /.well-known/oauth-authorization-server`. The document lists the jwt-bearer grant, the `urn:ietf:params:oauth:grant-profile:id-jag` profile and the one SPIFFE authentication method that works on this listener, but never the trusted issuers.
 
@@ -177,13 +179,11 @@ Without a permit the grant is refused, so a deployment ships at least one. This 
 ```text
 permit (
   principal is Spiffe,
-  action == Action::"token.exchange",
+  action == Action::"token.id_jag",
   resource is Spiffe
 ) when {
   principal has kind &&
   principal.kind == "ai" &&
-  context has grant &&
-  context.grant == "id-jag" &&
   principal.acting_for like "spiffe://omega.local/humans/*"
 };
 ```
@@ -195,13 +195,13 @@ cd examples/id-jag
 make demo
 ```
 
-The demo runs without `--require-auth` (the agent's JWT-SVID comes from the open `POST /v1/svid/jwt`), like the other examples, so expect the development warning in `server.log`. It builds and starts three processes and then runs the agent:
+The demo runs without `--require-auth`, like the other examples, so it passes `--id-jag-insecure-client-binding` and the agent's JWT-SVID comes from the open `POST /v1/svid/jwt`. Expect the development warning in `server.log`. It builds and starts three processes and then runs the agent:
 
 ```mermaid
 flowchart LR
   subgraph procs [processes started by run-demo.sh]
     IDP["idp/ :19100<br/>stand-in enterprise IdP"]
-    OM["omega server :18098<br/>--id-jag-idp corp<br/>--enforce-token-exchange-policy"]
+    OM["omega server :18098<br/>--id-jag-idp corp<br/>--id-jag-insecure-client-binding"]
     TS["tool-server :19001<br/>from examples/mcp-a2a-delegation"]
   end
   C["client/<br/>the AI agent"] --> IDP
@@ -235,6 +235,6 @@ These follow from the draft or are deliberate. ADR 0011 explains each.
 | `jti` is required but not tracked for replay | The draft lets a client re-present the same ID-JAG until it expires. Binding to the client's SPIFFE ID is what stops theft. |
 | `cnf`-bound (DPoP) ID-JAGs are rejected | Omega does not verify DPoP proofs yet, and the draft requires refusing a bound assertion without one. |
 | An ID-JAG without `resource` is refused | The token's audience must come from the IdP's decision, not from the client. |
-| JWT-SVID client authentication cannot bind the client in production | Under `--require-auth` the listener requires a client cert, so only `spiffe_x509` is accepted. |
+| JWT-SVID client authentication cannot bind the client in production | Under `--require-auth` the listener requires a client cert, so only `spiffe_x509` is accepted. Without it the server refuses to start unless `--id-jag-insecure-client-binding` is set. |
 | Omega only receives ID-JAGs | Issuing them is the IdP's job; Omega is not an end-user IdP. |
 | The draft is not final | Claim names may still change; this endpoint tracks the draft. |
