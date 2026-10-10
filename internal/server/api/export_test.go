@@ -18,3 +18,19 @@ func ReplayFirstUseForTest(retention time.Duration, uses []struct {
 	}
 	return out
 }
+
+// ReplayOwnerQuotaForTest reports, for n fresh keys from one owner and
+// then one key from another, which uses a cache with the given per-owner
+// quota accepts.
+func ReplayOwnerQuotaForTest(quota, n int) (ownerAccepted int, otherAccepted bool) {
+	c := newReplayCache(time.Hour)
+	c.perOwner = quota
+	now := time.Unix(1_000_000, 0)
+	for i := 0; i < n; i++ {
+		if ok, _ := c.firstUseBy("noisy", string(rune('a'+i%26))+time.Duration(i).String(), now); ok {
+			ownerAccepted++
+		}
+	}
+	otherAccepted, _ = c.firstUseBy("quiet", "k", now)
+	return ownerAccepted, otherAccepted
+}

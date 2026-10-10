@@ -173,7 +173,7 @@ omega server \
 | `--client-cert-optional` | Optional. Also admits clients without a cert, which then authenticate with a short-lived, single-use JWT-SVID client assertion (`spiffe_jwt`), a bearer credential rather than mTLS proof of possession. Gated routes still require a client SVID. See [ADR 0012](adr/0012-optional-client-certificates.md). |
 | `--id-jag-insecure-client-binding` | Development only. Lets `--id-jag-idp` start without `--require-auth`; clients then use a JWT-SVID client assertion that any caller could mint, so the binding does not hold. |
 
-Clients discover the endpoint at `GET /.well-known/oauth-authorization-server`. The document lists the jwt-bearer grant, the `urn:ietf:params:oauth:grant-profile:id-jag` profile and the one SPIFFE authentication method that works on this listener, but never the trusted issuers.
+Clients discover the endpoint at `GET /.well-known/oauth-authorization-server`. The document lists the jwt-bearer grant, the `urn:ietf:params:oauth:grant-profile:id-jag` profile and every SPIFFE client authentication method this listener lets through (`spiffe_x509` with `--client-ca`, `spiffe_jwt` when connections without a certificate are admitted), but never the trusted issuers.
 
 Without a permit the grant is refused, so a deployment ships at least one. This one, which the demo loads, lets only AI agents acting for a federated human use the grant:
 

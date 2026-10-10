@@ -247,3 +247,10 @@ func TestReplayCacheKeepsKeysForTheWholeRetention(t *testing.T) {
 		}
 	}
 }
+
+func TestReplayCacheOwnerQuota(t *testing.T) {
+	accepted, other := api.ReplayOwnerQuotaForTest(5, 20)
+	if accepted != 5 || !other {
+		t.Fatalf("quota 5: owner accepted %d (want 5), other owner accepted %v (want true)", accepted, other)
+	}
+}

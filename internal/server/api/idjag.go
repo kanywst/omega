@@ -32,6 +32,9 @@ const (
 	DefaultIDJAGMaxAssertionTTL = 5 * time.Minute
 
 	maxFormBodyBytes = 64 << 10
+	// clientAssertionQuota caps the single-use assertions one client can
+	// have in the replay cache at once, so one client cannot exhaust it.
+	clientAssertionQuota = 1000
 )
 
 // IDJAGConfig wires the ID-JAG grant. Registry entries must set
@@ -58,6 +61,7 @@ func (s *Server) WithIDJAG(cfg IDJAGConfig) *Server {
 	// A client assertion lives at most MaxAssertionTTL, and go-jose
 	// accepts it up to 30s past exp, so remember its jti a little longer.
 	s.clientAssertionReplay = newReplayCache(s.idJAGMaxAssertionTTL + time.Minute)
+	s.clientAssertionReplay.perOwner = clientAssertionQuota
 	return s
 }
 
@@ -401,7 +405,10 @@ func (s *Server) authenticateSPIFFEClient(r *http.Request, form url.Values, issu
 		}
 		// A JWT-SVID assertion is a bearer credential, so it is single use:
 		// a leaked one cannot be replayed within its lifetime.
-		fresh, err := s.clientAssertionReplay.firstUse(parsed.String()+"|"+jti, time.Now())
+		fresh, err := s.clientAssertionReplay.firstUseBy(parsed.String(), jti, time.Now())
+		if errors.Is(err, errReplayOwnerQuota) {
+			return spiffeid.ID{}, "", newOAuthErr(http.StatusTooManyRequests, "temporarily_unavailable", "%s", err)
+		}
 		if err != nil {
 			return spiffeid.ID{}, "", newOAuthErr(http.StatusServiceUnavailable, "temporarily_unavailable", "%s", err)
 		}
