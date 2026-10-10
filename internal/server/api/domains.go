@@ -26,8 +26,8 @@ type domainState struct {
 	// state can never apply it after one that read newer state.
 	refreshMu sync.Mutex
 	mu        sync.Mutex
-	loadedAt   time.Time
-	interval   time.Duration
+	loadedAt  time.Time
+	interval  time.Duration
 }
 
 // directoryStaleAfter is how many sync intervals may pass without a
