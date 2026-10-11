@@ -61,7 +61,10 @@ type Server struct {
 	// auditFault, set only by tests, makes appendAudit fail.
 	auditFault func(storage.AuditEvent) error
 	// refreshFault, set only by tests, makes RefreshDirectory fail.
-	refreshFault            func() error
+	refreshFault func() error
+	// scimFault, set only by tests, fails a SCIM change before commit.
+	scimFault               func(storage.AuditEvent) error
+	scim                    map[string]SCIMConfig
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
 	entityStoreSearch       bool
@@ -214,6 +217,26 @@ func (s *Server) Handler() http.Handler {
 	handle("DELETE /v1/domains/{name}/groups/{group}", gated(s.deleteGroup))
 	handle("PUT /v1/domains/{name}/groups/{group}/members", gated(s.putGroupMember))
 	handle("DELETE /v1/domains/{name}/groups/{group}/members", gated(s.removeGroupMember))
+	// SCIM providers authenticate with their own bearer token, not an
+	// SVID, so these routes are leader-gated only.
+	scim := func(h func(http.ResponseWriter, *http.Request, SCIMConfig)) http.HandlerFunc {
+		return leaderOnly(s.scimHandler(h))
+	}
+	handle("GET /scim/v2/{idp}/ServiceProviderConfig", scim(s.scimServiceProviderConfig))
+	handle("GET /scim/v2/{idp}/ResourceTypes", scim(s.scimResourceTypes))
+	handle("GET /scim/v2/{idp}/Schemas", scim(s.scimSchemas))
+	handle("GET /scim/v2/{idp}/Users", scim(s.scimListUsers))
+	handle("POST /scim/v2/{idp}/Users", scim(s.scimCreateUser))
+	handle("GET /scim/v2/{idp}/Users/{id}", scim(s.scimGetUser))
+	handle("PUT /scim/v2/{idp}/Users/{id}", scim(s.scimReplaceUser))
+	handle("PATCH /scim/v2/{idp}/Users/{id}", scim(s.scimPatchUser))
+	handle("DELETE /scim/v2/{idp}/Users/{id}", scim(s.scimDeleteUser))
+	handle("GET /scim/v2/{idp}/Groups", scim(s.scimListGroups))
+	handle("POST /scim/v2/{idp}/Groups", scim(s.scimCreateGroup))
+	handle("GET /scim/v2/{idp}/Groups/{id}", scim(s.scimGetGroup))
+	handle("PUT /scim/v2/{idp}/Groups/{id}", scim(s.scimReplaceGroup))
+	handle("PATCH /scim/v2/{idp}/Groups/{id}", scim(s.scimPatchGroup))
+	handle("DELETE /scim/v2/{idp}/Groups/{id}", scim(s.scimDeleteGroup))
 	handle("POST /v1/svid", issuingOnly(gated(s.issueSVID)))
 	// The attestation enrollment paths (POST /v1/attest/k8s and
 	// POST /v1/oidc/exchange) carry their own platform-rooted / external-

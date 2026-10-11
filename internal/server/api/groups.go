@@ -88,6 +88,9 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeDomainWrite(w, r, "group.delete", id, domain) {
 		return
 	}
+	if s.refuseSCIMManaged(w, r, domain, group) {
+		return
+	}
 	before, err := s.store.DeleteGroup(r.Context(), domain, group)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
@@ -172,6 +175,9 @@ func (s *Server) putGroupMember(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeDomainWrite(w, r, "group.member.add", id, domain) {
 		return
 	}
+	if s.refuseSCIMManaged(w, r, domain, group) {
+		return
+	}
 	written := storage.GroupMember{Principal: req.Principal, ExpiresAt: req.ExpiresAt.UTC()}
 	if req.ExpiresAt.IsZero() {
 		written.ExpiresAt = time.Time{}
@@ -218,6 +224,9 @@ func (s *Server) removeGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 	id := domain + ":" + group
 	if !s.authorizeDomainWrite(w, r, "group.member.remove", id, domain) {
+		return
+	}
+	if s.refuseSCIMManaged(w, r, domain, group) {
 		return
 	}
 	removed, err := s.store.RemoveGroupMember(r.Context(), domain, group, principal)

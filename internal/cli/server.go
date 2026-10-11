@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -101,6 +102,7 @@ func newServerCommand() *cobra.Command {
 		clientCertOptional         bool
 		domainRootAdmins           []string
 		decisionRecorders          []string
+		scimIDPs                   []string
 		identitySource             string
 		identitySourceBundle       string
 		identitySourceJWTBundle    string
@@ -532,6 +534,13 @@ func newServerCommand() *cobra.Command {
 			}
 
 			apiServer = apiServer.WithDomainRootAdmins(domainRootAdmins).WithDecisionRecorders(decisionRecorders)
+			if len(scimIDPs) > 0 {
+				cfgs, err := parseSCIMIDPFlags(scimIDPs, ca.TrustDomain().Name())
+				if err != nil {
+					return fmt.Errorf("scim-idp: %w", err)
+				}
+				apiServer = apiServer.WithSCIM(cfgs)
+			}
 			if requireAuth && len(domainRootAdmins) == 0 {
 				fmt.Fprintln(os.Stderr, "omega server: no --domain-root-admin set: under --require-auth nobody can create a top-level domain until one is configured")
 			}
@@ -710,6 +719,8 @@ func newServerCommand() *cobra.Command {
 		"PEM private key matching --tls-cert. Required when --tls-cert is set.")
 	cmd.Flags().StringVar(&clientCAFile, "client-ca", "",
 		"PEM CA bundle used to require and verify client certificates (mutual TLS). When set, the listener rejects any client whose certificate does not chain to this bundle, and requires a certificate on every connection unless --client-cert-optional. Requires --tls-cert/--tls-key. Empty (default) disables client-cert verification.")
+	cmd.Flags().StringArrayVar(&scimIDPs, "scim-idp", nil,
+		"let an identity provider provision users and groups over SCIM 2.0 at /scim/v2/<name>/ (repeatable), as 'name=<name>,domain=<domain>,token-file=<path>[,template=<spiffe-id-template>]'. The provider authenticates with the bearer token in token-file, its groups are created in domain, and each user's memberships go to the SPIFFE ID the template gives ({idp}, {externalId}, {userName}; default spiffe://<trust-domain>/humans/{idp}/{externalId}).")
 	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
 	cmd.Flags().StringArrayVar(&decisionRecorders, "decision-recorder", nil,
@@ -1107,6 +1118,75 @@ func parseFederatePeers(specs []string, allowInsecure bool) ([]federation.PeerCo
 			return nil, fmt.Errorf("entry %q: unknown profile %q (want https_web or https_spiffe)", s, p.Profile)
 		}
 		out = append(out, p)
+	}
+	return out, nil
+}
+
+// parseSCIMIDPFlags parses repeated --scim-idp values.
+func parseSCIMIDPFlags(specs []string, trustDomain string) ([]api.SCIMConfig, error) {
+	out := make([]api.SCIMConfig, 0, len(specs))
+	seen := map[string]bool{}
+	for _, spec := range specs {
+		var (
+			cfg       api.SCIMConfig
+			tokenFile string
+		)
+		for _, kv := range strings.Split(spec, ",") {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok {
+				return nil, fmt.Errorf("invalid entry %q (expected key=value pairs)", spec)
+			}
+			v = strings.TrimSpace(v)
+			switch strings.TrimSpace(k) {
+			case "name":
+				cfg.Name = v
+			case "domain":
+				cfg.Domain = v
+			case "token-file":
+				tokenFile = v
+			case "template":
+				cfg.Template = v
+			default:
+				return nil, fmt.Errorf("unknown key %q in %q (expected name= domain= token-file= template=)", k, spec)
+			}
+		}
+		if err := storage.ValidateGroupName(cfg.Name); err != nil {
+			return nil, fmt.Errorf("name %q must be lowercase letters, digits, '-' or '_'", cfg.Name)
+		}
+		if seen[cfg.Name] {
+			return nil, fmt.Errorf("provider %q is configured more than once", cfg.Name)
+		}
+		seen[cfg.Name] = true
+		if err := storage.ValidateDomainName(cfg.Domain); err != nil {
+			return nil, fmt.Errorf("provider %q: %w", cfg.Name, err)
+		}
+		if tokenFile == "" {
+			return nil, fmt.Errorf("provider %q: token-file is required", cfg.Name)
+		}
+		// #nosec G304 -- operator-supplied token path.
+		raw, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: read token-file: %w", cfg.Name, err)
+		}
+		tok := strings.TrimSpace(string(raw))
+		if len(tok) < 32 {
+			return nil, fmt.Errorf("provider %q: the token must be at least 32 characters", cfg.Name)
+		}
+		cfg.TokenHash = sha256.Sum256([]byte(tok))
+		if cfg.Template == "" {
+			cfg.Template = "spiffe://" + trustDomain + "/humans/{idp}/{externalId}"
+		}
+		if !strings.Contains(cfg.Template, "{externalId}") && !strings.Contains(cfg.Template, "{userName}") {
+			return nil, fmt.Errorf("provider %q: template must contain {externalId} or {userName}, or every user would map to one SPIFFE ID", cfg.Name)
+		}
+		out = append(out, cfg)
+	}
+	if len(out) > 1 {
+		for _, c := range out {
+			if !strings.Contains(c.Template, "{idp}") {
+				return nil, fmt.Errorf("provider %q: template must contain {idp} when more than one --scim-idp is configured", c.Name)
+			}
+		}
 	}
 	return out, nil
 }

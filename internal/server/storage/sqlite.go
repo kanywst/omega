@@ -181,6 +181,38 @@ func (s *Store) schemaDDL() []string {
 			   expires_at BIGINT NOT NULL DEFAULT 0,
 			   PRIMARY KEY (domain, grp, principal)
 			 )`,
+			`CREATE TABLE IF NOT EXISTS scim_users (
+			   idp          TEXT   NOT NULL,
+			   id           TEXT   NOT NULL,
+			   user_name    TEXT   NOT NULL,
+			   user_name_lc TEXT   NOT NULL,
+			   external_id  TEXT   NOT NULL DEFAULT '',
+			   display_name TEXT   NOT NULL DEFAULT '',
+			   active       BIGINT NOT NULL,
+			   principal    TEXT   NOT NULL,
+			   created_at   BIGINT NOT NULL,
+			   updated_at   BIGINT NOT NULL,
+			   PRIMARY KEY (idp, id),
+			   UNIQUE (idp, user_name_lc)
+			 )`,
+			`CREATE TABLE IF NOT EXISTS scim_groups (
+			   idp          TEXT   NOT NULL,
+			   id           TEXT   NOT NULL,
+			   display_name TEXT   NOT NULL,
+			   external_id  TEXT   NOT NULL DEFAULT '',
+			   domain       TEXT   NOT NULL,
+			   grp          TEXT   NOT NULL,
+			   created_at   BIGINT NOT NULL,
+			   updated_at   BIGINT NOT NULL,
+			   PRIMARY KEY (idp, id),
+			   UNIQUE (domain, grp)
+			 )`,
+			`CREATE TABLE IF NOT EXISTS scim_members (
+			   idp      TEXT NOT NULL,
+			   group_id TEXT NOT NULL,
+			   user_id  TEXT NOT NULL,
+			   PRIMARY KEY (idp, group_id, user_id)
+			 )`,
 			`CREATE TABLE IF NOT EXISTS domain_admins (
 			   domain     TEXT NOT NULL,
 			   principal  TEXT NOT NULL,
@@ -232,6 +264,38 @@ func (s *Store) schemaDDL() []string {
 		   principal  TEXT   NOT NULL,
 		   expires_at BIGINT NOT NULL DEFAULT 0,
 		   PRIMARY KEY (domain, grp, principal)
+		 )`,
+		`CREATE TABLE IF NOT EXISTS scim_users (
+		   idp          TEXT   NOT NULL,
+		   id           TEXT   NOT NULL,
+		   user_name    TEXT   NOT NULL,
+		   user_name_lc TEXT   NOT NULL,
+		   external_id  TEXT   NOT NULL DEFAULT '',
+		   display_name TEXT   NOT NULL DEFAULT '',
+		   active       BIGINT NOT NULL,
+		   principal    TEXT   NOT NULL,
+		   created_at   BIGINT NOT NULL,
+		   updated_at   BIGINT NOT NULL,
+		   PRIMARY KEY (idp, id),
+		   UNIQUE (idp, user_name_lc)
+		 )`,
+		`CREATE TABLE IF NOT EXISTS scim_groups (
+		   idp          TEXT   NOT NULL,
+		   id           TEXT   NOT NULL,
+		   display_name TEXT   NOT NULL,
+		   external_id  TEXT   NOT NULL DEFAULT '',
+		   domain       TEXT   NOT NULL,
+		   grp          TEXT   NOT NULL,
+		   created_at   BIGINT NOT NULL,
+		   updated_at   BIGINT NOT NULL,
+		   PRIMARY KEY (idp, id),
+		   UNIQUE (domain, grp)
+		 )`,
+		`CREATE TABLE IF NOT EXISTS scim_members (
+		   idp      TEXT NOT NULL,
+		   group_id TEXT NOT NULL,
+		   user_id  TEXT NOT NULL,
+		   PRIMARY KEY (idp, group_id, user_id)
 		 )`,
 		`CREATE TABLE IF NOT EXISTS domain_admins (
 		   domain     TEXT NOT NULL,
