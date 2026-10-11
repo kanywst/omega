@@ -355,6 +355,13 @@ A principal adds itself, or a principal it controls, to a group that a policy tr
 - Mitigation today: group writes are authorized against the owning domain's admin chain under `--require-auth`, and every change and refused attempt is audited. Membership expiry is checked at evaluation time, so a lapsed membership stops counting at once on every replica ([ADR 0015](adr/0015-groups-with-expiring-membership.md)).
 - Residual risk: a domain's admins control who is in its groups, so a policy that trusts `Group::"media:..."` trusts the media admins. Groups accept federated SPIFFE IDs when an admin lists them. A removal reaches other replicas within the five-second reload interval. Expiry ends a membership for PDP decisions at once, but a token issued while it was active stays valid until the token itself expires.
 
+### E6 — Elevation of privilege through SCIM provisioning
+
+Someone who holds or steals a provider's SCIM token adds principals to the provider's groups, or maps a user onto a SPIFFE ID they control.
+
+- Mitigation today: each provider has its own bearer token (stored hashed, compared in constant time, at least 32 characters) and can only touch users and groups under its own `/scim/v2/<name>/`, in its own domain. User SPIFFE IDs come from the operator's template, must be valid and in the local trust domain, and with more than one provider must include `{idp}`, so one provider cannot claim another's users. Every change is committed with its audit row in one transaction, actor `scim:<name>` ([ADR 0017](adr/0017-scim-provisioning.md)).
+- Residual risk: the token is a long-lived static secret, so its holder controls the provider's groups until it is rotated. A policy that trusts a provisioned group trusts the provider. A template using `{userName}` lets whoever controls user names at the provider choose path segments within the template's prefix. Failed token checks are logged, not audited, and are not rate limited.
+
 ## Out of scope
 
 These are threats the project deliberately does not address. Each

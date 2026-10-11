@@ -57,6 +57,8 @@ tags:
     description: Tamper-evident audit log readout and verification.
   - name: oidc
     description: OIDC discovery for external relying parties (AWS IAM OIDC, GCP WIF, Kubernetes ServiceAccount issuer trust).
+  - name: scim
+    description: SCIM 2.0 provisioning of users and groups by an identity provider (RFC 7643, RFC 7644). See docs/scim.md.
   - name: leader-only
     description: |
       Endpoints that require the current process to hold the Postgres
@@ -1013,6 +1015,283 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /scim/v2/{idp}/Users:
+    parameters:
+      - $ref: "#/components/parameters/SCIMProvider"
+    get:
+      tags: [scim, leader-only]
+      operationId: scimListUsers
+      summary: List users, optionally filtered.
+      security:
+        - scimBearer: []
+      parameters:
+        - $ref: "#/components/parameters/SCIMFilter"
+        - $ref: "#/components/parameters/SCIMStartIndex"
+        - $ref: "#/components/parameters/SCIMCount"
+      responses:
+        "200":
+          description: ListResponse of users.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMListResponse"
+        "400":
+          $ref: "#/components/responses/SCIMError"
+        "401":
+          $ref: "#/components/responses/SCIMError"
+    post:
+      tags: [scim, leader-only]
+      operationId: scimCreateUser
+      summary: Create a user.
+      description: |
+        The user's SPIFFE ID comes from the provider's template. A
+        userName already in use, in any letter case, answers 409.
+      security:
+        - scimBearer: []
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/SCIMUser"
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMUser"
+        "400":
+          $ref: "#/components/responses/SCIMError"
+        "401":
+          $ref: "#/components/responses/SCIMError"
+        "409":
+          $ref: "#/components/responses/SCIMError"
+
+  /scim/v2/{idp}/Users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SCIMProvider"
+      - $ref: "#/components/parameters/SCIMID"
+    get:
+      tags: [scim, leader-only]
+      operationId: scimGetUser
+      summary: Get a user.
+      security:
+        - scimBearer: []
+      responses:
+        "200":
+          description: The user.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMUser"
+        "404":
+          $ref: "#/components/responses/SCIMError"
+    put:
+      tags: [scim, leader-only]
+      operationId: scimReplaceUser
+      summary: Replace a user.
+      security:
+        - scimBearer: []
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/SCIMUser"
+      responses:
+        "200":
+          description: The stored user.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMUser"
+        "400":
+          $ref: "#/components/responses/SCIMError"
+        "404":
+          $ref: "#/components/responses/SCIMError"
+    patch:
+      tags: [scim, leader-only]
+      operationId: scimPatchUser
+      summary: Patch a user. Setting active to false removes it from every group.
+      security:
+        - scimBearer: []
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/SCIMPatchOp"
+      responses:
+        "200":
+          description: The stored user.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMUser"
+        "400":
+          $ref: "#/components/responses/SCIMError"
+        "404":
+          $ref: "#/components/responses/SCIMError"
+    delete:
+      tags: [scim, leader-only]
+      operationId: scimDeleteUser
+      summary: Delete a user and its memberships.
+      security:
+        - scimBearer: []
+      responses:
+        "204":
+          description: Deleted.
+        "404":
+          $ref: "#/components/responses/SCIMError"
+
+  /scim/v2/{idp}/Groups:
+    parameters:
+      - $ref: "#/components/parameters/SCIMProvider"
+    get:
+      tags: [scim, leader-only]
+      operationId: scimListGroups
+      summary: List groups, optionally filtered.
+      security:
+        - scimBearer: []
+      parameters:
+        - $ref: "#/components/parameters/SCIMFilter"
+        - $ref: "#/components/parameters/SCIMStartIndex"
+        - $ref: "#/components/parameters/SCIMCount"
+        - name: excludedAttributes
+          in: query
+          schema:
+            type: string
+          description: "`members` omits member lists."
+      responses:
+        "200":
+          description: ListResponse of groups.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMListResponse"
+        "400":
+          $ref: "#/components/responses/SCIMError"
+    post:
+      tags: [scim, leader-only]
+      operationId: scimCreateGroup
+      summary: Create a group, which creates the Omega group it owns.
+      security:
+        - scimBearer: []
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/SCIMGroup"
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMGroup"
+        "400":
+          $ref: "#/components/responses/SCIMError"
+        "409":
+          $ref: "#/components/responses/SCIMError"
+
+  /scim/v2/{idp}/Groups/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SCIMProvider"
+      - $ref: "#/components/parameters/SCIMID"
+    get:
+      tags: [scim, leader-only]
+      operationId: scimGetGroup
+      summary: Get a group.
+      security:
+        - scimBearer: []
+      responses:
+        "200":
+          description: The group.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMGroup"
+        "404":
+          $ref: "#/components/responses/SCIMError"
+    put:
+      tags: [scim, leader-only]
+      operationId: scimReplaceGroup
+      summary: Replace a group's name and members.
+      security:
+        - scimBearer: []
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/SCIMGroup"
+      responses:
+        "200":
+          description: The stored group.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMGroup"
+        "400":
+          $ref: "#/components/responses/SCIMError"
+        "404":
+          $ref: "#/components/responses/SCIMError"
+        "409":
+          $ref: "#/components/responses/SCIMError"
+    patch:
+      tags: [scim, leader-only]
+      operationId: scimPatchGroup
+      summary: Patch a group's members, name or externalId.
+      security:
+        - scimBearer: []
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/SCIMPatchOp"
+      responses:
+        "200":
+          description: The stored group.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/SCIMGroup"
+        "400":
+          $ref: "#/components/responses/SCIMError"
+        "404":
+          $ref: "#/components/responses/SCIMError"
+    delete:
+      tags: [scim, leader-only]
+      operationId: scimDeleteGroup
+      summary: Delete a group and the Omega group it owns.
+      security:
+        - scimBearer: []
+      responses:
+        "204":
+          description: Deleted.
+        "404":
+          $ref: "#/components/responses/SCIMError"
+
+  /scim/v2/{idp}/ServiceProviderConfig:
+    parameters:
+      - $ref: "#/components/parameters/SCIMProvider"
+    get:
+      tags: [scim]
+      operationId: scimServiceProviderConfig
+      summary: Supported SCIM features.
+      security:
+        - scimBearer: []
+      responses:
+        "200":
+          description: ServiceProviderConfig.
+          content:
+            application/scim+json:
+              schema:
+                type: object
+
   /v1/policy/bundle:
     get:
       tags: [authzen]
@@ -1161,7 +1440,168 @@ paths:
           $ref: "#/components/responses/InternalError"
 
 components:
+  securitySchemes:
+    scimBearer:
+      type: http
+      scheme: bearer
+      description: The token in the provider's --scim-idp token-file.
+
+  parameters:
+    SCIMProvider:
+      name: idp
+      in: path
+      required: true
+      schema:
+        type: string
+      description: The provider name from --scim-idp.
+    SCIMID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    SCIMFilter:
+      name: filter
+      in: query
+      schema:
+        type: string
+      description: '`<attribute> eq "<value>"`; userName or externalId for users, displayName or externalId for groups.'
+    SCIMStartIndex:
+      name: startIndex
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+    SCIMCount:
+      name: count
+      in: query
+      schema:
+        type: integer
+        maximum: 1000
+
   schemas:
+    SCIMUser:
+      type: object
+      required: [userName]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        id:
+          type: string
+          readOnly: true
+        externalId:
+          type: string
+        userName:
+          type: string
+        displayName:
+          type: string
+        active:
+          type: boolean
+        meta:
+          $ref: "#/components/schemas/SCIMMeta"
+
+    SCIMGroup:
+      type: object
+      required: [displayName]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        id:
+          type: string
+          readOnly: true
+        externalId:
+          type: string
+        displayName:
+          type: string
+        members:
+          type: array
+          items:
+            type: object
+            required: [value]
+            properties:
+              value:
+                type: string
+                description: A SCIM user id.
+        omegaGroup:
+          type: string
+          readOnly: true
+          description: The Omega group this SCIM group owns, as <domain>:<name>.
+        meta:
+          $ref: "#/components/schemas/SCIMMeta"
+
+    SCIMMeta:
+      type: object
+      readOnly: true
+      properties:
+        resourceType:
+          type: string
+        created:
+          type: string
+          format: date-time
+        lastModified:
+          type: string
+          format: date-time
+        location:
+          type: string
+
+    SCIMPatchOp:
+      type: object
+      required: [schemas, Operations]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        Operations:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [op]
+            properties:
+              op:
+                type: string
+                description: add, remove or replace, in any letter case.
+              path:
+                type: string
+              value: {}
+
+    SCIMListResponse:
+      type: object
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        totalResults:
+          type: integer
+        startIndex:
+          type: integer
+        itemsPerPage:
+          type: integer
+        Resources:
+          type: array
+          items:
+            type: object
+
+    SCIMError:
+      type: object
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        scimType:
+          type: string
+        detail:
+          type: string
+
     OAuthTokenRequest:
       type: object
       required: [grant_type, assertion]
@@ -2249,6 +2689,13 @@ components:
           description: The hash of the last (head) row walked.
 
   responses:
+    SCIMError:
+      description: SCIM error.
+      content:
+        application/scim+json:
+          schema:
+            $ref: "#/components/schemas/SCIMError"
+
     BadRequest:
       description: Validation failure.
       content:
