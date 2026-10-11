@@ -336,13 +336,13 @@ func (t *SCIMTx) listGroups(where string, args []any, offset, limit int, withMem
 			created, modified int64
 		)
 		if err := rows.Scan(&g.ID, &g.DisplayName, &g.ExternalID, &g.Domain, &g.Group, &created, &modified); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, 0, fmt.Errorf("scan scim group: %w", err)
 		}
 		g.Created, g.Modified = time.Unix(0, created).UTC(), time.Unix(0, modified).UTC()
 		out = append(out, g)
 	}
-	rows.Close()
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
