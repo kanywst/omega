@@ -177,6 +177,9 @@ func (s *Store) RemoveGroupMember(ctx context.Context, domain, name, principal s
 		return GroupMember{}, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := s.lockGroup(ctx, tx, domain, name); err != nil {
+		return GroupMember{}, err
+	}
 	prior, err := s.memberTx(ctx, tx, domain, name, principal)
 	if err != nil {
 		return GroupMember{}, err

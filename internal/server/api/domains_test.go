@@ -342,3 +342,44 @@ func TestFailedRefreshAfterAWriteFailsClosedAtOnce(t *testing.T) {
 		t.Fatalf("after a successful refresh: %d", code)
 	}
 }
+
+func TestFailedRefreshAfterAWriteFailsClosedWithoutASyncLoop(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := api.NewServer(store, ca, policy.New())
+	var fail atomic.Bool
+	s.FailRefreshForTest(&fail)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	eval := func() int {
+		resp, err := http.Post(srv.URL+"/access/v1/evaluation", "application/json",
+			strings.NewReader(`{"subject":{"type":"User","id":"u"},"action":{"name":"read"},"resource":{"type":"Doc","id":"d"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	fail.Store(true)
+	if code, body := call(t, srv.Client(), "POST", srv.URL+"/v1/domains", storage.Domain{Name: "media"}); code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	if code := eval(); code != http.StatusServiceUnavailable {
+		t.Fatalf("no sync loop, failed post-write refresh: %d, want 503", code)
+	}
+	fail.Store(false)
+	if err := s.RefreshDirectory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if code := eval(); code != http.StatusOK {
+		t.Fatalf("after a successful refresh: %d", code)
+	}
+}

@@ -28,6 +28,10 @@ type domainState struct {
 	mu        sync.Mutex
 	loadedAt  time.Time
 	interval  time.Duration
+	// broken is set when the reload after a committed write fails: the
+	// loaded tree is then known to be out of date (a removed member may
+	// still be in it), whatever the sync interval.
+	broken bool
 }
 
 // directoryStaleAfter is how many sync intervals may pass without a
@@ -36,10 +40,14 @@ const directoryStaleAfter = 3
 
 // directoryStale reports whether the projected tree is too old to
 // evaluate against: a forbid on a domain created since would not apply.
-// It only applies once RunDirectorySync is running.
+// Age only counts once RunDirectorySync is running; a failed reload
+// after a write counts at once.
 func (s *Server) directoryStale() bool {
 	s.domains.mu.Lock()
 	defer s.domains.mu.Unlock()
+	if s.domains.broken {
+		return true
+	}
 	return s.domains.interval > 0 && time.Since(s.domains.loadedAt) > directoryStaleAfter*s.domains.interval
 }
 
@@ -94,6 +102,7 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 	dir := policy.Directory{TrustDomain: td, Domains: tree, Memberships: map[string][]policy.Membership{}}
 	for _, g := range groups {
 		if _, ok := tree[g.Domain]; !ok {
+			slog.Warn("group not projected into policy: its domain is not in the tree", "group", g.ID())
 			continue
 		}
 		dir.Groups = append(dir.Groups, g.ID())
@@ -104,6 +113,7 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 	s.policy.SetDirectory(dir)
 	s.domains.mu.Lock()
 	s.domains.loadedAt = time.Now()
+	s.domains.broken = false
 	s.domains.mu.Unlock()
 	return nil
 }
@@ -133,9 +143,9 @@ func (s *Server) RunDirectorySync(ctx context.Context, interval time.Duration) {
 // stale at once and evaluation fails closed until a sync succeeds.
 func (s *Server) refreshAfterWrite(ctx context.Context) {
 	if err := s.RefreshDirectory(ctx); err != nil {
-		slog.Warn("domain directory refresh failed after a write; failing closed until the next sync", "err", err)
+		slog.Warn("domain directory refresh failed after a write; failing closed until a reload succeeds", "err", err)
 		s.domains.mu.Lock()
-		s.domains.loadedAt = time.Time{}
+		s.domains.broken = true
 		s.domains.mu.Unlock()
 	}
 }
