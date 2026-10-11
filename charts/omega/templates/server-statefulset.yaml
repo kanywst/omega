@@ -41,6 +41,9 @@ spec:
             {{- if .Values.server.policyDir }}
             - --policy-dir={{ .Values.server.policyDir }}
             {{- end }}
+            {{- range .Values.server.domainRootAdmins }}
+            - --domain-root-admin={{ . }}
+            {{- end }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}

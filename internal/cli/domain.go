@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -22,13 +23,16 @@ func newDomainCommand() *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&serverURL, "server", "http://127.0.0.1:8080", "control plane HTTP base URL")
 
-	var description string
+	var (
+		description string
+		admins      []string
+	)
 	create := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a new domain",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			body, err := json.Marshal(storage.Domain{Name: args[0], Description: description})
+			body, err := json.Marshal(storage.Domain{Name: args[0], Description: description, Admins: admins})
 			if err != nil {
 				return err
 			}
@@ -41,6 +45,40 @@ func newDomainCommand() *cobra.Command {
 		},
 	}
 	create.Flags().StringVar(&description, "description", "", "domain description")
+	create.Flags().StringArrayVar(&admins, "admin", nil, "SPIFFE ID that administers the domain and everything below it (repeatable; defaults to the caller under --require-auth)")
+
+	del := &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Delete a domain that has no child domains",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return doRequest(c.OutOrStdout(), http.MethodDelete, strings.TrimRight(serverURL, "/")+"/v1/domains/"+args[0], nil)
+		},
+	}
+
+	adminCmd := &cobra.Command{Use: "admins", Short: "Grant or revoke domain admins"}
+	adminAdd := &cobra.Command{
+		Use:   "add <domain> <spiffe-id>",
+		Short: "Make a SPIFFE ID an admin of a domain and everything below it",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, args []string) error {
+			body, err := json.Marshal(map[string]string{"principal": args[1]})
+			if err != nil {
+				return err
+			}
+			return doRequest(c.OutOrStdout(), http.MethodPost, strings.TrimRight(serverURL, "/")+"/v1/domains/"+args[0]+"/admins", body)
+		},
+	}
+	adminRemove := &cobra.Command{
+		Use:   "remove <domain> <spiffe-id>",
+		Short: "Revoke a SPIFFE ID's admin grant on a domain",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, args []string) error {
+			u := strings.TrimRight(serverURL, "/") + "/v1/domains/" + args[0] + "/admins?principal=" + url.QueryEscape(args[1])
+			return doRequest(c.OutOrStdout(), http.MethodDelete, u, nil)
+		},
+	}
+	adminCmd.AddCommand(adminAdd, adminRemove)
 
 	get := &cobra.Command{
 		Use:   "get <name>",
@@ -59,8 +97,31 @@ func newDomainCommand() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(create, get, list)
+	cmd.AddCommand(create, get, list, del, adminCmd)
 	return cmd
+}
+
+func doRequest(w io.Writer, method, target string, body []byte) error {
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, target, r)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	return printResponse(w, resp)
 }
 
 func doGET(w io.Writer, url string) error {

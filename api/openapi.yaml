@@ -134,6 +134,12 @@ paths:
       tags: [domains, leader-only]
       operationId: createDomain
       summary: Create a SPIFFE namespace.
+      description: |
+        The name is dot-separated lowercase labels (`media.news`), and
+        its parent (`media`) must already exist. Under `--require-auth`
+        the caller must administer the parent, or be a
+        `--domain-root-admin` for a top-level domain. With no `admins`
+        given, the authenticated caller becomes the domain's admin.
       requestBody:
         required: true
         content:
@@ -149,6 +155,8 @@ paths:
                 $ref: "#/components/schemas/Domain"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
         "503":
@@ -177,6 +185,87 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [domains, leader-only]
+      operationId: deleteDomain
+      summary: Delete a domain that has no child domains.
+      description: |
+        Under `--require-auth` the caller must administer the domain's
+        parent (or be a root admin for a top-level domain); a domain's
+        own admins cannot delete it.
+      responses:
+        "204":
+          description: Deleted, with its admin grants.
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/domains/{name}/admins:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [domains, leader-only]
+      operationId: addDomainAdmin
+      summary: Grant a SPIFFE ID admin rights on a domain and every domain below it.
+      description: Under `--require-auth` the caller must administer the domain or an ancestor.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DomainAdminRequest"
+      responses:
+        "200":
+          description: The domain with its updated admins.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+    delete:
+      tags: [domains, leader-only]
+      operationId: removeDomainAdmin
+      summary: Revoke a SPIFFE ID's admin grant on a domain.
+      description: |
+        Revokes the grant on this domain only. Grants the principal
+        holds on domains below it are separate and stay.
+      parameters:
+        - name: principal
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The domain with its updated admins.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotLeader"
 
   /v1/attest/k8s:
     post:
@@ -970,6 +1059,11 @@ components:
           description: Parent domain name (omitted for top-level domains).
         description:
           type: string
+        admins:
+          type: array
+          items:
+            type: string
+          description: SPIFFE IDs that administer this domain and every domain below it.
         created_at:
           type: string
           format: date-time
@@ -983,8 +1077,22 @@ components:
           type: string
         parent:
           type: string
+          description: Optional; must equal the parent implied by the name.
         description:
           type: string
+        admins:
+          type: array
+          items:
+            type: string
+
+    DomainAdminRequest:
+      type: object
+      additionalProperties: false
+      required: [principal]
+      properties:
+        principal:
+          type: string
+          description: SPIFFE ID to grant.
 
     DomainListResponse:
       type: object

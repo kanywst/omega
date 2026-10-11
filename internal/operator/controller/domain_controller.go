@@ -19,6 +19,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/kanywst/omega/internal/server/storage"
+
 	omegav1alpha1 "github.com/kanywst/omega/internal/operator/api/v1alpha1"
 )
 
@@ -42,10 +44,14 @@ func (r *DomainReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// createRetryInterval is how soon a failed create is retried.
+const createRetryInterval = 5 * time.Second
+
 // Reconcile makes the Omega control plane match the desired state of
 // the CR. The control plane already enforces uniqueness on domain.name,
 // so the loop is "GET to check existence; POST if missing; record
-// outcome in status".
+// outcome in status". spec.admins is applied only when the domain is
+// created; later edits are not reconciled.
 func (r *DomainReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -71,8 +77,18 @@ func (r *DomainReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, r.markCondition(ctx, &domain, metav1.ConditionFalse, "OmegaUnreachable", err.Error())
 	}
 	if !exists {
-		if err := r.createDomain(ctx, name, domain.Spec.Description); err != nil {
-			return ctrl.Result{}, r.markCondition(ctx, &domain, metav1.ConditionFalse, "CreateFailed", err.Error())
+		if err := r.createDomain(ctx, name, domain.Spec.Description, domain.Spec.Admins); err != nil {
+			var rej *rejectedError
+			if errors.As(err, &rej) {
+				// The spec itself is wrong (invalid name or admin, or the
+				// operator lacks authority): retrying cannot help until
+				// the object changes, which triggers a new reconcile.
+				_ = r.markCondition(ctx, &domain, metav1.ConditionFalse, "CreateRejected", err.Error())
+				return ctrl.Result{}, nil
+			}
+			// Retry: the usual cause is a parent OmegaDomain that has not
+			// been reconciled yet.
+			return ctrl.Result{RequeueAfter: createRetryInterval}, r.markCondition(ctx, &domain, metav1.ConditionFalse, "CreateFailed", err.Error())
 		}
 		logger.Info("created omega domain", "name", name)
 	}
@@ -102,8 +118,8 @@ func (r *DomainReconciler) domainExists(ctx context.Context, name string) (bool,
 	}
 }
 
-func (r *DomainReconciler) createDomain(ctx context.Context, name, description string) error {
-	body, err := json.Marshal(map[string]string{"name": name, "description": description})
+func (r *DomainReconciler) createDomain(ctx context.Context, name, description string, admins []string) error {
+	body, err := json.Marshal(map[string]any{"name": name, "description": description, "admins": admins})
 	if err != nil {
 		return err
 	}
@@ -127,8 +143,21 @@ func (r *DomainReconciler) createDomain(ctx context.Context, name, description s
 		return nil
 	}
 	raw, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("POST %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))
+	err = fmt.Errorf("POST %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))
+	// A 400 for a missing parent is transient; every other 4xx except
+	// 429 rejects the spec or the operator's authority.
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests &&
+		!strings.Contains(string(raw), storage.ErrParentNotFound.Error()) {
+		return &rejectedError{err}
+	}
+	return err
 }
+
+// rejectedError is a create the control plane refused for a reason a
+// retry cannot fix.
+type rejectedError struct{ error }
+
+func (e *rejectedError) Unwrap() error { return e.error }
 
 func (r *DomainReconciler) markCondition(ctx context.Context, d *omegav1alpha1.OmegaDomain, status metav1.ConditionStatus, reason, message string) error {
 	cond := metav1.Condition{

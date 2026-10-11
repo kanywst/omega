@@ -44,12 +44,13 @@ Expected tail:
 
 ```text
 [demo] domains visible after restart:
-  {"items":[{"name":"media.news","parent":"media","description":"news","created_at":"..."}]}
+  {"items":[{"name":"media","description":"media","created_at":"..."},{"name":"media.news","parent":"media","description":"news","created_at":"..."}]}
 [demo] audit_log rows directly from Postgres:
    seq |      kind       |  subject   | decision |     hash16       |     prev16
   -----+-----------------+------------+----------+------------------+------------------
      1 | access.evaluate | alice      | deny     | 60351f7fc390c9bf | GENESIS
-     2 | domain.create   | media.news | ok       | 4ffd561d32c473d6 | 60351f7fc390c9bf
+     2 | domain.create   | media      | ok       | 1b0e4c2d9a7f3e65 | 60351f7fc390c9bf
+     3 | domain.create   | media.news | ok       | 4ffd561d32c473d6 | 1b0e4c2d9a7f3e65
 [demo] /v1/audit/verify → {"first_bad_seq":0,"valid":true}
 [demo] success - omega is durable on Postgres and the audit chain is intact
 ```

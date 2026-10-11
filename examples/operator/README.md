@@ -66,9 +66,11 @@ kubectl apply -f sample-domain.yaml
 ## Verify
 
 ```bash
-# Both domains show Ready=True after a successful reconcile.
+# Every domain shows Ready=True after a successful reconcile. media-news
+# may retry once until its parent media exists.
 kubectl get omegadomain
 # NAME         DOMAIN       READY   REASON   AGE
+# media        media        True    Ready    3s
 # media-news   media.news   True    Ready    3s
 # payments     payments     True    Ready    3s
 

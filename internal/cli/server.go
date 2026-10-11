@@ -99,6 +99,7 @@ func newServerCommand() *cobra.Command {
 		idJAGMaxAssertionTTL       time.Duration
 		idJAGInsecureClientBinding bool
 		clientCertOptional         bool
+		domainRootAdmins           []string
 		identitySource             string
 		identitySourceBundle       string
 		identitySourceJWTBundle    string
@@ -518,6 +519,20 @@ func newServerCommand() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "omega server: WARNING require-auth=false: POST /v1/svid trusts the caller-asserted spiffe_id, so any client that reaches the listener can mint an SVID for any identity (open CA). Set --require-auth=true with mTLS to close this (see docs/threat-model.md S3).\n")
 			}
 
+			apiServer = apiServer.WithDomainRootAdmins(domainRootAdmins)
+			if requireAuth && len(domainRootAdmins) == 0 {
+				fmt.Fprintln(os.Stderr, "omega server: no --domain-root-admin set: under --require-auth nobody can create a top-level domain until one is configured")
+			}
+			// Project the domain tree into the policy engine before serving,
+			// so no request is evaluated without it (a forbid on a Domain
+			// would otherwise not apply), then keep it current so
+			// `principal in Domain::"..."` reflects domains created through
+			// any replica.
+			if err := apiServer.RefreshDirectory(ctx); err != nil {
+				return fmt.Errorf("load domain tree: %w", err)
+			}
+			go apiServer.RunDirectorySync(ctx, 5*time.Second)
+
 			srv := &http.Server{
 				Addr:    httpAddr,
 				Handler: apiServer.Handler(),
@@ -683,6 +698,8 @@ func newServerCommand() *cobra.Command {
 		"PEM private key matching --tls-cert. Required when --tls-cert is set.")
 	cmd.Flags().StringVar(&clientCAFile, "client-ca", "",
 		"PEM CA bundle used to require and verify client certificates (mutual TLS). When set, the listener rejects any client whose certificate does not chain to this bundle, and requires a certificate on every connection unless --client-cert-optional. Requires --tls-cert/--tls-key. Empty (default) disables client-cert verification.")
+	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
+		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
 	cmd.Flags().BoolVar(&clientCertOptional, "client-cert-optional", false,
 		"with --client-ca and --require-auth, verify a client certificate when one is presented instead of requiring it on every connection. Endpoints gated by --require-auth still require a verified SPIFFE client certificate; ungated ones become reachable without one: health and leader state, GET /v1/domains, the trust and federation bundles, discovery documents, /metrics, the enrollment paths, and POST /oauth2/token, which authenticates its own client. See ADR 0012. Lets JWT-SVID clients use the spiffe_jwt method of the ID-JAG grant under --require-auth.")
 	cmd.Flags().BoolVar(&requireAuth, "require-auth", false,

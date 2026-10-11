@@ -100,6 +100,10 @@ echo "[ha] leader=$leader_name follower=$follower_name"
 echo "[ha] write to LEADER ($leader_name):"
 curl -fsS -X POST "http://127.0.0.1:$leader_port/v1/domains" \
 	-H "Content-Type: application/json" \
+	-d '{"name":"media","description":"parent, created on leader"}' \
+	-w "  status=%{http_code}\n" -o /dev/null
+curl -fsS -X POST "http://127.0.0.1:$leader_port/v1/domains" \
+	-H "Content-Type: application/json" \
 	-d '{"name":"media.news","description":"created on leader"}' \
 	-w "  status=%{http_code}\n" -o /dev/null
 
@@ -137,7 +141,7 @@ echo "[ha] $follower_name promoted to leader"
 echo "[ha] write to NEW LEADER ($follower_name):"
 curl -fsS -X POST "http://127.0.0.1:$follower_port/v1/domains" \
 	-H "Content-Type: application/json" \
-	-d '{"name":"after.failover","description":"created post-failover"}' \
+	-d '{"name":"media.after-failover","description":"created post-failover"}' \
 	-w "  status=%{http_code}\n" -o /dev/null
 
 echo "[ha] domains in shared Postgres:"
