@@ -165,6 +165,9 @@ func (s *Store) RemoveGroupMember(ctx context.Context, domain, name, principal s
 // but only while it still equals expect (nil: absent). It undoes a
 // change without overwriting a later one.
 func (s *Store) SwapGroupMember(ctx context.Context, domain, name, principal string, expect, want *GroupMember) error {
+	if !s.IsLeader() {
+		return ErrNotLeader
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -196,11 +199,22 @@ func (s *Store) SwapGroupMember(ctx context.Context, domain, name, principal str
 // DeleteEmptyGroup deletes a group only if it has no members, undoing a
 // create without discarding members added since.
 func (s *Store) DeleteEmptyGroup(ctx context.Context, domain, name string) error {
+	if !s.IsLeader() {
+		return ErrNotLeader
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Lock the group row exclusively first: PutGroupMember holds it
+	// shared, so no member can be added between the count and the delete.
+	if err := s.lockGroupMode(ctx, tx, domain, name, "FOR UPDATE"); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
 	var n int
 	if err := tx.QueryRowContext(ctx, s.rebind(`SELECT COUNT(*) FROM group_members WHERE domain = ? AND grp = ?`), domain, name).Scan(&n); err != nil {
 		return fmt.Errorf("count members: %w", err)
@@ -217,6 +231,9 @@ func (s *Store) DeleteEmptyGroup(ctx context.Context, domain, name string) error
 // RestoreGroup re-creates a deleted group with its members in one
 // transaction. It fails with ErrAlreadyExists if the name was reused.
 func (s *Store) RestoreGroup(ctx context.Context, g Group) error {
+	if !s.IsLeader() {
+		return ErrNotLeader
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -244,9 +261,13 @@ func (s *Store) RestoreGroup(ctx context.Context, g Group) error {
 }
 
 func (s *Store) lockGroup(ctx context.Context, tx *sql.Tx, domain, name string) error {
+	return s.lockGroupMode(ctx, tx, domain, name, "FOR SHARE")
+}
+
+func (s *Store) lockGroupMode(ctx context.Context, tx *sql.Tx, domain, name, mode string) error {
 	q := `SELECT 1 FROM groups WHERE domain = ? AND name = ?`
 	if s.driver == driverPostgres {
-		q += " FOR SHARE"
+		q += " " + mode
 	}
 	var one int
 	if err := tx.QueryRowContext(ctx, s.rebind(q), domain, name).Scan(&one); err != nil {
@@ -325,13 +346,13 @@ func (s *Store) listGroups(ctx context.Context, domain, name string) ([]Group, e
 			created int64
 		)
 		if err := rows.Scan(&g.Domain, &g.Name, &g.Description, &created); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("scan group: %w", err)
 		}
 		g.CreatedAt = time.Unix(0, created).UTC()
 		out = append(out, g)
 	}
-	rows.Close()
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}

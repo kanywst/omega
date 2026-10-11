@@ -196,6 +196,14 @@ func (s *Server) putGroupMember(w http.ResponseWriter, r *http.Request) {
 		if !written.ExpiresAt.IsZero() {
 			payload["expires_at"] = written.ExpiresAt
 		}
+		// An upsert: record what it replaced, so an extension or a
+		// change to permanent can be read back from the chain.
+		if prior != nil {
+			payload["replaced"] = true
+			if !prior.ExpiresAt.IsZero() {
+				payload["prior_expires_at"] = prior.ExpiresAt
+			}
+		}
 		undo := func(ctx context.Context) error {
 			return s.store.SwapGroupMember(ctx, domain, group, req.Principal, &written, prior)
 		}
@@ -231,7 +239,11 @@ func (s *Server) removeGroupMember(w http.ResponseWriter, r *http.Request) {
 		undo := func(ctx context.Context) error {
 			return s.store.SwapGroupMember(ctx, domain, group, principal, nil, &removed)
 		}
-		if !s.recordOrUndo(w, r, s.groupEvent(r, "group.member.remove", id, map[string]any{"principal": principal}), undo) {
+		payload := map[string]any{"principal": principal}
+		if !removed.ExpiresAt.IsZero() {
+			payload["expires_at"] = removed.ExpiresAt
+		}
+		if !s.recordOrUndo(w, r, s.groupEvent(r, "group.member.remove", id, payload), undo) {
 			return
 		}
 		s.refreshAfterWrite(r.Context())

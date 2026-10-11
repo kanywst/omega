@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,5 +119,50 @@ func TestGroupMembershipExpires(t *testing.T) {
 	_, body := call(t, root, "GET", base+"/media/groups/oncall", nil)
 	if !bytes.Contains(body, []byte("expires_at")) {
 		t.Errorf("the expiry is visible on the group: %s", body)
+	}
+}
+
+func TestGroupMembershipAuditRecordsExpiries(t *testing.T) {
+	env := newDomainEnv(t, "")
+	root := env.as(t, rootAdmin)
+	base := env.srv.URL + "/v1/domains"
+	members := base + "/media/groups/oncall/members"
+	week := time.Now().Add(7 * 24 * time.Hour).UTC().Truncate(time.Second)
+	for _, st := range []struct {
+		method, url string
+		body        any
+	}{
+		{"POST", base, storage.Domain{Name: "media"}},
+		{"POST", base + "/media/groups", api.GroupRequest{Name: "oncall"}},
+		{"PUT", members, api.GroupMemberRequest{Principal: bob, ExpiresAt: week}},
+		{"PUT", members, api.GroupMemberRequest{Principal: bob}},
+		{"PUT", members, api.GroupMemberRequest{Principal: bob, ExpiresAt: week}},
+		{"DELETE", members + "?principal=" + url.QueryEscape(bob), nil},
+	} {
+		if code, body := call(t, root, st.method, st.url, st.body); code >= 300 {
+			t.Fatalf("%s %s: %d %s", st.method, st.url, code, body)
+		}
+	}
+	events, _ := env.store.ListAudit(t.Context(), 0, 50)
+	var payloads []string
+	for _, ev := range events {
+		if strings.HasPrefix(ev.Kind, "group.member.") {
+			payloads = append(payloads, ev.Kind+" "+string(ev.Payload))
+		}
+	}
+	if len(payloads) != 4 {
+		t.Fatalf("member events: %v", payloads)
+	}
+	if strings.Contains(payloads[0], "replaced") {
+		t.Errorf("a first add replaces nothing: %s", payloads[0])
+	}
+	if !strings.Contains(payloads[1], `"prior_expires_at"`) || !strings.Contains(payloads[1], `"replaced":true`) {
+		t.Errorf("making a membership permanent must record the expiry it replaced: %s", payloads[1])
+	}
+	if strings.Contains(payloads[2], "prior_expires_at") || !strings.Contains(payloads[2], `"replaced":true`) {
+		t.Errorf("replacing a permanent membership: %s", payloads[2])
+	}
+	if !strings.Contains(payloads[3], `"expires_at"`) {
+		t.Errorf("a removal must record the expiry it removed: %s", payloads[3])
 	}
 }
