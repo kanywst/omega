@@ -28,7 +28,7 @@ type Engine struct {
 	policies *cedar.PolicySet
 	// static is the entity map from entities.json, directory the one
 	// projected from control-plane state (SetDirectory); entities is
-	// their union, with static winning on a UID collision.
+	// their union, with directory winning on a UID collision.
 	static      cedar.EntityMap
 	directory   cedar.EntityMap
 	domains     map[string]bool

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/kanywst/omega/internal/server/storage"
@@ -45,6 +46,16 @@ func (s *Server) FailAuditForTest(kind string) {
 	s.auditFault = func(ev storage.AuditEvent) error {
 		if ev.Kind == kind {
 			return errors.New("injected audit failure")
+		}
+		return nil
+	}
+}
+
+// FailRefreshForTest makes directory reloads fail while fail is true.
+func (s *Server) FailRefreshForTest(fail *atomic.Bool) {
+	s.refreshFault = func() error {
+		if fail.Load() {
+			return errors.New("injected refresh failure")
 		}
 		return nil
 	}

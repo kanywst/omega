@@ -58,7 +58,9 @@ type Server struct {
 	clientAssertionReplay *replayCache
 	domains               domainState
 	// auditFault, set only by tests, makes appendAudit fail.
-	auditFault              func(storage.AuditEvent) error
+	auditFault func(storage.AuditEvent) error
+	// refreshFault, set only by tests, makes RefreshDirectory fail.
+	refreshFault            func() error
 	spiffeBundleRefreshHint time.Duration
 	requireAuth             bool
 	entityStoreSearch       bool

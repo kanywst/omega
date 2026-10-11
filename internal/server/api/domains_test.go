@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -290,5 +291,54 @@ func TestPolicyFailsClosedWhenDirectoryIsStale(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if code := eval(); code != http.StatusServiceUnavailable {
 		t.Fatalf("stale directory: status %d, want 503", code)
+	}
+}
+
+func TestFailedRefreshAfterAWriteFailsClosedAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := api.NewServer(store, ca, policy.New())
+	var fail atomic.Bool
+	s.FailRefreshForTest(&fail)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// A long interval, so only the write's own refresh can matter.
+	go s.RunDirectorySync(ctx, time.Hour)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	eval := func() int {
+		resp, err := http.Post(srv.URL+"/access/v1/evaluation", "application/json",
+			strings.NewReader(`{"subject":{"type":"User","id":"u"},"action":{"name":"read"},"resource":{"type":"Doc","id":"d"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	time.Sleep(50 * time.Millisecond)
+	if code := eval(); code != http.StatusOK {
+		t.Fatalf("fresh: %d", code)
+	}
+	fail.Store(true)
+	if code, body := call(t, srv.Client(), "POST", srv.URL+"/v1/domains", storage.Domain{Name: "media"}); code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	if code := eval(); code != http.StatusServiceUnavailable {
+		t.Fatalf("after a failed post-write refresh: %d, want 503", code)
+	}
+	fail.Store(false)
+	if err := s.RefreshDirectory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if code := eval(); code != http.StatusOK {
+		t.Fatalf("after a successful refresh: %d", code)
 	}
 }

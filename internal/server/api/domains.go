@@ -55,6 +55,11 @@ func (s *Server) WithDomainRootAdmins(ids []string) *Server {
 func (s *Server) RefreshDirectory(ctx context.Context) error {
 	s.domains.refreshMu.Lock()
 	defer s.domains.refreshMu.Unlock()
+	if s.refreshFault != nil {
+		if err := s.refreshFault(); err != nil {
+			return err
+		}
+	}
 	items, err := s.store.ListDomains(ctx)
 	if err != nil {
 		return err
@@ -109,9 +114,15 @@ func (s *Server) RunDirectorySync(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// refreshAfterWrite reloads the tree after a committed change. If that
+// fails the loaded tree is known to be out of date, so it is marked
+// stale at once and evaluation fails closed until a sync succeeds.
 func (s *Server) refreshAfterWrite(ctx context.Context) {
 	if err := s.RefreshDirectory(ctx); err != nil {
-		slog.Warn("domain directory refresh failed", "err", err)
+		slog.Warn("domain directory refresh failed after a write; failing closed until the next sync", "err", err)
+		s.domains.mu.Lock()
+		s.domains.loadedAt = time.Time{}
+		s.domains.mu.Unlock()
 	}
 }
 
