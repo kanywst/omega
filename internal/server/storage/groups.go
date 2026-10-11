@@ -83,27 +83,56 @@ func (s *Store) CreateGroup(ctx context.Context, g Group) (Group, error) {
 	return g, tx.Commit()
 }
 
-// DeleteGroup removes a group and its memberships.
-func (s *Store) DeleteGroup(ctx context.Context, domain, name string) error {
+// DeleteGroup removes a group and its memberships, and returns the group
+// as it was when deleted. The snapshot is read under the same exclusive
+// lock as the delete, so it holds every member the delete removed.
+func (s *Store) DeleteGroup(ctx context.Context, domain, name string) (Group, error) {
 	if !s.IsLeader() {
-		return ErrNotLeader
+		return Group{}, ErrNotLeader
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin: %w", err)
+		return Group{}, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM groups WHERE domain = ? AND name = ?`), domain, name)
-	if err != nil {
-		return fmt.Errorf("delete group: %w", err)
+	if err := s.lockGroupMode(ctx, tx, domain, name, "FOR UPDATE"); err != nil {
+		return Group{}, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+	g := Group{Domain: domain, Name: name}
+	var created int64
+	if err := tx.QueryRowContext(ctx, s.rebind(`SELECT description, created_at FROM groups WHERE domain = ? AND name = ?`), domain, name).Scan(&g.Description, &created); err != nil {
+		return Group{}, fmt.Errorf("query group: %w", err)
+	}
+	g.CreatedAt = time.Unix(0, created).UTC()
+	rows, err := tx.QueryContext(ctx, s.rebind(`SELECT principal, expires_at FROM group_members WHERE domain = ? AND grp = ? ORDER BY principal`), domain, name)
+	if err != nil {
+		return Group{}, fmt.Errorf("query members: %w", err)
+	}
+	for rows.Next() {
+		var (
+			m   GroupMember
+			exp int64
+		)
+		if err := rows.Scan(&m.Principal, &exp); err != nil {
+			_ = rows.Close()
+			return Group{}, fmt.Errorf("scan member: %w", err)
+		}
+		if exp != 0 {
+			m.ExpiresAt = time.Unix(0, exp).UTC()
+		}
+		g.Members = append(g.Members, m)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return Group{}, err
+	}
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM groups WHERE domain = ? AND name = ?`), domain, name); err != nil {
+		return Group{}, fmt.Errorf("delete group: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ?`), domain, name); err != nil {
-		return fmt.Errorf("delete members: %w", err)
+		return Group{}, fmt.Errorf("delete members: %w", err)
 	}
-	return tx.Commit()
+	return g, tx.Commit()
 }
 
 // ErrChanged is returned by a compare-and-undo when the row no longer

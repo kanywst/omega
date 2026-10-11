@@ -227,7 +227,7 @@ func TestGroups(t *testing.T) {
 	if _, err := s.RemoveGroupMember(ctx, "media", "oncall", "spiffe://td/a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteGroup(ctx, "media", "oncall"); err != nil {
+	if _, err := s.DeleteGroup(ctx, "media", "oncall"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateGroup(ctx, storage.Group{Domain: "media", Name: "oncall"}); err != nil {
@@ -276,7 +276,7 @@ func TestGroupMemberCompareAndUndo(t *testing.T) {
 		t.Fatalf("a group with members is not deleted by a create undo: %v", err)
 	}
 	g, _ := s.GetGroup(ctx, "media", "oncall")
-	if err := s.DeleteGroup(ctx, "media", "oncall"); err != nil {
+	if _, err := s.DeleteGroup(ctx, "media", "oncall"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RestoreGroup(ctx, g); err != nil {

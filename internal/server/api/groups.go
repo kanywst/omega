@@ -88,16 +88,7 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeDomainWrite(w, r, "group.delete", id, domain) {
 		return
 	}
-	before, err := s.store.GetGroup(r.Context(), domain, group)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	err = s.store.DeleteGroup(r.Context(), domain, group)
+	before, err := s.store.DeleteGroup(r.Context(), domain, group)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
