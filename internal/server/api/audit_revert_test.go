@@ -3,6 +3,7 @@ package api_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -90,5 +91,49 @@ func TestUnrecordedChangesAreReverted(t *testing.T) {
 	must("DELETE", base+"/media", nil, http.StatusInternalServerError)
 	if d, err := store.GetDomain(ctx, "media"); err != nil || len(d.Admins) != 1 {
 		t.Errorf("an unrecorded delete must restore the domain with its admins: %+v %v", d, err)
+	}
+}
+
+// TestUndoneMembershipIsNotLeftInPolicy covers a sync that projects a
+// membership between its commit and its undo.
+func TestUndoneMembershipIsNotLeftInPolicy(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdp := policy.New()
+	pdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pdir, "p.cedar"), []byte(`permit (principal in Group::"media:oncall", action, resource);`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := pdp.LoadDir(pdir); err != nil {
+		t.Fatal(err)
+	}
+	s := api.NewServer(store, ca, pdp)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	base := srv.URL + "/v1/domains"
+	for _, st := range []struct {
+		u    string
+		body any
+	}{{base, storage.Domain{Name: "media"}}, {base + "/media/groups", api.GroupRequest{Name: "oncall"}}} {
+		if code, out := call(t, srv.Client(), "POST", st.u, st.body); code != http.StatusCreated {
+			t.Fatalf("%s: %d %s", st.u, code, out)
+		}
+	}
+	s.FailAuditAfterSyncForTest("group.member.add")
+	principal := "spiffe://omega.local/people/carol"
+	if code, _ := call(t, srv.Client(), "PUT", base+"/media/groups/oncall/members", api.GroupMemberRequest{Principal: principal}); code != http.StatusInternalServerError {
+		t.Fatalf("unrecorded add: %d", code)
+	}
+	r, err := pdp.Evaluate(policy.EvalRequest{Subject: policy.Entity{Type: "Spiffe", ID: principal}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"}})
+	if err != nil || r.Decision {
+		t.Fatalf("the undone membership must not grant access: %+v %v", r, err)
 	}
 }

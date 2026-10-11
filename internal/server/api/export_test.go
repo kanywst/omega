@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"time"
@@ -58,5 +59,20 @@ func (s *Server) FailRefreshForTest(fail *atomic.Bool) {
 			return errors.New("injected refresh failure")
 		}
 		return nil
+	}
+}
+
+// FailAuditAfterSyncForTest makes appends of kind fail, after reloading
+// the directory as a concurrent sync would, so the failed change is
+// projected before it is undone.
+func (s *Server) FailAuditAfterSyncForTest(kind string) {
+	s.auditFault = func(ev storage.AuditEvent) error {
+		if ev.Kind != kind {
+			return nil
+		}
+		if ev.Decision != "reverted" {
+			_ = s.RefreshDirectory(context.Background())
+		}
+		return errors.New("injected audit failure")
 	}
 }

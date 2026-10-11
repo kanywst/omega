@@ -377,6 +377,10 @@ func (s *Server) removeDomainAdmin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) recordOrUndo(w http.ResponseWriter, r *http.Request, ev storage.AuditEvent, undo func(context.Context) error) bool {
 	if err := s.appendAudit(r.Context(), ev); err != nil {
 		ctx := context.WithoutCancel(r.Context())
+		// A sync may have projected the change before it was undone, so
+		// reload once the undo is done (or has failed); a failed reload
+		// fails closed.
+		defer s.refreshAfterWrite(ctx)
 		if uerr := undo(ctx); uerr != nil {
 			slog.Error("audit append failed and the change could not be reverted", "kind", ev.Kind, "subject", ev.Subject, "err", uerr)
 			writeErr(w, http.StatusInternalServerError, fmt.Errorf("could not record %s, and reverting the change failed (%v); check the current state before retrying", ev.Kind, uerr))
