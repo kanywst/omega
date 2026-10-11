@@ -238,7 +238,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 			return fmt.Errorf("ship decisions: %w", err)
 		}
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("ship decisions: %d %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 		}
