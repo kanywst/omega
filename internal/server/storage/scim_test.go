@@ -58,6 +58,23 @@ func exerciseSCIM(t *testing.T, s *storage.Store) {
 	if idp, managed, _ := s.SCIMManaged(ctx, "people", "engineering"); !managed || idp != "corp" {
 		t.Fatalf("managed: %v %q", managed, idp)
 	}
+	// The Omega group API's writes refuse the provider's group in their
+	// own transactions.
+	if _, err := s.PutGroupMember(ctx, "people", "engineering", storage.GroupMember{Principal: "spiffe://td/x"}); !errors.Is(err, storage.ErrSCIMManaged) {
+		t.Errorf("put member: %v", err)
+	}
+	if _, err := s.RemoveGroupMember(ctx, "people", "engineering", alice.Principal); !errors.Is(err, storage.ErrSCIMManaged) {
+		t.Errorf("remove member: %v", err)
+	}
+	if err := s.SwapGroupMember(ctx, "people", "engineering", alice.Principal, nil, nil); !errors.Is(err, storage.ErrSCIMManaged) {
+		t.Errorf("swap member: %v", err)
+	}
+	if _, err := s.DeleteGroup(ctx, "people", "engineering"); !errors.Is(err, storage.ErrSCIMManaged) {
+		t.Errorf("delete: %v", err)
+	}
+	if err := s.DeleteEmptyGroup(ctx, "people", "engineering"); !errors.Is(err, storage.ErrSCIMManaged) {
+		t.Errorf("delete empty: %v", err)
+	}
 
 	// userName is unique without regard to case.
 	if err := run(func(tx *storage.SCIMTx) error {
@@ -67,9 +84,9 @@ func exerciseSCIM(t *testing.T, s *storage.Store) {
 		t.Fatalf("duplicate userName: %v", err)
 	}
 	if err := run(func(tx *storage.SCIMTx) error {
-		users, err := tx.ListUsers("userName", "alice")
-		if err == nil && len(users) != 1 {
-			t.Errorf("filter by userName: %d", len(users))
+		users, total, err := tx.ListUsers("userName", "alice", 0, 10)
+		if err == nil && (len(users) != 1 || total != 1) {
+			t.Errorf("filter by userName: %d of %d", len(users), total)
 		}
 		return err
 	}); err != nil {

@@ -22,16 +22,19 @@ func TestParseSCIMIDPFlags(t *testing.T) {
 		t.Fatalf("defaults: %+v %v", cfgs, err)
 	}
 	for name, specs := range map[string][]string{
-		"no token file":     {"name=corp,domain=people"},
-		"short token":       {"name=corp,domain=people,token-file=" + short},
-		"missing file":      {"name=corp,domain=people,token-file=" + filepath.Join(dir, "nope")},
-		"bad name":          {"name=Corp,domain=people,token-file=" + tok},
-		"bad domain":        {"name=corp,domain=People,token-file=" + tok},
-		"unknown key":       {"name=corp,domain=people,token-file=" + tok + ",x=y"},
-		"not key=value":     {"corp"},
-		"constant template": {"name=corp,domain=people,token-file=" + tok + ",template=spiffe://omega.local/everyone"},
-		"duplicate":         {"name=corp,domain=people,token-file=" + tok, "name=corp,domain=people,token-file=" + tok},
-		"two without {idp}": {"name=a,domain=people,token-file=" + tok + ",template=spiffe://omega.local/h/{externalId}", "name=b,domain=people,token-file=" + tok},
+		"no token file":      {"name=corp,domain=people"},
+		"short token":        {"name=corp,domain=people,token-file=" + short},
+		"missing file":       {"name=corp,domain=people,token-file=" + filepath.Join(dir, "nope")},
+		"bad name":           {"name=Corp,domain=people,token-file=" + tok},
+		"bad domain":         {"name=corp,domain=People,token-file=" + tok},
+		"unknown key":        {"name=corp,domain=people,token-file=" + tok + ",x=y"},
+		"not key=value":      {"corp"},
+		"constant template":  {"name=corp,domain=people,token-file=" + tok + ",template=spiffe://omega.local/everyone"},
+		"duplicate":          {"name=corp,domain=people,token-file=" + tok, "name=corp,domain=people,token-file=" + tok},
+		"other trust domain": {"name=corp,domain=people,token-file=" + tok + ",template=spiffe://evil.example/h/{externalId}"},
+		"placeholder first":  {"name=corp,domain=people,token-file=" + tok + ",template=spiffe://omega.local/{userName}"},
+		"idp after user":     {"name=corp,domain=people,token-file=" + tok + ",template=spiffe://omega.local/h/{externalId}/{idp}"},
+		"two without {idp}":  {"name=a,domain=people,token-file=" + tok + ",template=spiffe://omega.local/h/{externalId}", "name=b,domain=people,token-file=" + tok},
 	} {
 		if _, err := parseSCIMIDPFlags(specs, "omega.local"); err == nil {
 			t.Errorf("%s: want an error", name)

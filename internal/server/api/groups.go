@@ -66,6 +66,8 @@ func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("domain %q does not exist", domain))
 	case errors.Is(err, storage.ErrAlreadyExists):
 		writeErr(w, http.StatusConflict, err)
+	case errors.Is(err, storage.ErrSCIMManaged):
+		writeErr(w, http.StatusConflict, err)
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
@@ -95,6 +97,8 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
+	case errors.Is(err, storage.ErrSCIMManaged):
+		writeErr(w, http.StatusConflict, err)
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
@@ -116,6 +120,8 @@ func (s *Server) getGroup(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
+	case errors.Is(err, storage.ErrSCIMManaged):
+		writeErr(w, http.StatusConflict, err)
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
@@ -186,6 +192,8 @@ func (s *Server) putGroupMember(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, fmt.Errorf("group %q does not exist", id))
+	case errors.Is(err, storage.ErrSCIMManaged):
+		writeErr(w, http.StatusConflict, err)
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:
@@ -233,6 +241,8 @@ func (s *Server) removeGroupMember(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, fmt.Errorf("%q is not a member of %q", principal, id))
+	case errors.Is(err, storage.ErrSCIMManaged):
+		writeErr(w, http.StatusConflict, err)
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 	default:

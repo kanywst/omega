@@ -1179,6 +1179,9 @@ func parseSCIMIDPFlags(specs []string, trustDomain string) ([]api.SCIMConfig, er
 		if !strings.Contains(cfg.Template, "{externalId}") && !strings.Contains(cfg.Template, "{userName}") {
 			return nil, fmt.Errorf("provider %q: template must contain {externalId} or {userName}, or every user would map to one SPIFFE ID", cfg.Name)
 		}
+		if err := checkSCIMTemplate(cfg.Template, trustDomain); err != nil {
+			return nil, fmt.Errorf("provider %q: %w", cfg.Name, err)
+		}
 		out = append(out, cfg)
 	}
 	if len(out) > 1 {
@@ -1189,4 +1192,26 @@ func parseSCIMIDPFlags(specs []string, trustDomain string) ([]api.SCIMConfig, er
 		}
 	}
 	return out, nil
+}
+
+// checkSCIMTemplate requires a template in the local trust domain whose
+// path starts with a fixed segment, with {idp} (when present) ahead of
+// the user's attributes, so providers' users land in distinct subtrees.
+func checkSCIMTemplate(tmpl, trustDomain string) error {
+	path, ok := strings.CutPrefix(tmpl, "spiffe://"+trustDomain+"/")
+	if !ok {
+		return fmt.Errorf("template %q must start with spiffe://%s/", tmpl, trustDomain)
+	}
+	first, _, _ := strings.Cut(path, "/")
+	if first == "" || strings.Contains(first, "{") {
+		return fmt.Errorf("template %q must start its path with a fixed segment, such as /humans/", tmpl)
+	}
+	if i := strings.Index(path, "{idp}"); i >= 0 {
+		for _, p := range []string{"{externalId}", "{userName}"} {
+			if j := strings.Index(path, p); j >= 0 && j < i {
+				return fmt.Errorf("template %q must place {idp} before %s", tmpl, p)
+			}
+		}
+	}
+	return nil
 }

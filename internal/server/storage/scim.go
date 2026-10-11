@@ -41,13 +41,48 @@ type SCIMGroup struct {
 // ErrUnknownMember is returned when a group names a user that does not exist.
 var ErrUnknownMember = errors.New("unknown member")
 
-// SCIMTx is one transaction over an identity provider's SCIM state.
+// ErrSCIMManaged is returned when the Omega group API would change a
+// group an identity provider owns.
+var ErrSCIMManaged = errors.New("group is provisioned over SCIM")
+
+// refuseManaged fails with ErrSCIMManaged when a provider owns the group.
+// It runs inside the caller's transaction, after any group lock, so the
+// check and the write cannot be split by a concurrent SCIM create.
+func (s *Store) refuseManaged(ctx context.Context, tx *sql.Tx, domain, name string) error {
+	var idp string
+	err := tx.QueryRowContext(ctx, s.rebind(`SELECT idp FROM scim_groups WHERE domain = ? AND grp = ?`), domain, name).Scan(&idp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("query scim group: %w", err)
+	}
+	return fmt.Errorf("%w by %q", ErrSCIMManaged, idp)
+}
+
+// querier is satisfied by *sql.DB and *sql.Tx.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// SCIMTx is one transaction over an identity provider's SCIM state, or
+// a read-only view of it (SCIMRead).
 type SCIMTx struct {
 	s       *Store
-	tx      *sql.Tx
+	tx      *sql.Tx // nil for a read-only view
+	q       querier
 	ctx     context.Context
 	idp     string
 	touched map[string]bool // group ids whose Omega membership must be rebuilt
+}
+
+// SCIMRead runs fn against the provider's SCIM state without a write
+// transaction or the audit lock, so a provider's list and get calls
+// never hold up writes. fn must only read.
+func (s *Store) SCIMRead(ctx context.Context, idp string, fn func(*SCIMTx) error) error {
+	return fn(&SCIMTx{s: s, q: s.db, ctx: ctx, idp: idp})
 }
 
 // SCIM runs fn in one transaction. When fn returns an event with a Kind,
@@ -66,7 +101,7 @@ func (s *Store) SCIM(ctx context.Context, idp string, fn func(*SCIMTx) (AuditEve
 		return AuditEvent{}, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	t := &SCIMTx{s: s, tx: tx, ctx: ctx, idp: idp, touched: map[string]bool{}}
+	t := &SCIMTx{s: s, tx: tx, q: tx, ctx: ctx, idp: idp, touched: map[string]bool{}}
 	ev, err := fn(t)
 	if err != nil {
 		return AuditEvent{}, err
@@ -135,7 +170,7 @@ func scanSCIMUser(sc interface{ Scan(...any) error }) (SCIMUser, error) {
 
 // GetUser returns one user.
 func (t *SCIMTx) GetUser(id string) (SCIMUser, error) {
-	u, err := scanSCIMUser(t.tx.QueryRowContext(t.ctx, t.s.rebind(`SELECT `+scimUserCols+` FROM scim_users WHERE idp = ? AND id = ?`), t.idp, id))
+	u, err := scanSCIMUser(t.q.QueryRowContext(t.ctx, t.s.rebind(`SELECT `+scimUserCols+` FROM scim_users WHERE idp = ? AND id = ?`), t.idp, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return SCIMUser{}, ErrNotFound
 	}
@@ -145,33 +180,38 @@ func (t *SCIMTx) GetUser(id string) (SCIMUser, error) {
 	return u, nil
 }
 
-// ListUsers returns the users, optionally only those whose attr
-// ("userName", compared case-insensitively, or "externalId") equals value.
-func (t *SCIMTx) ListUsers(attr, value string) ([]SCIMUser, error) {
-	q, args := `SELECT `+scimUserCols+` FROM scim_users WHERE idp = ?`, []any{t.idp}
+// ListUsers returns one page of users (offset from 0, at most limit),
+// optionally only those whose attr ("userName", compared without regard
+// to case, or "externalId") equals value, and how many match in total.
+func (t *SCIMTx) ListUsers(attr, value string, offset, limit int) ([]SCIMUser, int, error) {
+	where, args := ` WHERE idp = ?`, []any{t.idp}
 	switch attr {
 	case "":
 	case "userName":
-		q, args = q+` AND user_name_lc = ?`, append(args, strings.ToLower(value))
+		where, args = where+` AND user_name_lc = ?`, append(args, strings.ToLower(value))
 	case "externalId":
-		q, args = q+` AND external_id = ?`, append(args, value)
+		where, args = where+` AND external_id = ?`, append(args, value)
 	default:
-		return nil, fmt.Errorf("cannot filter users by %q", attr)
+		return nil, 0, fmt.Errorf("cannot filter users by %q", attr)
 	}
-	rows, err := t.tx.QueryContext(t.ctx, t.s.rebind(q+` ORDER BY created_at, id`), args...)
+	var total int
+	if err := t.q.QueryRowContext(t.ctx, t.s.rebind(`SELECT COUNT(*) FROM scim_users`+where), args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count scim users: %w", err)
+	}
+	rows, err := t.q.QueryContext(t.ctx, t.s.rebind(`SELECT `+scimUserCols+` FROM scim_users`+where+` ORDER BY created_at, id LIMIT ? OFFSET ?`), append(args, limit, offset)...)
 	if err != nil {
-		return nil, fmt.Errorf("query scim users: %w", err)
+		return nil, 0, fmt.Errorf("query scim users: %w", err)
 	}
 	defer rows.Close()
 	var out []SCIMUser
 	for rows.Next() {
 		u, err := scanSCIMUser(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan scim user: %w", err)
+			return nil, 0, fmt.Errorf("scan scim user: %w", err)
 		}
 		out = append(out, u)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // CreateUser inserts u under a new id. A userName already in use, in any
@@ -179,7 +219,7 @@ func (t *SCIMTx) ListUsers(attr, value string) ([]SCIMUser, error) {
 func (t *SCIMTx) CreateUser(u SCIMUser) (SCIMUser, error) {
 	now := time.Now().UTC()
 	u.ID, u.Created, u.Modified = newSCIMID(), now, now
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`INSERT INTO scim_users(idp, id, user_name, user_name_lc, external_id, display_name, active, principal, created_at, updated_at)
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`INSERT INTO scim_users(idp, id, user_name, user_name_lc, external_id, display_name, active, principal, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		t.idp, u.ID, u.UserName, strings.ToLower(u.UserName), u.ExternalID, u.DisplayName, boolInt(u.Active), u.Principal, now.UnixNano(), now.UnixNano(),
 	); err != nil {
@@ -199,7 +239,7 @@ func (t *SCIMTx) ReplaceUser(u SCIMUser) (SCIMUser, error) {
 		return SCIMUser{}, err
 	}
 	u.Created, u.Modified = prev.Created, time.Now().UTC()
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`UPDATE scim_users SET user_name = ?, user_name_lc = ?, external_id = ?, display_name = ?, active = ?, principal = ?, updated_at = ?
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`UPDATE scim_users SET user_name = ?, user_name_lc = ?, external_id = ?, display_name = ?, active = ?, principal = ?, updated_at = ?
 		WHERE idp = ? AND id = ?`),
 		u.UserName, strings.ToLower(u.UserName), u.ExternalID, u.DisplayName, boolInt(u.Active), u.Principal, u.Modified.UnixNano(), t.idp, u.ID,
 	); err != nil {
@@ -224,17 +264,17 @@ func (t *SCIMTx) DeleteUser(id string) error {
 	if err := t.touchGroupsOf(id); err != nil {
 		return err
 	}
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_members WHERE idp = ? AND user_id = ?`), t.idp, id); err != nil {
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_members WHERE idp = ? AND user_id = ?`), t.idp, id); err != nil {
 		return fmt.Errorf("delete scim memberships: %w", err)
 	}
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_users WHERE idp = ? AND id = ?`), t.idp, id); err != nil {
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_users WHERE idp = ? AND id = ?`), t.idp, id); err != nil {
 		return fmt.Errorf("delete scim user: %w", err)
 	}
 	return nil
 }
 
 func (t *SCIMTx) touchGroupsOf(userID string) error {
-	rows, err := t.tx.QueryContext(t.ctx, t.s.rebind(`SELECT group_id FROM scim_members WHERE idp = ? AND user_id = ?`), t.idp, userID)
+	rows, err := t.q.QueryContext(t.ctx, t.s.rebind(`SELECT group_id FROM scim_members WHERE idp = ? AND user_id = ?`), t.idp, userID)
 	if err != nil {
 		return fmt.Errorf("query scim memberships: %w", err)
 	}
@@ -253,7 +293,7 @@ const scimGroupCols = `id, display_name, external_id, domain, grp, created_at, u
 
 // GetGroup returns one group with its member ids.
 func (t *SCIMTx) GetGroup(id string) (SCIMGroup, error) {
-	gs, err := t.listGroups(` AND id = ?`, id)
+	gs, _, err := t.listGroups(` AND id = ?`, []any{id}, 0, 1, true)
 	if err != nil {
 		return SCIMGroup{}, err
 	}
@@ -263,24 +303,31 @@ func (t *SCIMTx) GetGroup(id string) (SCIMGroup, error) {
 	return gs[0], nil
 }
 
-// ListGroups returns the groups, optionally only those whose attr
-// ("displayName" or "externalId") equals value.
-func (t *SCIMTx) ListGroups(attr, value string) ([]SCIMGroup, error) {
+// ListGroups returns one page of groups (offset from 0, at most limit),
+// optionally only those whose attr ("displayName" or "externalId")
+// equals value, and how many match in total. Members are loaded only
+// when withMembers is set.
+func (t *SCIMTx) ListGroups(attr, value string, offset, limit int, withMembers bool) ([]SCIMGroup, int, error) {
 	switch attr {
 	case "":
-		return t.listGroups("")
+		return t.listGroups("", nil, offset, limit, withMembers)
 	case "displayName":
-		return t.listGroups(` AND display_name = ?`, value)
+		return t.listGroups(` AND display_name = ?`, []any{value}, offset, limit, withMembers)
 	case "externalId":
-		return t.listGroups(` AND external_id = ?`, value)
+		return t.listGroups(` AND external_id = ?`, []any{value}, offset, limit, withMembers)
 	}
-	return nil, fmt.Errorf("cannot filter groups by %q", attr)
+	return nil, 0, fmt.Errorf("cannot filter groups by %q", attr)
 }
 
-func (t *SCIMTx) listGroups(where string, args ...any) ([]SCIMGroup, error) {
-	rows, err := t.tx.QueryContext(t.ctx, t.s.rebind(`SELECT `+scimGroupCols+` FROM scim_groups WHERE idp = ?`+where+` ORDER BY created_at, id`), append([]any{t.idp}, args...)...)
+func (t *SCIMTx) listGroups(where string, args []any, offset, limit int, withMembers bool) ([]SCIMGroup, int, error) {
+	args = append([]any{t.idp}, args...)
+	var total int
+	if err := t.q.QueryRowContext(t.ctx, t.s.rebind(`SELECT COUNT(*) FROM scim_groups WHERE idp = ?`+where), args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count scim groups: %w", err)
+	}
+	rows, err := t.q.QueryContext(t.ctx, t.s.rebind(`SELECT `+scimGroupCols+` FROM scim_groups WHERE idp = ?`+where+` ORDER BY created_at, id LIMIT ? OFFSET ?`), append(args, limit, offset)...)
 	if err != nil {
-		return nil, fmt.Errorf("query scim groups: %w", err)
+		return nil, 0, fmt.Errorf("query scim groups: %w", err)
 	}
 	var out []SCIMGroup
 	for rows.Next() {
@@ -290,38 +337,36 @@ func (t *SCIMTx) listGroups(where string, args ...any) ([]SCIMGroup, error) {
 		)
 		if err := rows.Scan(&g.ID, &g.DisplayName, &g.ExternalID, &g.Domain, &g.Group, &created, &modified); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("scan scim group: %w", err)
+			return nil, 0, fmt.Errorf("scan scim group: %w", err)
 		}
 		g.Created, g.Modified = time.Unix(0, created).UTC(), time.Unix(0, modified).UTC()
 		out = append(out, g)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	for i := range out {
-		if out[i].Members, err = t.members(out[i].ID); err != nil {
-			return nil, err
-		}
+	if !withMembers || len(out) == 0 {
+		return out, total, nil
 	}
-	return out, nil
-}
-
-func (t *SCIMTx) members(groupID string) ([]string, error) {
-	rows, err := t.tx.QueryContext(t.ctx, t.s.rebind(`SELECT user_id FROM scim_members WHERE idp = ? AND group_id = ? ORDER BY user_id`), t.idp, groupID)
+	ids := make([]any, len(out))
+	idx := make(map[string]int, len(out))
+	for i, g := range out {
+		ids[i], idx[g.ID] = g.ID, i
+	}
+	mrows, err := t.q.QueryContext(t.ctx, t.s.rebind(`SELECT group_id, user_id FROM scim_members WHERE idp = ? AND group_id IN (?`+strings.Repeat(", ?", len(ids)-1)+`) ORDER BY group_id, user_id`), append([]any{t.idp}, ids...)...)
 	if err != nil {
-		return nil, fmt.Errorf("query scim members: %w", err)
+		return nil, 0, fmt.Errorf("query scim members: %w", err)
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var u string
-		if err := rows.Scan(&u); err != nil {
-			return nil, err
+	defer mrows.Close()
+	for mrows.Next() {
+		var gid, uid string
+		if err := mrows.Scan(&gid, &uid); err != nil {
+			return nil, 0, err
 		}
-		out = append(out, u)
+		out[idx[gid]].Members = append(out[idx[gid]].Members, uid)
 	}
-	return out, rows.Err()
+	return out, total, mrows.Err()
 }
 
 // CreateGroup creates g and the Omega group g.Domain:g.Group it owns.
@@ -335,17 +380,17 @@ func (t *SCIMTx) CreateGroup(g SCIMGroup) (SCIMGroup, error) {
 	}
 	now := time.Now().UTC()
 	g.ID, g.Created, g.Modified = newSCIMID(), now, now
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`INSERT INTO groups(domain, name, description, created_at) VALUES (?, ?, ?, ?)`),
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`INSERT INTO groups(domain, name, description, created_at) VALUES (?, ?, ?, ?)`),
 		g.Domain, g.Group, "provisioned by "+t.idp+" over SCIM", now.UnixNano()); err != nil {
 		if isUniqueViolation(err) {
 			return SCIMGroup{}, ErrAlreadyExists
 		}
 		return SCIMGroup{}, fmt.Errorf("insert group: %w", err)
 	}
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ?`), g.Domain, g.Group); err != nil {
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ?`), g.Domain, g.Group); err != nil {
 		return SCIMGroup{}, fmt.Errorf("clear members: %w", err)
 	}
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`INSERT INTO scim_groups(idp, id, display_name, external_id, domain, grp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`INSERT INTO scim_groups(idp, id, display_name, external_id, domain, grp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
 		t.idp, g.ID, g.DisplayName, g.ExternalID, g.Domain, g.Group, now.UnixNano(), now.UnixNano()); err != nil {
 		return SCIMGroup{}, fmt.Errorf("insert scim group: %w", err)
 	}
@@ -366,21 +411,21 @@ func (t *SCIMTx) ReplaceGroup(g SCIMGroup) (SCIMGroup, error) {
 		if err := ValidateGroupName(g.Group); err != nil {
 			return SCIMGroup{}, err
 		}
-		if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`UPDATE groups SET name = ? WHERE domain = ? AND name = ?`), g.Group, prev.Domain, prev.Group); err != nil {
+		if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`UPDATE groups SET name = ? WHERE domain = ? AND name = ?`), g.Group, prev.Domain, prev.Group); err != nil {
 			if isUniqueViolation(err) {
 				return SCIMGroup{}, ErrAlreadyExists
 			}
 			return SCIMGroup{}, fmt.Errorf("rename group: %w", err)
 		}
-		if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ?`), prev.Domain, prev.Group); err != nil {
+		if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ?`), prev.Domain, prev.Group); err != nil {
 			return SCIMGroup{}, fmt.Errorf("clear members: %w", err)
 		}
 	}
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`UPDATE scim_groups SET display_name = ?, external_id = ?, grp = ?, updated_at = ? WHERE idp = ? AND id = ?`),
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`UPDATE scim_groups SET display_name = ?, external_id = ?, grp = ?, updated_at = ? WHERE idp = ? AND id = ?`),
 		g.DisplayName, g.ExternalID, g.Group, time.Now().UTC().UnixNano(), t.idp, g.ID); err != nil {
 		return SCIMGroup{}, fmt.Errorf("update scim group: %w", err)
 	}
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_members WHERE idp = ? AND group_id = ?`), t.idp, g.ID); err != nil {
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_members WHERE idp = ? AND group_id = ?`), t.idp, g.ID); err != nil {
 		return SCIMGroup{}, fmt.Errorf("clear scim members: %w", err)
 	}
 	if err := t.setMembers(g.ID, g.Members); err != nil {
@@ -395,7 +440,7 @@ func (t *SCIMTx) PatchMembers(groupID string, add, remove []string) error {
 		return err
 	}
 	for _, u := range remove {
-		if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_members WHERE idp = ? AND group_id = ? AND user_id = ?`), t.idp, groupID, u); err != nil {
+		if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_members WHERE idp = ? AND group_id = ? AND user_id = ?`), t.idp, groupID, u); err != nil {
 			return fmt.Errorf("remove scim member: %w", err)
 		}
 	}
@@ -405,7 +450,7 @@ func (t *SCIMTx) PatchMembers(groupID string, add, remove []string) error {
 
 // RemoveAllMembers empties a group.
 func (t *SCIMTx) RemoveAllMembers(groupID string) error {
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_members WHERE idp = ? AND group_id = ?`), t.idp, groupID); err != nil {
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`DELETE FROM scim_members WHERE idp = ? AND group_id = ?`), t.idp, groupID); err != nil {
 		return fmt.Errorf("clear scim members: %w", err)
 	}
 	t.touched[groupID] = true
@@ -420,7 +465,7 @@ func (t *SCIMTx) setMembers(groupID string, users []string) error {
 			}
 			return err
 		}
-		if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`INSERT INTO scim_members(idp, group_id, user_id) VALUES (?, ?, ?) ON CONFLICT (idp, group_id, user_id) DO NOTHING`),
+		if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`INSERT INTO scim_members(idp, group_id, user_id) VALUES (?, ?, ?) ON CONFLICT (idp, group_id, user_id) DO NOTHING`),
 			t.idp, groupID, u); err != nil {
 			return fmt.Errorf("insert scim member: %w", err)
 		}
@@ -444,7 +489,7 @@ func (t *SCIMTx) DeleteGroup(id string) error {
 		{`DELETE FROM scim_members WHERE idp = ? AND group_id = ?`, []any{t.idp, id}},
 		{`DELETE FROM scim_groups WHERE idp = ? AND id = ?`, []any{t.idp, id}},
 	} {
-		if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(q.sql), q.args...); err != nil {
+		if _, err := t.q.ExecContext(t.ctx, t.s.rebind(q.sql), q.args...); err != nil {
 			return fmt.Errorf("delete scim group: %w", err)
 		}
 	}
@@ -462,10 +507,10 @@ func (t *SCIMTx) syncGroup(id string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ?`), g.Domain, g.Group); err != nil {
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`DELETE FROM group_members WHERE domain = ? AND grp = ?`), g.Domain, g.Group); err != nil {
 		return fmt.Errorf("clear members: %w", err)
 	}
-	if _, err := t.tx.ExecContext(t.ctx, t.s.rebind(`INSERT INTO group_members(domain, grp, principal, expires_at)
+	if _, err := t.q.ExecContext(t.ctx, t.s.rebind(`INSERT INTO group_members(domain, grp, principal, expires_at)
 		SELECT DISTINCT CAST(? AS TEXT), CAST(? AS TEXT), u.principal, 0 FROM scim_members m JOIN scim_users u ON u.idp = m.idp AND u.id = m.user_id
 		WHERE m.idp = ? AND m.group_id = ? AND u.active = 1`),
 		g.Domain, g.Group, t.idp, id); err != nil {

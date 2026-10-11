@@ -39,7 +39,9 @@ In the provider, set the SCIM base URL to `https://<omega>/scim/v2/corp` and the
 | `name` | The provider's name: the URL segment, the audit actor `scim:<name>` and the `{idp}` placeholder |
 | `domain` | The domain the provider's groups are created in; it must exist |
 | `token-file` | File holding the bearer token, at least 32 characters |
-| `template` | SPIFFE ID template with `{idp}`, `{externalId}` and `{userName}`; it must use `{externalId}` or `{userName}`, and `{idp}` when more than one provider is configured |
+| `template` | SPIFFE ID template with `{idp}`, `{externalId}` and `{userName}`. It must stay in the local trust domain, start its path with a fixed segment, use `{externalId}` or `{userName}`, and use `{idp}` (ahead of the other two) when more than one provider is configured |
+
+Each value substituted into the template must be exactly one SPIFFE ID path segment (letters, digits, `.`, `-` and `_`), so a user name such as `alice@corp.example` cannot be used with `{userName}`, and a `/` cannot move a user into another part of the tree. Give each provider a domain of its own: it can claim any free group name there, including one a policy already names.
 
 The provider must reach a listener that does not require a client certificate: use `--client-cert-optional` or route `/scim/` through a separate ingress.
 
@@ -70,7 +72,7 @@ Each change and its audit row are committed in one transaction, so nothing is ap
 
 ## Supported SCIM
 
-`Users` and `Groups` support create, read, replace (`PUT`), `PATCH` (`add`, `remove`, `replace`, with or without a path, including `members[value eq "..."]`) and delete, plus `ServiceProviderConfig`, `ResourceTypes` and `Schemas`. Lists accept `filter` of the form `<attribute> eq "<value>"` on `userName` (case-insensitive) and `externalId` for users, `displayName` and `externalId` for groups, and `startIndex` / `count` paging (at most 1000 per page). `excludedAttributes=members` is honoured for groups. Attributes Omega does not keep, such as `name` or `emails`, are accepted and ignored. Bulk, sorting and ETags are not offered.
+`Users` and `Groups` support create, read, replace (`PUT`), `PATCH` (`add`, `remove`, `replace`, with or without a path, including `members[value eq "..."]`) and delete, plus `ServiceProviderConfig`, `ResourceTypes` and `Schemas`. Lists accept `filter` of the form `<attribute> eq "<value>"` on `userName` (case-insensitive) and `externalId` for users, `displayName` and `externalId` for groups, and `startIndex` / `count` paging (at most 1000 per page). `excludedAttributes=members` is honoured for groups. Attributes Omega does not keep, such as `name` or `emails`, are accepted and ignored. Bulk, sorting and ETags are not offered. One request may name at most 1000 members and one `PATCH` at most 100 operations (`tooMany` otherwise). Lists and gets do not take the write lock, so a provider's periodic full sync does not hold up other writes.
 
 ## What to know
 

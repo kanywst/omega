@@ -396,3 +396,41 @@ func TestSCIMGroupInAMissingDomain(t *testing.T) {
 		t.Fatalf("missing domain: %d %v", code, body)
 	}
 }
+
+func TestSCIMBoundsRequestCost(t *testing.T) {
+	e := newSCIMEnv(t)
+	_, g := e.do(t, "POST", "/Groups", map[string]any{"displayName": "Engineering"})
+	gID := g["id"].(string)
+
+	// A path-less value may not nest another path-less value.
+	nested := map[string]any{"": map[string]any{"": map[string]any{"displayName": "x"}}}
+	if code, body := e.do(t, "PATCH", "/Groups/"+gID, patchOp(map[string]any{"op": "add", "value": nested})); code != http.StatusBadRequest {
+		t.Errorf("nested path-less value: %d %v", code, body)
+	}
+	many := make([]map[string]string, 1001)
+	for i := range many {
+		many[i] = map[string]string{"value": "u"}
+	}
+	if code, body := e.do(t, "POST", "/Groups", map[string]any{"displayName": "Big", "members": many}); code != http.StatusBadRequest || body["scimType"] != "tooMany" {
+		t.Errorf("too many members: %d %v", code, body)
+	}
+	if code, _ := e.do(t, "PUT", "/Groups/"+gID, map[string]any{"displayName": "Engineering", "members": many}); code != http.StatusBadRequest {
+		t.Errorf("too many members on PUT: %d", code)
+	}
+	ops := make([]map[string]any, 101)
+	for i := range ops {
+		ops[i] = map[string]any{"op": "replace", "path": "displayName", "value": "Engineering"}
+	}
+	if code, body := e.do(t, "PATCH", "/Groups/"+gID, patchOp(ops...)); code != http.StatusBadRequest || body["scimType"] != "tooMany" {
+		t.Errorf("too many ops: %d %v", code, body)
+	}
+}
+
+func TestSCIMTemplateValuesAreOneSegment(t *testing.T) {
+	e := newSCIMEnv(t)
+	for _, ext := range []string{"a/b", "..", "."} {
+		if code, _ := e.do(t, "POST", "/Users", map[string]any{"userName": "u" + ext, "externalId": ext}); code != http.StatusBadRequest {
+			t.Errorf("externalId %q: %d", ext, code)
+		}
+	}
+}

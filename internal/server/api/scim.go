@@ -50,6 +50,11 @@ const (
 	scimPatchSchema = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 	scimErrSchema   = "urn:ietf:params:scim:api:messages:2.0:Error"
 	scimMaxResults  = 1000
+	// scimMaxMembers caps the members one request may name, and
+	// scimMaxOps the operations in one PATCH, so a single request has a
+	// bounded cost while it holds the write transaction.
+	scimMaxMembers = 1000
+	scimMaxOps     = 100
 )
 
 // scimHandler resolves the provider, checks its bearer token and runs h.
@@ -101,8 +106,14 @@ func scimJSON(w http.ResponseWriter, code int, v any) {
 
 // scimStoreError maps a storage error to a SCIM error response.
 func scimStoreError(w http.ResponseWriter, err error) {
-	var bad *scimBadRequest
+	var (
+		bad *scimBadRequest
+		cfg *scimConfigError
+	)
 	switch {
+	case errors.As(err, &cfg):
+		slog.Error("scim: provider misconfigured", "err", err)
+		scimError(w, http.StatusInternalServerError, "", cfg.Error())
 	case errors.As(err, &bad):
 		scimError(w, http.StatusBadRequest, bad.scimType, bad.msg)
 	case errors.Is(err, storage.ErrNotFound):
@@ -116,11 +127,17 @@ func scimStoreError(w http.ResponseWriter, err error) {
 		scimError(w, http.StatusServiceUnavailable, "", "not the leader")
 	default:
 		slog.Error("scim: request failed", "err", err)
-		scimError(w, http.StatusInternalServerError, "", err.Error())
+		scimError(w, http.StatusInternalServerError, "", "internal error")
 	}
 }
 
 type scimBadRequest struct{ scimType, msg string }
+
+// scimConfigError is a server-side misconfiguration whose message is
+// safe, and useful, to show the provider.
+type scimConfigError struct{ msg string }
+
+func (e *scimConfigError) Error() string { return e.msg }
 
 func (e *scimBadRequest) Error() string { return e.msg }
 
@@ -214,6 +231,15 @@ func scimBase(r *http.Request, cfg SCIMConfig) string {
 
 // --- filters and paging ---
 
+// spiffeSegmentChars are the characters a SPIFFE ID path segment may use.
+var spiffeSegmentChars = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// oneSegment reports whether v is exactly one SPIFFE ID path segment, so
+// a template value cannot move a user into another part of the tree.
+func oneSegment(v string) bool {
+	return v != "." && v != ".." && spiffeSegmentChars.MatchString(v)
+}
+
 var scimFilter = regexp.MustCompile(`(?i)^\s*([A-Za-z.]+)\s+eq\s+"((?:[^"\\]|\\.)*)"\s*$`)
 
 // parseFilter supports `<attr> eq "<value>"` on the attributes allowed.
@@ -237,38 +263,28 @@ func parseFilter(f string, allowed ...string) (attr, value string, err error) {
 	return "", "", &scimBadRequest{"invalidFilter", fmt.Sprintf("cannot filter by %q", m[1])}
 }
 
-// page applies startIndex (1-based) and count.
-func page[T any](r *http.Request, items []T) ([]T, int, int, error) {
-	start, count := 1, scimMaxResults
+// paging reads startIndex (1-based) and count.
+func paging(r *http.Request) (start, count int, err error) {
+	start, count = 1, scimMaxResults
 	if v := r.URL.Query().Get("startIndex"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, 0, 0, badValue("startIndex must be an integer")
+			return 0, 0, badValue("startIndex must be an integer")
 		}
 		start = max(n, 1)
 	}
 	if v := r.URL.Query().Get("count"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, 0, 0, badValue("count must be an integer")
+			return 0, 0, badValue("count must be an integer")
 		}
 		count = min(max(n, 0), scimMaxResults)
 	}
-	total := len(items)
-	if start > total {
-		return nil, total, start, nil
-	}
-	end := min(start-1+count, total)
-	return items[start-1 : end], total, start, nil
+	return start, count, nil
 }
 
-func writeSCIMList[T any](w http.ResponseWriter, r *http.Request, items []T) {
-	pageItems, total, start, err := page(r, items)
-	if err != nil {
-		scimStoreError(w, err)
-		return
-	}
-	body := scimList(pageItems, start)
+func writeSCIMList[T any](w http.ResponseWriter, items []T, total, start int) {
+	body := scimList(items, start)
 	body["totalResults"] = total
 	scimJSON(w, http.StatusOK, body)
 }
@@ -308,6 +324,11 @@ func (s *Server) principalFor(cfg SCIMConfig, u storage.SCIMUser) (string, error
 	if strings.Contains(cfg.Template, "{externalId}") && u.ExternalID == "" {
 		return "", badValue("externalId is required: this provider maps users to SPIFFE IDs by externalId")
 	}
+	for attr, v := range map[string]string{"externalId": u.ExternalID, "userName": u.UserName} {
+		if strings.Contains(cfg.Template, "{"+attr+"}") && !oneSegment(v) {
+			return "", badValue("%s %q cannot be one SPIFFE ID path segment (letters, digits, '.', '-' and '_' only)", attr, v)
+		}
+	}
 	id := strings.NewReplacer("{idp}", cfg.Name, "{externalId}", u.ExternalID, "{userName}", u.UserName).Replace(cfg.Template)
 	sid, err := spiffeid.FromString(id)
 	if err != nil {
@@ -325,10 +346,18 @@ func (s *Server) scimListUsers(w http.ResponseWriter, r *http.Request, cfg SCIMC
 		scimStoreError(w, err)
 		return
 	}
-	var users []storage.SCIMUser
-	if err := s.scimRun(r, cfg, func(t *storage.SCIMTx) (storage.AuditEvent, error) {
-		users, err = t.ListUsers(attr, value)
-		return storage.AuditEvent{}, err
+	start, count, err := paging(r)
+	if err != nil {
+		scimStoreError(w, err)
+		return
+	}
+	var (
+		users []storage.SCIMUser
+		total int
+	)
+	if err := s.store.SCIMRead(r.Context(), cfg.Name, func(t *storage.SCIMTx) error {
+		users, total, err = t.ListUsers(attr, value, start-1, count)
+		return err
 	}); err != nil {
 		scimStoreError(w, err)
 		return
@@ -337,15 +366,15 @@ func (s *Server) scimListUsers(w http.ResponseWriter, r *http.Request, cfg SCIMC
 	for i, u := range users {
 		out[i] = userJSON(r, cfg, u)
 	}
-	writeSCIMList(w, r, out)
+	writeSCIMList(w, out, total, start)
 }
 
 func (s *Server) scimGetUser(w http.ResponseWriter, r *http.Request, cfg SCIMConfig) {
 	var u storage.SCIMUser
-	if err := s.scimRun(r, cfg, func(t *storage.SCIMTx) (storage.AuditEvent, error) {
+	if err := s.store.SCIMRead(r.Context(), cfg.Name, func(t *storage.SCIMTx) error {
 		var err error
 		u, err = t.GetUser(r.PathValue("id"))
-		return storage.AuditEvent{}, err
+		return err
 	}); err != nil {
 		scimStoreError(w, err)
 		return
@@ -406,6 +435,10 @@ func decodePatch(w http.ResponseWriter, r *http.Request) (scimPatch, bool) {
 	}
 	if !slices.Contains(p.Schemas, scimPatchSchema) || len(p.Operations) == 0 {
 		scimError(w, http.StatusBadRequest, "invalidSyntax", "a PatchOp with at least one operation is required")
+		return p, false
+	}
+	if len(p.Operations) > scimMaxOps {
+		scimError(w, http.StatusBadRequest, "tooMany", fmt.Sprintf("at most %d operations per PATCH", scimMaxOps))
 		return p, false
 	}
 	return p, true
@@ -591,12 +624,15 @@ func GroupNameFromDisplay(display string) (string, error) {
 	return name, nil
 }
 
-func memberIDs(ms []scimMember) []string {
+func memberIDs(ms []scimMember) ([]string, error) {
+	if len(ms) > scimMaxMembers {
+		return nil, &scimBadRequest{"tooMany", fmt.Sprintf("at most %d members per request", scimMaxMembers)}
+	}
 	out := make([]string, 0, len(ms))
 	for _, m := range ms {
 		out = append(out, m.Value)
 	}
-	return out
+	return out, nil
 }
 
 func excludesMembers(r *http.Request) bool {
@@ -614,27 +650,36 @@ func (s *Server) scimListGroups(w http.ResponseWriter, r *http.Request, cfg SCIM
 		scimStoreError(w, err)
 		return
 	}
-	var groups []storage.SCIMGroup
-	if err := s.scimRun(r, cfg, func(t *storage.SCIMTx) (storage.AuditEvent, error) {
-		groups, err = t.ListGroups(attr, value)
-		return storage.AuditEvent{}, err
+	start, count, err := paging(r)
+	if err != nil {
+		scimStoreError(w, err)
+		return
+	}
+	withMembers := !excludesMembers(r)
+	var (
+		groups []storage.SCIMGroup
+		total  int
+	)
+	if err := s.store.SCIMRead(r.Context(), cfg.Name, func(t *storage.SCIMTx) error {
+		groups, total, err = t.ListGroups(attr, value, start-1, count, withMembers)
+		return err
 	}); err != nil {
 		scimStoreError(w, err)
 		return
 	}
 	out := make([]scimGroupBody, len(groups))
 	for i, g := range groups {
-		out[i] = groupJSON(r, cfg, g, !excludesMembers(r))
+		out[i] = groupJSON(r, cfg, g, withMembers)
 	}
-	writeSCIMList(w, r, out)
+	writeSCIMList(w, out, total, start)
 }
 
 func (s *Server) scimGetGroup(w http.ResponseWriter, r *http.Request, cfg SCIMConfig) {
 	var g storage.SCIMGroup
-	if err := s.scimRun(r, cfg, func(t *storage.SCIMTx) (storage.AuditEvent, error) {
+	if err := s.store.SCIMRead(r.Context(), cfg.Name, func(t *storage.SCIMTx) error {
 		var err error
 		g, err = t.GetGroup(r.PathValue("id"))
-		return storage.AuditEvent{}, err
+		return err
 	}); err != nil {
 		scimStoreError(w, err)
 		return
@@ -652,12 +697,17 @@ func (s *Server) scimCreateGroup(w http.ResponseWriter, r *http.Request, cfg SCI
 		scimStoreError(w, err)
 		return
 	}
-	g := storage.SCIMGroup{DisplayName: body.DisplayName, ExternalID: body.ExternalID, Domain: cfg.Domain, Group: name, Members: memberIDs(body.Members)}
+	members, err := memberIDs(body.Members)
+	if err != nil {
+		scimStoreError(w, err)
+		return
+	}
+	g := storage.SCIMGroup{DisplayName: body.DisplayName, ExternalID: body.ExternalID, Domain: cfg.Domain, Group: name, Members: members}
 	if err := s.scimRun(r, cfg, func(t *storage.SCIMTx) (storage.AuditEvent, error) {
 		var err error
 		if g, err = t.CreateGroup(g); err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
-				return storage.AuditEvent{}, fmt.Errorf("domain %q configured for SCIM provider %q does not exist", cfg.Domain, cfg.Name)
+				return storage.AuditEvent{}, &scimConfigError{fmt.Sprintf("domain %q configured for SCIM provider %q does not exist", cfg.Domain, cfg.Name)}
 			}
 			return storage.AuditEvent{}, err
 		}
@@ -680,6 +730,11 @@ func (s *Server) scimReplaceGroup(w http.ResponseWriter, r *http.Request, cfg SC
 		scimStoreError(w, err)
 		return
 	}
+	members, err := memberIDs(body.Members)
+	if err != nil {
+		scimStoreError(w, err)
+		return
+	}
 	var g storage.SCIMGroup
 	if err := s.scimRun(r, cfg, func(t *storage.SCIMTx) (storage.AuditEvent, error) {
 		prev, err := t.GetGroup(r.PathValue("id"))
@@ -687,7 +742,7 @@ func (s *Server) scimReplaceGroup(w http.ResponseWriter, r *http.Request, cfg SC
 			return storage.AuditEvent{}, err
 		}
 		g = prev
-		g.DisplayName, g.ExternalID, g.Group, g.Members = body.DisplayName, body.ExternalID, name, memberIDs(body.Members)
+		g.DisplayName, g.ExternalID, g.Group, g.Members = body.DisplayName, body.ExternalID, name, members
 		if g, err = t.ReplaceGroup(g); err != nil {
 			return storage.AuditEvent{}, err
 		}
@@ -714,7 +769,7 @@ func (s *Server) scimPatchGroup(w http.ResponseWriter, r *http.Request, cfg SCIM
 		}
 		g = prev
 		for _, op := range p.Operations {
-			if err := s.applyGroupOp(t, &g, strings.ToLower(op.Op), op.Path, op.Value); err != nil {
+			if err := s.applyGroupOp(t, &g, strings.ToLower(op.Op), op.Path, op.Value, false); err != nil {
 				return storage.AuditEvent{}, err
 			}
 		}
@@ -734,13 +789,13 @@ func (s *Server) scimPatchGroup(w http.ResponseWriter, r *http.Request, cfg SCIM
 }
 
 // applyGroupOp applies one PATCH operation to a group.
-func (s *Server) applyGroupOp(t *storage.SCIMTx, g *storage.SCIMGroup, op, path string, raw json.RawMessage) error {
+func (s *Server) applyGroupOp(t *storage.SCIMTx, g *storage.SCIMGroup, op, path string, raw json.RawMessage, nested bool) error {
 	members := func() ([]string, error) {
 		var ms []scimMember
 		if err := json.Unmarshal(raw, &ms); err != nil {
 			return nil, badValue("members must be a list of {\"value\": id}")
 		}
-		return memberIDs(ms), nil
+		return memberIDs(ms)
 	}
 	rename := func(display string) error {
 		name, err := GroupNameFromDisplay(display)
@@ -803,13 +858,13 @@ func (s *Server) applyGroupOp(t *storage.SCIMTx, g *storage.SCIMGroup, op, path 
 			g.ExternalID = v
 		}
 		return rename(g.DisplayName)
-	case path == "" && op != "remove":
+	case path == "" && op != "remove" && !nested:
 		var attrs map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &attrs); err != nil {
 			return badValue("an operation without a path needs an object value")
 		}
 		for k, v := range attrs {
-			if err := s.applyGroupOp(t, g, op, k, v); err != nil {
+			if err := s.applyGroupOp(t, g, op, k, v, true); err != nil {
 				return err
 			}
 		}
@@ -819,14 +874,22 @@ func (s *Server) applyGroupOp(t *storage.SCIMTx, g *storage.SCIMGroup, op, path 
 }
 
 func groupChange(prev, g storage.SCIMGroup) map[string]any {
+	before := make(map[string]bool, len(prev.Members))
+	for _, m := range prev.Members {
+		before[m] = true
+	}
+	after := make(map[string]bool, len(g.Members))
+	for _, m := range g.Members {
+		after[m] = true
+	}
 	added, removed := []string{}, []string{}
 	for _, m := range g.Members {
-		if !slices.Contains(prev.Members, m) {
+		if !before[m] {
 			added = append(added, m)
 		}
 	}
 	for _, m := range prev.Members {
-		if !slices.Contains(g.Members, m) {
+		if !after[m] {
 			removed = append(removed, m)
 		}
 	}
