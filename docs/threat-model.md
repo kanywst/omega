@@ -87,7 +87,7 @@ the project has *not* mitigated are listed under
 [Out of scope](#out-of-scope) so operators can decide for themselves
 whether their environment closes the gap.
 
-### S1 — Spoofing a workload identity to the agent
+### S1: Spoofing a workload identity to the agent
 
 A malicious process on a node connects to `/tmp/omega-agent.sock`
 and asks for an SVID belonging to a different workload.
@@ -117,7 +117,7 @@ and asks for an SVID belonging to a different workload.
   ServiceAccount projected token, EC2 IMDSv2 hash, etc., tracked in
   `ROADMAP.md`).
 
-### S2 — Spoofing the control plane to a workload or peer
+### S2: Spoofing the control plane to a workload or peer
 
 An attacker on the network impersonates `omega server` (or a
 federation peer) and serves forged bundles.
@@ -126,18 +126,18 @@ federation peer) and serves forged bundles.
   are set, and `--client-ca` additionally requires and verifies client
   certificates (mutual TLS), so a workload or peer can authenticate the
   control plane rather than trusting the network. Federation fetches
-  verify the peer's bundle endpoint — see T3.
+  verify the peer's bundle endpoint (see T3).
 - Residual risk: **both are opt-in and default to off.** A deployment
   that leaves them unset serves plaintext HTTP and is exposed to this
   attack exactly as before; the operator is expected to know. Fronting
   the server with a TLS-terminating mesh, ingress, or reverse proxy
   remains a valid alternative.
 
-### S3 — Minting an SVID for an identity you are not entitled to
+### S3: Minting an SVID for an identity you are not entitled to
 
 A client that can reach the control-plane listener posts a CSR to
 `POST /v1/svid` asserting any `spiffe_id` it likes, and receives a
-valid SVID for another workload's identity — the control plane as an
+valid SVID for another workload's identity: the control plane as an
 open CA. This is the threat the startup warning names.
 
 - Mitigation: `--require-auth` binds every write / PDP / issuance
@@ -154,12 +154,12 @@ open CA. This is the threat the startup warning names.
   set it hands out any identity to anyone who can open a socket. Omega
   prints a warning at startup in that configuration. Reaching the
   listener is therefore part of the trust boundary until the flag is
-  set — bind to loopback or a private network in the meantime.
+  set; bind to loopback or a private network in the meantime.
 - Out-of-tree mitigation: restrict who can reach `--http-addr` at the
   network layer (NetworkPolicy, security group, mesh authorization).
 - `--client-cert-optional` ([ADR 0012](adr/0012-optional-client-certificates.md)) moves the client-certificate requirement from the handshake to the gated routes: they still require a verified SVID, while the ungated routes become reachable without one (`GET /healthz`, `GET /v1/leader`, `GET /v1/domains` and `GET /v1/domains/{name}` (domain data), `GET /v1/bundle`, `GET /v1/spiffe-bundle`, `GET /v1/jwt/bundle`, `GET /v1/federation/bundles` (federation peers), the `/.well-known/` discovery documents, `GET /metrics`, and the enrollment paths `POST /v1/attest/k8s` and `POST /v1/oidc/exchange`), including their audit deny rows and TokenReview calls. It is refused without `--require-auth`.
 
-### T1 — Tampering with the audit log
+### T1: Tampering with the audit log
 
 An attacker with database access edits or deletes audit rows to
 hide an authorization decision or an SVID issuance.
@@ -177,7 +177,7 @@ hide an authorization decision or an SVID issuance.
   detects tail truncation and forged key downgrades against an
   optional `(expected_head, expected_count)` anchor.
 - Residual risk: **the key is opt-in.** Without it the chain falls
-  back to unkeyed SHA-256, which is tamper-*evident* only — an
+  back to unkeyed SHA-256, which is tamper-*evident* only: an
   attacker with database write access can rewrite every subsequent row
   to keep the chain valid, and only an external verifier holding a
   previously-published anchor will detect it. Keeping the key file
@@ -187,7 +187,7 @@ hide an authorization decision or an SVID issuance.
   store (S3 Object Lock, Splunk Indexer with frozen retention, etc.)
   via `audit.Pump`'s webhook or OTLP forwarder.
 
-### T2 — Tampering with policy in the database
+### T2: Tampering with policy in the database
 
 An attacker with database write access modifies the Cedar policy
 set to permit an action that should be denied.
@@ -205,7 +205,7 @@ set to permit an action that should be denied.
   tree under version control, which moves T2 from "DB attack" to
   "VCS attack".
 
-### T3 — Tampering with the trust bundle exchanged with a peer
+### T3: Tampering with the trust bundle exchanged with a peer
 
 A federation peer (or someone impersonating one) advertises a
 modified trust bundle so SVIDs from the attacker's domain are
@@ -226,14 +226,14 @@ trusted.
   as good as the web-PKI roots in play; `https_spiffe` avoids that at
   the cost of seeding the peer's bundle out of band.
 
-### T4 — Tampering with or bypassing local decisions
+### T4: Tampering with or bypassing local decisions
 
 An attacker on a node feeds the local PDP a different policy, keeps it deciding after a revocation, or makes it decide without the decision reaching the audit chain.
 
 - Mitigation today: the local PDP only runs against an `https` control plane with a pinned `--server-ca` and a client SVID, only loads a bundle for its own trust domain, refuses a bundle whose content does not match its revision, refuses to decide once its last sync is older than `--policy-max-age`, and refuses while `--decision-buffer` decisions are unrecorded. Its endpoint binds loopback unless `--local-pdp-allow-remote`. The server serves the bundle and records decisions only under `--require-auth` for callers listed with `--decision-recorder`, as `access.evaluate.local` with the caller as actor ([ADR 0016](adr/0016-local-policy-decisions.md)).
 - Residual risk: a node cut off from the control plane keeps deciding with its last bundle for up to `--policy-max-age`, so a revocation can reach it that late. Queued decisions are lost, unrecorded and without a loss report, if the agent is killed or crashes before a flush; only a normal shutdown flushes them. A listed recorder can write rows with any content under its own name, and there is no per-recorder rate limit. The revision is a content hash, not a signature, so a bundle's integrity rests on TLS. Root on the node can replace the agent altogether.
 
-### R1 — Repudiating an authorization decision
+### R1: Repudiating an authorization decision
 
 A workload (or operator) denies that a given allow / deny decision
 was theirs.
@@ -248,7 +248,7 @@ was theirs.
   identity. Authentication of the caller is the deployment's
   responsibility (S2 above).
 
-### I1 — Information disclosure of CA / JWT signing keys
+### I1: Information disclosure of CA / JWT signing keys
 
 An attacker reads `--data-dir` and exfiltrates the CA root key or
 the JWT signing key.
@@ -264,7 +264,7 @@ the JWT signing key.
   step-ca, AWS Private CA, GCP CAS, Azure Key Vault) are tracked in
   `ROADMAP.md`. With those, the CA root never leaves the KMS.
 
-### I2 — Information disclosure via audit log content
+### I2: Information disclosure via audit log content
 
 The audit log payload column carries decision context, which can
 include resource identifiers and contextual attributes.
@@ -276,7 +276,7 @@ include resource identifiers and contextual attributes.
   authentication leaks decision metadata to anyone who can reach
   the listener. Operators must front the API with auth.
 
-### D1 — Denial of service via SVID issuance flood
+### D1: Denial of service via SVID issuance flood
 
 An attacker (or a misbehaving workload) requests SVIDs at a high
 rate, exhausting CA throughput or filling the audit log.
@@ -291,7 +291,7 @@ rate, exhausting CA throughput or filling the audit log.
   deployment-time answer (ingress rate limit) is a known good
   pattern.
 
-### D2 — Denial of service via Postgres leader thrash
+### D2: Denial of service via Postgres leader thrash
 
 Two replicas fight over the advisory lock and neither stays
 leader long enough to accept writes.
@@ -305,7 +305,7 @@ leader long enough to accept writes.
   client repeatedly can force lock churn. Mitigation is database
   access control.
 
-### E1 — Elevation of privilege via policy bug
+### E1: Elevation of privilege via policy bug
 
 A Cedar policy is written incorrectly and grants a workload more
 than the operator intended.
@@ -320,7 +320,7 @@ than the operator intended.
   `examples/mcp-a2a-delegation/` directories carry policy fixtures
   that can be used as starting points.
 
-### E2 — Elevation of privilege via token-exchange chain forgery
+### E2: Elevation of privilege via token-exchange chain forgery
 
 A workload presents an `actor_token` that is *not* the workload's
 own SVID and asks for a delegated token in someone else's name.
@@ -334,26 +334,33 @@ own SVID and asks for a delegated token in someone else's name.
   not supported today.
 - Sender-constrained tokens: a subject or actor token carrying `cnf` is exchanged only with its proof of possession, a DPoP proof for `cnf.jkt` or the matching client certificate for `cnf.x5t#S256` ([ADR 0013](adr/0013-dpop-sender-constrained-tokens.md)).
 
-### E3 — Elevation of privilege via a forged or misdirected ID-JAG
+### E3: Elevation of privilege via a forged or misdirected ID-JAG
 
 A client presents an ID-JAG that was minted for another client, another authorization server, or not as a grant at all (an ID token), to obtain a token in a user's name.
 
 - Mitigation today: `POST /oauth2/token` requires client authentication by SPIFFE ID and an ID-JAG whose `client_id` equals it, whose single `aud` is Omega's issuer, whose JOSE `typ` is `oauth-id-jag+jwt`, and whose signature verifies against an IdP trusted with `--id-jag-idp`. Under `--require-auth` the client is the verified mTLS X.509-SVID, or with `--client-cert-optional` a short-lived JWT-SVID client assertion that is single use within one process lifetime (a restart or failover forgets used `jti`s, bounded by the assertion lifetime). Every grant is evaluated by Cedar under its own action (`token.id_jag`) with default deny, and the token is released only after its grant is on the audit chain. The issued token is capped at the ID-JAG's lifetime, its audience comes only from the ID-JAG's `resource`, and every grant and every refusal from an authenticated client is audited ([ADR 0011](adr/0011-id-jag-authorization-grant.md)).
 - Residual risk: with `--id-jag-insecure-client-binding` (no `--require-auth`) the client binding does not hold, because any caller can mint the client's JWT-SVID; the server refuses this mode unless that flag is set, and warns when it is. With it, a stolen ID-JAG is still usable by its bound client until it expires, because `jti` is not tracked (the draft allows re-presentation). A DPoP-bound ID-JAG needs a proof for its key, and the issued token stays bound to it ([ADR 0013](adr/0013-dpop-sender-constrained-tokens.md)). The IdP's own decision on which client may act for which user is trusted as-is.
 
-### E4 — Elevation of privilege across the domain tree
+### E4: Elevation of privilege across the domain tree
 
 A principal that administers one domain tries to create, delete or grant admins on a domain outside its subtree, or to make itself a root admin.
 
 - Mitigation today: under `--require-auth` every domain write is authorized against the target's admin chain (the domain and its ancestors) and the `--domain-root-admin` list, using the caller's verified SPIFFE ID. Creating or deleting a domain is authorized against its parent, so a domain's own admins cannot delete it. Every write and every refused attempt is audited with the caller as actor, and only local-trust-domain SPIFFE IDs are placed in a domain, so a federated peer cannot satisfy `principal in Domain::"..."` ([ADR 0014](adr/0014-domain-hierarchy-and-delegation.md)).
 - Residual risk: revoking a principal on a domain does not revoke grants it holds on domains below it; operators must revoke each grant. Without `--require-auth` domain writes are open. `principal in Domain::"..."` policies trust the SPIFFE ID path, so an identity minted under a domain's path is in that domain, which is why issuance must be authenticated too (S3). A delegated admin can delete a leaf domain and so take its workloads out of a central `forbid` written against that domain. Domain admins do not control which SVIDs are issued under their path; issuance and attestation do. A domain created on one replica can be missing on another for up to five seconds, and evaluation fails closed (`503`) once the tree has not reloaded for fifteen seconds. Anyone who can create `OmegaDomain` objects acts with the operator's domain authority.
 
-### E5 — Elevation of privilege through group membership
+### E5: Elevation of privilege through group membership
 
 A principal adds itself, or a principal it controls, to a group that a policy trusts, or keeps a temporary membership past its end.
 
 - Mitigation today: group writes are authorized against the owning domain's admin chain under `--require-auth`, and every change and refused attempt is audited. Membership expiry is checked at evaluation time, so a lapsed membership stops counting at once on every replica ([ADR 0015](adr/0015-groups-with-expiring-membership.md)).
 - Residual risk: a domain's admins control who is in its groups, so a policy that trusts `Group::"media:..."` trusts the media admins. Groups accept federated SPIFFE IDs when an admin lists them. A removal reaches other replicas within the five-second reload interval. Expiry ends a membership for PDP decisions at once, but a token issued while it was active stays valid until the token itself expires.
+
+### E6: Elevation of privilege through SCIM provisioning
+
+Someone who holds or steals a provider's SCIM token adds principals to the provider's groups, or maps a user onto a SPIFFE ID they control.
+
+- Mitigation today: each provider has its own bearer token (stored hashed, compared in constant time, at least 32 characters) and can only touch users and groups under its own `/scim/v2/<name>/`, in its own domain. User SPIFFE IDs come from the operator's template, which must start with a fixed segment and, with more than one provider, include `{idp}` ahead of the user's attributes; each substituted value must be a single path segment, and the result must be in the local trust domain, so one provider cannot claim another's users or a workload's ID. Requests are bounded (1000 members, 100 PATCH operations), and reads do not take the write lock. Every change is committed with its audit row in one transaction, actor `scim:<name>` ([ADR 0017](adr/0017-scim-provisioning.md)).
+- Residual risk: the token is a long-lived static secret, so its holder controls the provider's groups until it is rotated. A policy that trusts a provisioned group trusts the provider. A provider can claim any free group name in its domain, including one a policy already names, so give each provider its own domain. Failed token checks are logged, not audited, and are not rate limited.
 
 ## Out of scope
 

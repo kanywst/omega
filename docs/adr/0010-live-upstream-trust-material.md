@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-[ADR 0009](0009-upstream-trust-material-reload.md) made the `spire-upstream` source rotatable: `Reload` swaps a validated generation of trust material behind an `atomic.Pointer`, `spiffe_sequence` advances only on a real change, and a rejected generation leaves the previous one serving. It did not settle who supplies the new bytes. The only transport is a pair of files plus SIGHUP, and ADR 0009 named the residual gap: "an operator who rotates without signalling is still stale — the failure mode is narrowed, not removed."
+[ADR 0009](0009-upstream-trust-material-reload.md) made the `spire-upstream` source rotatable: `Reload` swaps a validated generation of trust material behind an `atomic.Pointer`, `spiffe_sequence` advances only on a real change, and a rejected generation leaves the previous one serving. It did not settle who supplies the new bytes. The only transport is a pair of files plus SIGHUP, and ADR 0009 named the residual gap: "an operator who rotates without signalling is still stale; the failure mode is narrowed, not removed."
 
 That gap is where the deployment work lands. SPIRE already publishes its current trust bundle over the SPIFFE Workload API and updates the stream when the CA or the JWT signing key rolls. Reading it from a file leaves the operator to build the missing half: a sidecar that watches SPIRE, writes two files atomically, and signals Omega. That machinery is outside the charter, is rewritten per deployment, and when it dies quietly the result is the delayed failure ADR 0009 exists to prevent, this time caused by a stalled copy loop rather than by a boot-time snapshot.
 
@@ -23,9 +23,9 @@ The `spire-upstream` source gains a second transport. `--identity-source-workloa
 - The X.509 and JWT watches run independently, so a reader can briefly see a new X.509 bundle beside the previous JWKS. Both halves are valid anchors and the other update follows, so the pair is mixed rather than invalid. Synchronising them would stall one rotation behind the other for no gain.
 - A watch that ends in error is restarted after a fixed delay and logged. go-spiffe retries transient stream errors itself; this covers the case where it gives up, so a permanently failing upstream keeps complaining instead of freezing the trust material silently.
 - The boot fetch is a bounded one-shot (30s). An endpoint that is not there fails startup with a message naming the address instead of hanging a process that never listens.
-- Only `unix://` addresses are accepted. go-spiffe will dial `tcp://<any address>` with no transport security and no server authentication, and what arrives over that channel becomes Omega's entire root of trust — a strictly weaker boundary than the file transport, which at least requires local write access. The Workload API's security model is kernel-enforced peer credentials over a local socket, which is also what "Omega must be an attested workload of that endpoint" assumes; the rest of the codebase pins `unix://` itself rather than letting a caller choose. A remote transport would need mTLS and its own ADR.
+- Only `unix://` addresses are accepted. go-spiffe will dial `tcp://<any address>` with no transport security and no server authentication, and what arrives over that channel becomes Omega's entire root of trust: a strictly weaker boundary than the file transport, which at least requires local write access. The Workload API's security model is kernel-enforced peer credentials over a local socket, which is also what "Omega must be an attested workload of that endpoint" assumes; the rest of the codebase pins `unix://` itself rather than letting a caller choose. A remote transport would need mTLS and its own ADR.
 
-`--trust-domain` stays explicitly required. The Workload API serves a set of bundles — the local domain plus any federated ones — and Omega publishes exactly one; inferring it could publish a federated peer's anchors as Omega's own.
+`--trust-domain` stays explicitly required. The Workload API serves a set of bundles (the local domain plus any federated ones), and Omega publishes exactly one; inferring it could publish a federated peer's anchors as Omega's own.
 
 Issuance posture is unchanged: no CA, issuance routes still 501.
 
@@ -51,4 +51,4 @@ New obligations:
 
 Rule 3 in [design-philosophy.md](../design-philosophy.md): *"Is it an upstream system Omega depends on but does not own?"*
 
-Yes — the same seam as ADRs 0007, 0008, and 0009. This is a transport for material Omega already consumes. It adds no new surface and no new authority over the upstream.
+Yes: the same seam as ADRs 0007, 0008, and 0009. This is a transport for material Omega already consumes. It adds no new surface and no new authority over the upstream.

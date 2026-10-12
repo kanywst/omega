@@ -11,8 +11,8 @@ Accepted.
 [ADR 0008](0008-upstream-jwt-svid-validation.md) extended it from X.509
 to the full SPIFFE credential set. Both wired the trust material the same
 way: read the file once at boot, hold it for the process lifetime. ADR
-0008 listed the cost under *Harder* — "Rotation is a file swap plus
-restart" — and
+0008 listed the cost under *Harder* ("Rotation is a file swap plus
+restart") and
 [docs/conformance-spiffe.md](../conformance-spiffe.md) recorded the
 matching gap, with `spiffe_sequence` "fixed at 1 until runtime rotation
 ships".
@@ -28,7 +28,7 @@ consumers. The failure is delayed and total:
   every agent rather than any one of them recovering independently.
 - Once the upstream root rolls, Omega is serving a bundle that lacks the
   new anchor. Freshly-issued upstream SVIDs fail to verify. A `kid`
-  rotation produces "jwt signed by unknown kid" — precisely the failure
+  rotation produces "jwt signed by unknown kid", precisely the failure
   ADR 0008 set out to remove, reintroduced by the passage of time instead
   of by misconfiguration.
 - Nothing surfaces at boot or in a health check. The deployment is
@@ -42,7 +42,7 @@ identity.
 ## Decision
 
 The `spire-upstream` source can replace its trust material at runtime,
-driven by **SIGHUP** — the signal the audit keyring already uses for
+driven by **SIGHUP**, the signal the audit keyring already uses for
 rotation, so operators learn one reload mechanism rather than two.
 
 - A new `identity.ReloadableSource` interface adds
@@ -55,8 +55,8 @@ rotation, so operators learn one reload mechanism rather than two.
   swaps the pointer. Readers on the request and validation paths take no
   lock, and a JWT validation pins one generation for its whole duration
   so the `kid` lookup and the signature check cannot straddle a rotation.
-- Reload runs **the same validation as boot** — one shared constructor
-  for the snapshot — and is fail-closed in the strong sense: on any
+- Reload runs **the same validation as boot** (one shared constructor
+  for the snapshot) and is fail-closed in the strong sense: on any
   error the previous generation stays installed. A rotation that would
   replace good anchors with corrupt ones leaves Omega serving the good
   ones. Serving nothing would break every handshake, which is strictly
@@ -72,8 +72,8 @@ rotation, so operators learn one reload mechanism rather than two.
   being served pre-rotation anchors even after the source rotated.
 
 The reload re-reads the files on each signal rather than watching them.
-An operator rotating trust material swaps a file — often two, the bundle
-and the JWKS — and the signal is where they assert the swap is complete.
+An operator rotating trust material swaps a file (often two, the bundle
+and the JWKS), and the signal is where they assert the swap is complete.
 Watching would race a half-written file and a two-file rotation that is
 only half-applied.
 
@@ -97,7 +97,7 @@ Harder:
 
 - Reload is operator-driven. Omega does not poll the files or fetch from
   the upstream's bundle endpoint, so an operator who rotates without
-  signalling is still stale — the failure mode is narrowed, not removed.
+  signalling is still stale; the failure mode is narrowed, not removed.
   Automatic upstream fetch is deliberately not taken here: it would add a
   boot-time and runtime network dependency on the upstream that ADR 0007
   explicitly avoided.
@@ -117,6 +117,6 @@ New obligations:
 Rule 3 in [design-philosophy.md](../design-philosophy.md):
 *"Is it an upstream system Omega depends on but does not own?"*
 
-Yes — same seam as ADRs 0007 and 0008. This makes the consumption of that
+Yes: same seam as ADRs 0007 and 0008. This makes the consumption of that
 upstream correct over time rather than only at boot; it adds no new
 surface of its own.

@@ -10,7 +10,7 @@ Accepted.
 `spire-upstream` source as a non-issuing, validation-only identity
 source: Omega consumes the upstream X.509 trust bundle, runs no CA, and
 applies the authorization + audit layer over upstream-issued SVIDs. It
-deliberately deferred one half of the SPIFFE credential set — JWT-SVIDs.
+deliberately deferred one half of the SPIFFE credential set: JWT-SVIDs.
 In that first cut `JWTBundle` served an empty JWKS so the combined
 SPIFFE bundle document stayed well-formed, and the validation methods
 reported they could not run. ADR 0007 recorded "implement upstream
@@ -35,7 +35,7 @@ X.509 bundle is wired.
   upstream trust domain's JWT bundle (an RFC 7517 JWKS). It is loaded
   from a file at boot with no network dependency, exactly like
   `--identity-source-bundle`. Omitting it keeps upstream consumption
-  X.509-only — the prior behaviour — so existing deployments are
+  X.509-only (the prior behaviour), so existing deployments are
   unaffected.
 - `JWTBundle` now serves the upstream signing keys at `/v1/jwt/bundle`,
   so agents pull them and validate upstream JWT-SVIDs locally, and the
@@ -52,17 +52,17 @@ X.509 bundle is wired.
   of a misleading "issuance unsupported".
 
 Only EC P-256 (ES256) keys are consumed, matching Omega's existing
-JWT-SVID path — issuance, the agent's local validator — and the SPIRE /
-Istio defaults. Keys that are structurally not ours — other key types,
-other curves, or non-signing (`use` other than `sig`) keys — are ignored
+JWT-SVID path (issuance, the agent's local validator) and the SPIRE /
+Istio defaults. Keys that are structurally not ours (other key types,
+other curves, or non-signing (`use` other than `sig`) keys) are ignored
 per RFC 7517 §5, so a heterogeneous upstream JWKS (mixed EC / RSA during
 a key transition, an encryption key beside the signer) stays usable as
 long as it carries at least one EC P-256 signing key. A bundle that
 yields no usable signing key fails at boot rather than serving an empty
 JWKS by surprise.
 
-A *recognised* EC P-256 signing key that cannot be consumed — a bad or
-off-curve coordinate, a missing `kid`, a duplicate `kid` — is a corrupt
+A *recognised* EC P-256 signing key that cannot be consumed (a bad or
+off-curve coordinate, a missing `kid`, a duplicate `kid`) is a corrupt
 trust anchor, not a foreign one, and fails closed at boot rather than
 being silently dropped.
 
@@ -77,8 +77,8 @@ Easier:
 - Upstream JWT-SVIDs now have a working end-to-end path through Omega:
   agents validate them locally against the consumed upstream keys, so
   Human / AI-agent JWT flows can run under `spire-upstream`.
-- The wiring mirrors the X.509 bundle — file-based, no boot-time network
-  dependency — so an operator already running upstream SPIFFE configures
+- The wiring mirrors the X.509 bundle (file-based, no boot-time network
+  dependency), so an operator already running upstream SPIFFE configures
   it with material they have.
 
 Harder:
@@ -88,7 +88,7 @@ Harder:
   plus restart, the same lifecycle as the X.509 bundle.
 - Only EC P-256 is consumed. An upstream domain whose JWT-SVIDs are
   signed with RSA or another curve has those keys ignored, so those
-  tokens cannot be validated until that algorithm support is added — the
+  tokens cannot be validated until that algorithm support is added; the
   JWKS still loads as long as it also carries an EC P-256 signing key.
 
 New obligations:
@@ -102,7 +102,7 @@ New obligations:
 Rule 3 in [design-philosophy.md](../design-philosophy.md):
 *"Is it an upstream system Omega depends on but does not own?"*
 
-Yes — the JWT issuer is the same upstream system ADR 0007 placed in the
+Yes: the JWT issuer is the same upstream system ADR 0007 placed in the
 Plugin seam. This ADR extends that source from X.509-only consumption to
 full SPIFFE credential consumption (X.509 + JWT) without changing the
 non-issuing model.

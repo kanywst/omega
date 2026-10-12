@@ -98,6 +98,9 @@ func (s *Store) DeleteGroup(ctx context.Context, domain, name string) (Group, er
 	if err := s.lockGroupMode(ctx, tx, domain, name, "FOR UPDATE"); err != nil {
 		return Group{}, err
 	}
+	if err := s.refuseManaged(ctx, tx, domain, name); err != nil {
+		return Group{}, err
+	}
 	g := Group{Domain: domain, Name: name}
 	var created int64
 	if err := tx.QueryRowContext(ctx, s.rebind(`SELECT description, created_at FROM groups WHERE domain = ? AND name = ?`), domain, name).Scan(&g.Description, &created); err != nil {
@@ -153,6 +156,9 @@ func (s *Store) PutGroupMember(ctx context.Context, domain, name string, m Group
 	if err := s.lockGroup(ctx, tx, domain, name); err != nil {
 		return nil, err
 	}
+	if err := s.refuseManaged(ctx, tx, domain, name); err != nil {
+		return nil, err
+	}
 	prior, err := s.memberTx(ctx, tx, domain, name, m.Principal)
 	if err != nil {
 		return nil, err
@@ -178,6 +184,9 @@ func (s *Store) RemoveGroupMember(ctx context.Context, domain, name, principal s
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := s.lockGroup(ctx, tx, domain, name); err != nil {
+		return GroupMember{}, err
+	}
+	if err := s.refuseManaged(ctx, tx, domain, name); err != nil {
 		return GroupMember{}, err
 	}
 	prior, err := s.memberTx(ctx, tx, domain, name, principal)
@@ -206,6 +215,9 @@ func (s *Store) SwapGroupMember(ctx context.Context, domain, name, principal str
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := s.lockGroup(ctx, tx, domain, name); err != nil {
+		return err
+	}
+	if err := s.refuseManaged(ctx, tx, domain, name); err != nil {
 		return err
 	}
 	cur, err := s.memberTx(ctx, tx, domain, name, principal)
@@ -245,6 +257,9 @@ func (s *Store) DeleteEmptyGroup(ctx context.Context, domain, name string) error
 		if errors.Is(err, ErrNotFound) {
 			return nil
 		}
+		return err
+	}
+	if err := s.refuseManaged(ctx, tx, domain, name); err != nil {
 		return err
 	}
 	var n int

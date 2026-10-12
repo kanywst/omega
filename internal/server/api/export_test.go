@@ -76,3 +76,8 @@ func (s *Server) FailAuditAfterSyncForTest(kind string) {
 		return errors.New("injected audit failure")
 	}
 }
+
+// FailSCIMForTest makes every SCIM change fail before it commits.
+func (s *Server) FailSCIMForTest() {
+	s.scimFault = func(storage.AuditEvent) error { return errors.New("injected audit failure") }
+}

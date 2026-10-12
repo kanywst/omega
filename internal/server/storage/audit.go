@@ -88,16 +88,35 @@ func (s *Store) AppendAudit(ctx context.Context, ev AuditEvent) (AuditEvent, err
 	if ev.Kind == "" {
 		return AuditEvent{}, errors.New("audit: kind is required")
 	}
+
+	auditMu.Lock()
+	defer auditMu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AuditEvent{}, fmt.Errorf("audit: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	ev, err = s.appendAuditTx(ctx, tx, ev)
+	if err != nil {
+		return AuditEvent{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AuditEvent{}, fmt.Errorf("audit: commit: %w", err)
+	}
+	s.auditCommitted()
+	return ev, nil
+}
+
+// appendAuditTx writes ev inside tx. The caller holds auditMu and
+// commits tx, then calls auditCommitted.
+func (s *Store) appendAuditTx(ctx context.Context, tx *sql.Tx, ev AuditEvent) (AuditEvent, error) {
 	if ev.Ts.IsZero() {
 		ev.Ts = time.Now().UTC()
 	}
 	if ev.Payload == nil {
 		ev.Payload = json.RawMessage("{}")
 	}
-
-	auditMu.Lock()
-	defer auditMu.Unlock()
-
 	// Select the key the row is MAC'd under. With no keyring the chain
 	// stays unkeyed (legacy SHA-256) and records the "unkeyed" sentinel;
 	// with a keyring the active key signs the row. A node must never MAC
@@ -110,17 +129,11 @@ func (s *Store) AppendAudit(ctx context.Context, ev AuditEvent) (AuditEvent, err
 	}
 	ev.KeyID = keyID
 
-	prev, err := s.lastAuditHash(ctx)
+	prev, err := lastAuditHash(ctx, tx)
 	if err != nil {
 		return AuditEvent{}, err
 	}
 	ev.PrevHash = prev
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return AuditEvent{}, fmt.Errorf("audit: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	// `INSERT ... RETURNING seq` works on both SQLite (>= 3.35) and
 	// Postgres, so we avoid driver-specific LastInsertId() (which lib/pq
@@ -161,9 +174,11 @@ func (s *Store) AppendAudit(ctx context.Context, ev AuditEvent) (AuditEvent, err
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return AuditEvent{}, fmt.Errorf("audit: commit: %w", err)
-	}
+	return ev, nil
+}
+
+// auditCommitted runs after a transaction holding an audit row commits.
+func (s *Store) auditCommitted() {
 	// After a committed keyed append the epoch row is guaranteed present
 	// (we just inserted it or it already existed), so later appends can
 	// skip the audit_meta write. Set only post-commit so a rolled-back tx
@@ -171,12 +186,16 @@ func (s *Store) AppendAudit(ctx context.Context, ev AuditEvent) (AuditEvent, err
 	if s.auditKeyring != nil {
 		s.keyedEpochRecorded = true
 	}
-	return ev, nil
 }
 
-func (s *Store) lastAuditHash(ctx context.Context) (string, error) {
+// queryRower is satisfied by *sql.DB and *sql.Tx.
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func lastAuditHash(ctx context.Context, q queryRower) (string, error) {
 	var hash string
-	err := s.db.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1`,
 	).Scan(&hash)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -13,7 +13,7 @@ that vendors the interface from omega and registers itself at
 process start). The mechanics are the same; only the location of
 the code differs.
 
-## Step 1 — pick a Kind name
+## Step 1: pick a Kind name
 
 In [`internal/server/identity/authority.go`](../internal/server/identity/authority.go):
 
@@ -30,7 +30,7 @@ const (
 The string value is what operators will pass to the CLI flag that
 selects backends. Stick to short, kebab-case identifiers.
 
-## Step 2 — extend Config
+## Step 2: extend Config
 
 `identity.Config` is the disjoint-union argument to `New`. Each
 backend reads only the fields relevant to its Kind:
@@ -56,7 +56,7 @@ The `TrustDomain` and `Issuer` fields are shared across every
 backend and are validated by the top of `New` before the Kind
 switch.
 
-## Step 3 — implement the Authority interface
+## Step 3: implement the Authority interface
 
 Create a new file `internal/server/identity/<backend>.go` with a
 struct that satisfies the interface:
@@ -96,7 +96,7 @@ X.509 and JWT issuance); a remote-signer backend will be similar
 in shape with the local `crypto.Signer` replaced by a
 KMS-backed one.
 
-## Step 4 — register in identity.New
+## Step 4: register in identity.New
 
 Extend the `switch` in `identity.New`. The trust domain is parsed
 once at the top of `New` and the OIDC issuer URL is normalised by
@@ -135,7 +135,7 @@ Per-backend required-field validation lives in this case (not
 inside the constructor) so misconfiguration fails at startup
 with a clear message naming the offending Kind.
 
-## Step 5 — CLI wiring
+## Step 5: CLI wiring
 
 `internal/cli/server.go` already exposes the `--issuer-url`,
 `--trust-domain`, and `--data-dir` flags shared across backends.
@@ -168,7 +168,7 @@ if caBackend == string(identity.KindVaultPKI) {
 ca, err := identity.New(caCfg)
 ```
 
-## Step 6 — tests
+## Step 6: tests
 
 Every in-tree backend gets a unit-test file
 `internal/server/identity/<backend>_test.go` that exercises every
@@ -194,7 +194,7 @@ func TestVaultPKIIssueRoundTrip(t *testing.T) {
 }
 ```
 
-## Step 7 — documentation
+## Step 7: documentation
 
 Three places need updating in the same PR:
 

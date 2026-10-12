@@ -9,11 +9,11 @@ does omega implement today" without reading the source.
 
 Status legend:
 
-- **implemented** — omega ships the surface and the existing tests
+- **implemented**: omega ships the surface and the existing tests
   exercise it.
-- **partial** — omega ships some of the surface; gaps are listed in
+- **partial**: omega ships some of the surface; gaps are listed in
   the notes column.
-- **deferred** — the spec section is out of scope for the current
+- **deferred**: the spec section is out of scope for the current
   charter; see [non-goals.md](non-goals.md) when applicable.
 
 Spec versions audited:

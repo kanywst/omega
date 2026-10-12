@@ -11,23 +11,23 @@
 
 ## In-scope today
 
-- Single binary `omega` with subcommands: `server`, `agent`, `domain`, `policy`, `svid`.
-- Self-signed CA on first boot. X.509-SVID and JWT-SVID; 30-minute X.509 validity.
+- Single binary `omega` with subcommands: `server`, `agent`, `operator`, `domain`, `group`, `policy`, `svid`.
+- Self-signed CA on first boot, or Vault PKI / step-ca, or identities consumed from an upstream SPIRE / Istio trust domain. X.509-SVID and JWT-SVID; 30-minute X.509 validity.
   SPIFFE ID format `spiffe://omega.local/<domain-path>/<service>`.
-- SPIFFE Workload API on `/tmp/omega-agent.sock`, UID-based attestation.
-- Cedar engine embedded. OpenID AuthZEN 1.0 PDP API at `POST /access/v1/evaluation`.
+- SPIFFE Workload API on `/tmp/omega-agent.sock`, UID-based attestation; Kubernetes ServiceAccount attestation on the server.
+- Cedar engine embedded. OpenID AuthZEN 1.0 PDP API at `POST /access/v1/evaluation`, also served by the agent from a synced policy bundle.
+- Domain tree with delegated admins, and domain-owned groups with expiring membership.
+- People: OIDC IdP federation and SCIM 2.0 provisioning. Agents: RFC 8693 token exchange and the ID-JAG grant.
 - Storage: SQLite (`<data-dir>/omega.db`) by default; Postgres backend behind `--db postgres://...`.
 - Optional HA: Postgres advisory-lock leader election (`--ha-leader-key`).
-- Audit log with tamper-evident hash chain and webhook forwarding.
+- Audit log with tamper-evident hash chain and webhook / OTLP forwarding.
 - SPIFFE federation via the `--federate-with` flag.
+- Kubernetes: Helm chart, `OmegaDomain` CRD, cert-manager issuer.
 - `examples/hello-svid/` demo (server + client), wired up by `make demo`.
 
 ## Out-of-scope today
 
-K8s CRDs / Operator wiring (separate manifests), CSI driver, OIDC federation
-hub, PQC (ML-DSA), HSM / KMS Authority plugins, AI agent delegation reference
-implementation. See the [GitHub issues](https://github.com/kanywst/omega/issues) for what is
-queued next.
+CSI driver, PQC (ML-DSA), HSM / KMS Authority plugins (AWS Private CA, GCP CAS, Azure Key Vault). See [ROADMAP.md](../ROADMAP.md) for what is queued next.
 
 ## Definition of Done for the demo
 

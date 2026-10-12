@@ -25,6 +25,15 @@ server:
   # local PDP (--decision-recorder): only they may read the policy bundle
   # and record local decisions. Needs --require-auth.
   decisionRecorders: []
+  # Identity providers that provision users and groups over SCIM 2.0
+  # (--scim-idp). Each entry: name, domain (must exist), tokenSecret (a
+  # Secret in this namespace whose "token" key holds the bearer token)
+  # and an optional template. The token is mounted read-only.
+  #   scimProviders:
+  #     - name: corp
+  #       domain: people
+  #       tokenSecret: omega-scim-corp
+  scimProviders: []
   extraArgs: []
   resources:
     limits:

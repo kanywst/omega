@@ -1,6 +1,6 @@
 # Groups: named, delegated, time-bound sets of principals
 
-A group is a named set of SPIFFE IDs owned by a domain. Policies refer to it as `Group::"<domain>:<name>"`, the domain's admins manage it, and a membership can end on its own at a set time. The design decision is [ADR 0015](adr/0015-groups-with-expiring-membership.md); domains and their admins are described in [domains.md](domains.md).
+A group is a named set of SPIFFE IDs owned by a domain. Policies refer to it as `Group::"<domain>:<name>"`, the domain's admins manage it, and a membership can end on its own at a set time. The design decision is [ADR 0015](adr/0015-groups-with-expiring-membership.md); domains and their admins are described in [domains.md](domains.md). Groups can also be pushed from an identity provider over SCIM; see [scim.md](scim.md).
 
 ## Where groups sit
 

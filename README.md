@@ -3,51 +3,42 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/kanywst/omega/badge)](https://scorecard.dev/viewer/?uri=github.com/kanywst/omega)
 [![CodeQL](https://github.com/kanywst/omega/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/kanywst/omega/actions/workflows/codeql.yml)
 
-> SPIFFE-compatible Workload Identity + OpenID AuthZEN 1.0 Authorization in a single binary. Apache-2.0.
+> SPIFFE-compatible workload identity and OpenID AuthZEN 1.0 authorization in a single binary. Apache-2.0.
 
-**Ω - the authorization & audit layer for SPIFFE identities.**
-
-Omega makes the SPIFFE ID a first-class AuthZEN subject — every Service, Human, and AI Agent decision is evaluated against one PDP and recorded in one tamper-evident audit trail. Where SPIFFE/SPIRE stops at issuance, Omega adds the authorization and audit layer on top, packaging SPIFFE-native identity (X.509-SVID / JWT-SVID, Workload API), an AuthZEN 1.0 PDP (Cedar), SPIFFE federation, and the audit log behind one HTTP API and one Workload API socket — SPIRE-compatible, Apache-2.0.
+Omega issues or consumes SPIFFE identities, decides what each one may do with an AuthZEN 1.0 PDP backed by Cedar, and records every decision in a tamper-evident audit log. Services, people and AI agents go through the same policy engine and the same log.
 
 ## Why
 
-The standards landed. The integration didn't.
+SPIFFE and SPIRE are the standard for workload identity, but they stop at issuance; authorization is out of their scope. AuthZEN 1.0 became a Final Specification on 2026-01-12 and there are many PDPs (Aserto, AVP, Axiomatics, Cerbos, EmpowerID, OpenFGA, Permit.io, PingAuthorize, PlainID, SGNL, Topaz, WSO2 and others), but none of them is also the identity provider for the subjects it decides about. Omega puts the two together: the SPIFFE ID is the AuthZEN subject.
 
-- **SPIFFE/SPIRE** is the de-facto workload identity standard but ends at issuance: authorization is explicitly out of scope.
-- **OpenID AuthZEN Authorization API 1.0** was approved as a Final Specification on 2026-01-12 with 15+ PDP implementers (Aserto, AVP, Axiomatics, Cerbos, EmpowerID, OpenFGA, Permit.io, PingAuthorize, PlainID, SGNL, Topaz, WSO2, …). PDPs are abundant; what's missing is a workload identity provider that *natively* speaks AuthZEN as the subject side of every decision.
-- **Cedar** joined CNCF Sandbox on 2025-10-08 and is in production at Cloudflare, MongoDB, StrongDM, AWS Bedrock AgentCore. Omega ships it as the default PDP.
-- **Vault**'s 2023 BUSL relicensing and IBM's 2024 acquisition fragmented the OSS continuity (OpenBao 2.5 under LF, still maturing). Omega stays Apache-2.0, no CLA, no relicensing trapdoor.
-- **OSS workload-identity admin UI is essentially absent**: SPIRE has no console, Vault and Keycloak ship 2010s-era admin panels. Omega's `ui/` dashboard is a first-class deliverable, not an afterthought.
+Cedar joined the CNCF Sandbox on 2025-10-08 and runs in production at Cloudflare, MongoDB, StrongDM and AWS Bedrock AgentCore; Omega uses it as the default PDP. Omega stays Apache-2.0 with no CLA, and ships an admin dashboard (`ui/`), which open-source workload identity tools have mostly lacked.
 
-What Omega ships today:
+## What it does
 
-- **One binary**: `omega server`, `omega agent`, `omega <CRUD>`. One install, one upgrade path
-- **SPIFFE-native**: X.509-SVID and JWT-SVID, Workload API over a Unix socket
-- **Pluggable identity source**: issue your own SVIDs (built-in CA) or **consume identities from an upstream SPIRE / Istio trust domain** (`--identity-source=spire-upstream`), with full authorization and audit over upstream X.509- and JWT-SVIDs and upstream rotations followed live over the SPIFFE Workload API (or on `SIGHUP` when the bundle comes from a file)
-- **AuthZEN 1.0 PDP**: Cedar embedded by default
-- **SPIFFE federation**: trust-bundle exchange via `--federate-with`
-- **K8s integration**: `OmegaDomain` CRD and a cert-manager `Issuer` / `ClusterIssuer`
-- **AI agent delegation**: an `examples/mcp-a2a-delegation/` reference using JWT-SVID with RFC 8693 nested `act` claims, and an ID-JAG grant endpoint (`POST /oauth2/token`) that turns an enterprise IdP's Identity Assertion JWT Authorization Grant into a delegated JWT-SVID ([docs/id-jag.md](docs/id-jag.md))
-- **Delegated domains**: a domain tree (`media` → `media.news`) where each domain's admins run their own subtree, visible to policies as `principal in Domain::"media"` ([docs/domains.md](docs/domains.md)), and groups owned by those domains with time-bound membership, usable as `principal in Group::"media:oncall"` ([docs/groups.md](docs/groups.md))
-- **Local decisions**: the node agent can decide from a synced copy of the policy, keep working through a control-plane outage, and still record every decision centrally ([docs/local-pdp.md](docs/local-pdp.md))
-- **Tamper-evident audit log** with hash chain and webhook forwarding
-- **Modular**: server / agent / CLI run independently
-- **Apache-2.0**, no CLA, no BSL trap door
+| Area | What you get | Docs |
+| --- | --- | --- |
+| Identity | X.509-SVID and JWT-SVID over the SPIFFE Workload API, from the built-in CA, Vault PKI or step-ca, or consumed from an upstream SPIRE / Istio trust domain (`--identity-source=spire-upstream`) | [conformance-spiffe.md](docs/conformance-spiffe.md) |
+| Authorization | AuthZEN 1.0 PDP with Cedar policies | [conformance-authzen.md](docs/conformance-authzen.md) |
+| Domains | A tree of namespaces (`media` → `media.news`) whose admins run their own subtree; policies use `principal in Domain::"media"` | [domains.md](docs/domains.md) |
+| Groups | Groups owned by a domain, with memberships that can expire; policies use `principal in Group::"media:oncall"` | [groups.md](docs/groups.md) |
+| People | OIDC IdP federation, and users and groups pushed from an identity provider over SCIM 2.0 | [scim.md](docs/scim.md) |
+| AI agents | RFC 8693 token exchange with nested `act`, and the ID-JAG grant on `POST /oauth2/token`, optionally DPoP-bound | [id-jag.md](docs/id-jag.md) |
+| Local decisions | The node agent decides from a synced copy of the policy, keeps working through a control-plane outage for a bounded time, and records every decision centrally | [local-pdp.md](docs/local-pdp.md) |
+| Federation | SPIFFE trust bundle exchange (`--federate-with`) | [conformance-spiffe.md](docs/conformance-spiffe.md) |
+| Audit | Hash-chained log with webhook and OTLP forwarding | [observability.md](docs/observability.md) |
+| Kubernetes | Helm chart, `OmegaDomain` CRD, and a cert-manager `Issuer` / `ClusterIssuer` | [charts/omega](charts/omega/README.md) |
+
+One binary runs every role: `omega server`, `omega agent`, `omega operator`, and the CLI (`omega domain`, `omega group`, `omega policy`, `omega svid`).
 
 ## Three subjects, one model
 
-Omega's design treats Service, Human, and AI Agent identities under a single
-authorization model (Cedar via AuthZEN). Implementation status per subject
-today:
+| Subject | Identity | Protocol | Status |
+| --- | --- | --- | --- |
+| Service | X.509-SVID, JWT-SVID | mTLS, AuthZEN PDP | implemented |
+| Person | OIDC, SCIM-provisioned groups | OIDC federation, AuthZEN PDP | implemented |
+| AI agent | JWT-SVID with a delegation chain | RFC 8693 token exchange, ID-JAG grant, AuthZEN PDP | implemented; MCP / A2A as an example |
 
-| Subject  | Identity format        | Authorization model      | Primary protocol                  | Status      |
-| -------- | ---------------------- | ------------------------ | --------------------------------- | ----------- |
-| Service  | X.509-SVID, JWT-SVID   | RBAC + ABAC + ReBAC      | mTLS, AuthZEN PDP                 | implemented |
-| AI Agent | JWT-SVID + MCP / A2A   | Delegation chain, scoped | RFC 8693 token exchange + AuthZEN | example     |
-| Human    | OIDC (SCIM-provisioned: tracked) | RBAC + ABAC + ReBAC | OIDC, AuthZEN PDP        | partial: OIDC IdP federation implemented; SCIM tracked |
-
-Every authorization decision lands in a tamper-evident log, regardless of
-subject type.
+All three are evaluated by the same Cedar policies and recorded in the same log.
 
 ## Quickstart
 
@@ -89,38 +80,44 @@ Pass `--policy-dir DIR` to `omega server` to load `*.cedar` files at startup.
 ## Architecture
 
 ```text
-+----------------------+        +------------------+
-|  omega server        |  HTTP  |  omega agent     |    workload
-|  (control plane)     |<------>|  (Workload API)  |<--- (uds, X509-SVID)
-|  - SQLite / Postgres |        |  - peercred      |
-|  - CA + SVID issuer  |        |  - cache         |
-|  - AuthZEN PDP       |        +------------------+
-|  - SPIFFE federation |
-|  - Audit log         |
++----------------------+        +----------------------+
+|  omega server        |  HTTP  |  omega agent         |    workload
+|  (control plane)     |<------>|  - Workload API      |<--- (uds, SVIDs)
+|  - SQLite / Postgres |        |  - local PDP         |<--- PEP (AuthZEN)
+|  - CA + SVID issuer  |        |    (optional)        |
+|  - AuthZEN PDP       |        +----------------------+
+|  - domains, groups,  |
+|    SCIM              |
+|  - federation        |
+|  - audit log         |
 +----------------------+
 ```
 
-Components are independently runnable (`omega server identity`, `omega server policy`, `omega agent`) so deployments can scale or replace each piece without forklift upgrades.
+The server, agent and operator run independently, so each can be scaled or replaced on its own.
 
 ## Endpoints
 
-| Method | Path                              | Purpose                                                                |
-| ------ | --------------------------------- | ---------------------------------------------------------------------- |
-| GET    | `/healthz`                        | Liveness                                                               |
-| POST   | `/v1/domains`                     | Create a SPIFFE namespace (`{name, description}`)                      |
-| GET    | `/v1/domains`                     | List domains                                                           |
-| GET    | `/v1/domains/{name}`              | Fetch a domain                                                         |
-| POST   | `/v1/svid`                        | Issue an X.509-SVID from a CSR (`{spiffe_id, csr}`)                    |
-| POST   | `/v1/attest/k8s`                  | Attest a Kubernetes ServiceAccount projected token + CSR → X.509-SVID  |
-| GET    | `/v1/bundle`                      | Trust bundle PEM (CA cert)                                             |
-| POST   | `/v1/oidc/exchange`               | Swap an external OIDC IdP ID token for an omega JWT-SVID (Human flow)  |
-| POST   | `/access/v1/evaluation`           | OpenID AuthZEN 1.0 PDP evaluation (single decision)                    |
-| POST   | `/access/v1/evaluations`          | OpenID AuthZEN 1.0 PDP evaluation (batch, with top-level defaults)     |
-| GET    | `/.well-known/openid-configuration` | OIDC discovery (when `--issuer-url` is set; for AWS IAM, GCP WIF, K8s) |
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/healthz` | Liveness |
+| GET, POST, DELETE | `/v1/domains`, `/v1/domains/{name}` | Domain tree |
+| POST, DELETE | `/v1/domains/{name}/admins` | Domain admins |
+| GET, POST, DELETE, PUT | `/v1/domains/{name}/groups/...` | Groups and members |
+| POST | `/v1/svid`, `/v1/svid/jwt` | Issue an X.509-SVID from a CSR, or a JWT-SVID |
+| POST | `/v1/attest/k8s` | Kubernetes ServiceAccount token + CSR to X.509-SVID |
+| GET | `/v1/bundle`, `/v1/spiffe-bundle` | Trust bundle |
+| POST | `/v1/oidc/exchange` | External OIDC ID token to JWT-SVID |
+| POST | `/v1/token/exchange` | RFC 8693 token exchange |
+| POST | `/oauth2/token` | ID-JAG grant |
+| POST | `/access/v1/evaluation`, `/access/v1/evaluations` | AuthZEN evaluation, single and batch |
+| GET | `/v1/policy/bundle` | Policy bundle for node agents |
+| GET, POST | `/v1/audit`, `/v1/audit/decisions` | Read the audit log; record local decisions |
+| various | `/scim/v2/{idp}/...` | SCIM 2.0 Users and Groups |
+| GET | `/.well-known/openid-configuration` | OIDC discovery (with `--issuer-url`) |
 
 The full HTTP surface (request/response shapes, status codes, leader-only endpoints, federation and audit routes) is described in the OpenAPI 3.1 specification at [`api/openapi.yaml`](api/openapi.yaml).
 
-Workload API gRPC (SPIFFE) is served by `omega agent` over a Unix socket and speaks the standard `SpiffeWorkloadAPI` service: `FetchX509SVID` and `FetchX509Bundles`.
+Workload API gRPC (SPIFFE) is served by `omega agent` over a Unix socket and speaks the standard `SpiffeWorkloadAPI` service: `FetchX509SVID`, `FetchX509Bundles`, `FetchJWTSVID` and `FetchJWTBundles`.
 
 ## Standards alignment
 
@@ -134,18 +131,17 @@ Section-by-section audits live at [docs/conformance-spiffe.md](docs/conformance-
 | Federation            | SPIFFE federation (trust bundle exchange)                      | implemented |
 | Token binding         | RFC 8705 (mTLS-bound)                                          | implemented |
 | OIDC discovery        | OpenID Connect Discovery 1.0 (for JWT-SVID consumers)          | implemented |
-| Token exchange        | RFC 8693 (nested `act`)                                        | example     |
+| Token exchange        | RFC 8693 (nested `act`)                                        | implemented |
+| Agent authorization   | ID-JAG (draft-ietf-oauth-identity-assertion-authz-grant), RFC 9449 DPoP | implemented |
 | AI agent identity     | MCP (Anthropic), A2A (Google)                                  | example     |
 | Multi-domain identity | IETF WIMSE                                                     | tracked     |
 | OIDC IdP federation   | OIDC ID-token-in, omega JWT-SVID-out (`POST /v1/oidc/exchange`)| implemented |
-| Provisioning          | SCIM 2.0                                                       | tracked     |
+| Provisioning          | SCIM 2.0                                                       | implemented |
 | Cryptography          | NIST FIPS 203 / 204 / 205 (ML-KEM / ML-DSA / SLH-DSA)          | tracked     |
 
 ## Scope
 
-Omega is a deliberately bounded project. The charter is **workload and agent identity plus authorization control plane**: issuance, AuthZEN evaluation, federation, audit.
-
-The minimum demo path that ships in the source tree today is enumerated in [docs/scope.md](docs/scope.md). The rule for whether a new feature lands in Core, Plugin, or Out-of-tree lives in [docs/design-philosophy.md](docs/design-philosophy.md). Things Omega does *not* try to be (secrets storage, end-user login UX, service-mesh data plane, SIEM, agent runtime) are catalogued with their recommended alternatives in [docs/non-goals.md](docs/non-goals.md). The forward-looking work is tracked in [ROADMAP.md](ROADMAP.md). The threat model the project mitigates today, with assets and STRIDE-categorised threats, lives in [docs/threat-model.md](docs/threat-model.md); the *why* behind the major design choices is recorded in [docs/adr/](docs/adr/).
+Omega is the identity and authorization control plane for workloads, people and agents: issuance, AuthZEN evaluation, federation and audit. What ships today is listed in [docs/scope.md](docs/scope.md), where a new feature belongs (core, plugin or out of tree) in [docs/design-philosophy.md](docs/design-philosophy.md), and what Omega deliberately does not do, with alternatives, in [docs/non-goals.md](docs/non-goals.md). Planned work is in [ROADMAP.md](ROADMAP.md), the threat model in [docs/threat-model.md](docs/threat-model.md), and the reasons behind major design choices in [docs/adr/](docs/adr/).
 
 ## Observability
 
