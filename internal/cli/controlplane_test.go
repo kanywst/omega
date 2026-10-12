@@ -157,6 +157,12 @@ func TestAgentNeedsAMapOrALocalPDP(t *testing.T) {
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--local-pdp-addr") {
 		t.Fatalf("an agent with neither --map nor a local PDP has nothing to do: %v", err)
 	}
+	cmd = newAgentCommand()
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	cmd.SetArgs([]string{"--policy-bundle-key", "k.pem", "--map", "uid=0,id=spiffe://omega.local/x"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--local-pdp-addr") {
+		t.Fatalf("--policy-bundle-key without a local PDP would be silently ignored: %v", err)
+	}
 	// With a local PDP and no --map, the flags are checked as for any
 	// local PDP rather than refused for the missing --map.
 	cmd = newAgentCommand()

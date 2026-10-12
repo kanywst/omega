@@ -397,12 +397,15 @@ func (p *PDP) Sync(ctx context.Context) error {
 	}
 	p.mu.Lock()
 	p.revision = b.Revision
-	if b.IssuedAt.After(p.issuedAt) {
+	advanced := b.IssuedAt.After(p.issuedAt)
+	if advanced {
 		p.issuedAt = b.IssuedAt
-		p.saveIssuedAt(b.IssuedAt)
 	}
 	p.synced = time.Now()
 	p.mu.Unlock()
+	if advanced {
+		p.saveIssuedAt(b.IssuedAt)
+	}
 	return nil
 }
 
@@ -690,23 +693,46 @@ func (p *PDP) loadIssuedAt() (time.Time, error) {
 	}
 	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse bundle high-water mark: %w", err)
+		// A power loss can leave it empty. Losing it only narrows replay
+		// protection to --policy-max-age until the next sync, so start.
+		slog.Warn("local pdp: ignoring an unreadable bundle high-water mark", "err", err)
+		return time.Time{}, nil
 	}
 	return t, nil
 }
 
-// saveIssuedAt records t when a spool is configured. Callers hold mu. A
-// failure only weakens replay protection after a restart, so it is logged.
+// saveIssuedAt records t when a spool is configured, synced before the
+// rename so a power loss leaves the old or the new value. Called without
+// mu held. A failure only weakens replay protection after a restart, so
+// it is logged.
 func (p *PDP) saveIssuedAt(t time.Time) {
 	if p.cfg.SpoolPath == "" {
 		return
 	}
-	tmp := p.issuedAtPath() + ".tmp"
-	if err := os.WriteFile(tmp, []byte(t.UTC().Format(time.RFC3339Nano)), 0o600); err != nil {
-		slog.Warn("local pdp: could not save the bundle high-water mark", "err", err)
-		return
-	}
-	if err := os.Rename(tmp, p.issuedAtPath()); err != nil {
+	if err := writeFileSync(p.issuedAtPath(), []byte(t.UTC().Format(time.RFC3339Nano))); err != nil {
 		slog.Warn("local pdp: could not save the bundle high-water mark", "err", err)
 	}
+}
+
+// writeFileSync writes data to path through a synced temporary file and
+// a rename.
+func writeFileSync(path string, data []byte) error {
+	tmp := path + ".tmp"
+	// #nosec G304 -- derived from the operator-supplied spool path.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

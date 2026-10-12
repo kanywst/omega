@@ -94,6 +94,12 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				return err
 			}
 
+			if bundleKey != "" && pdpAddr == "" {
+				return errors.New("--policy-bundle-key verifies the local PDP's bundles; it needs --local-pdp-addr")
+			}
+			if pdpAddr != "" && bundleKey == "" {
+				fmt.Fprintln(os.Stderr, "omega agent: WARN local PDP without --policy-bundle-key: bundles are trusted on TLS alone, even if the control plane signs them (ADR 0018)")
+			}
 			if pdpAddr != "" {
 				if err := checkLocalPDP(pdpAddr, pdpRemote, serverURL, serverCA, clientCert); err != nil {
 					return err

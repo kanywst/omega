@@ -810,3 +810,14 @@ func TestLocalPDPRefusesToStartOnACorruptSpool(t *testing.T) {
 		t.Fatal("an unreadable line that is not the last one is an answered decision; refuse to start")
 	}
 }
+
+func TestLocalPDPStartsWithAnEmptyHighWaterMark(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s")
+	if err := os.WriteFile(path+".bundle-issued-at", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := localpdp.New(localpdp.Config{ServerURL: "http://unused", TrustDomain: "omega.local", SpoolPath: path})
+	if err := p.RestoreSpool(); err != nil {
+		t.Fatalf("an empty mark left by a power loss must not stop the agent: %v", err)
+	}
+}
