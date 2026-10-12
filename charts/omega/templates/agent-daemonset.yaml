@@ -40,6 +40,18 @@ spec:
             - --server-ca=/etc/omega/agent-tls/ca.crt
             - --client-cert=/etc/omega/agent-tls/tls.crt
             - --client-key=/etc/omega/agent-tls/tls.key
+            {{- if and .Values.server.policyBundleSigningKeySecret (not .Values.agent.localPDP.verifyBundle) }}
+            {{- fail "server.policyBundleSigningKeySecret is set but agent.localPDP.verifyBundle is false: the agents would ignore the signatures" }}
+            {{- end }}
+            {{- if .Values.agent.localPDP.verifyBundle }}
+            {{- if not .Values.server.policyBundleSigningKeySecret }}
+            {{- fail "agent.localPDP.verifyBundle needs server.policyBundleSigningKeySecret: an agent that verifies signatures refuses every unsigned bundle" }}
+            {{- end }}
+            - --policy-bundle-key=/etc/omega/agent-tls/bundle.pub
+            {{- end }}
+            {{- if .Values.agent.localPDP.spool }}
+            - --decision-spool=/var/lib/omega-agent/decisions.spool
+            {{- end }}
             {{- end }}
             {{- range .Values.agent.extraArgs }}
             - {{ . | quote }}
@@ -53,6 +65,10 @@ spec:
             - name: agent-tls
               mountPath: /etc/omega/agent-tls
               readOnly: true
+            {{- if .Values.agent.localPDP.spool }}
+            - name: decision-spool
+              mountPath: /var/lib/omega-agent
+            {{- end }}
             {{- end }}
       volumes:
         - name: agent-sock
@@ -63,5 +79,9 @@ spec:
         - name: agent-tls
           secret:
             secretName: {{ required "agent.localPDP.tlsSecret is required when agent.localPDP.enabled" .Values.agent.localPDP.tlsSecret }}
+        {{- if .Values.agent.localPDP.spool }}
+        - name: decision-spool
+          emptyDir: {}
+        {{- end }}
         {{- end }}
 {{- end }}

@@ -157,6 +157,12 @@ func TestAgentNeedsAMapOrALocalPDP(t *testing.T) {
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--local-pdp-addr") {
 		t.Fatalf("an agent with neither --map nor a local PDP has nothing to do: %v", err)
 	}
+	cmd = newAgentCommand()
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	cmd.SetArgs([]string{"--policy-bundle-key", "k.pem", "--map", "uid=0,id=spiffe://omega.local/x"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--local-pdp-addr") {
+		t.Fatalf("--policy-bundle-key without a local PDP would be silently ignored: %v", err)
+	}
 	// With a local PDP and no --map, the flags are checked as for any
 	// local PDP rather than refused for the missing --map.
 	cmd = newAgentCommand()
@@ -187,7 +193,7 @@ func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 	base := []string{"--server", "https://127.0.0.1:1", "--server-ca", cert, "--client-cert", cert, "--client-key", keyFile, "--local-pdp-addr", busy.Addr().String()}
 	for name, extra := range map[string][]string{
 		"local PDP only":        nil,
-		"with the Workload API": {"--socket", filepath.Join(dir, "a.sock"), "--map", "uid=0,id=spiffe://omega.local/x"},
+		"with the Workload API": {"--socket", shortSocketPath(t), "--map", "uid=0,id=spiffe://omega.local/x"},
 	} {
 		cmd := newAgentCommand()
 		cmd.SilenceErrors, cmd.SilenceUsage = true, true
@@ -203,4 +209,52 @@ func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 			t.Fatalf("%s: an agent whose local PDP cannot listen must exit", name)
 		}
 	}
+}
+
+func TestBundleKeyLoaders(t *testing.T) {
+	dir := t.TempDir()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	sec1, _ := x509.MarshalECPrivateKey(key)
+	pkcs8, _ := x509.MarshalPKCS8PrivateKey(key)
+	pub, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	p384der, _ := x509.MarshalECPrivateKey(p384)
+	write := func(name, typ string, der []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for _, p := range []string{write("sec1.pem", "EC PRIVATE KEY", sec1), write("pkcs8.pem", "PRIVATE KEY", pkcs8)} {
+		if _, err := loadBundleSigningKey(p); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	if _, err := loadBundleVerifyKey(write("pub.pem", "PUBLIC KEY", pub)); err != nil {
+		t.Errorf("public key: %v", err)
+	}
+	for name, err := range map[string]error{
+		"P-384 signing key":   func() error { _, e := loadBundleSigningKey(write("p384.pem", "EC PRIVATE KEY", p384der)); return e }(),
+		"wrong signing type":  func() error { _, e := loadBundleSigningKey(write("x.pem", "CERTIFICATE", []byte("x"))); return e }(),
+		"missing signing key": func() error { _, e := loadBundleSigningKey(filepath.Join(dir, "nope")); return e }(),
+		"private as public":   func() error { _, e := loadBundleVerifyKey(write("sec1b.pem", "EC PRIVATE KEY", sec1)); return e }(),
+		"no PEM":              func() error { _, e := loadBundleVerifyKey(write("junk", "", nil)); return e }(),
+	} {
+		if err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+// shortSocketPath returns a unix socket path short enough for macOS's
+// 104-byte limit, which t.TempDir under a long test name can exceed.
+func shortSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "oa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "a.sock")
 }

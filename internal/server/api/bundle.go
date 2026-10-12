@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,14 @@ func (s *Server) WithDecisionRecorders(ids []string) *Server {
 	return s
 }
 
+// WithBundleSigningKey makes the control plane sign every policy bundle
+// it serves, so node agents can verify it independently of the TLS
+// channel. Every replica must hold the same key.
+func (s *Server) WithBundleSigningKey(key *ecdsa.PrivateKey) *Server {
+	s.bundleSigningKey = key
+	return s
+}
+
 func (s *Server) mayRecordDecisions(caller string) bool {
 	if !s.requireAuth || caller == "" {
 		return false
@@ -57,6 +66,12 @@ func (s *Server) getPolicyBundle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+	if s.bundleSigningKey != nil {
+		if err := policy.SignBundle(&b, s.bundleSigningKey); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	etag := `"` + b.Revision + `"`
 	w.Header().Set("ETag", etag)

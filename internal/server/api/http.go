@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -58,6 +59,7 @@ type Server struct {
 	clientAssertionReplay *replayCache
 	domains               domainState
 	decisionRecorders     []string
+	bundleSigningKey      *ecdsa.PrivateKey
 	// auditFault, set only by tests, makes appendAudit fail.
 	auditFault func(storage.AuditEvent) error
 	// refreshFault, set only by tests, makes RefreshDirectory fail.

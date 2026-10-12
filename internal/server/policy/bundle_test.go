@@ -1,6 +1,9 @@
 package policy_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"testing"
 	"time"
 
@@ -49,5 +52,48 @@ permit (principal in Group::"media:oncall", action == Action::"page", resource);
 	b.Policies["extra.cedar"] = `permit (principal, action, resource);`
 	if err := policy.New().LoadBundle(b); err == nil {
 		t.Error("a bundle whose content does not match its revision must be refused")
+	}
+}
+
+func TestBundleSignature(t *testing.T) {
+	e := policy.New()
+	b, err := e.Bundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err := policy.VerifyBundle(b, &key.PublicKey); err == nil {
+		t.Error("an unsigned bundle must not verify")
+	}
+	if err := policy.SignBundle(&b, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.CheckRevision(b); err != nil {
+		t.Errorf("signing must not change the revision: %v", err)
+	}
+	if err := policy.VerifyBundle(b, &key.PublicKey); err != nil {
+		t.Errorf("own key: %v", err)
+	}
+	if err := policy.VerifyBundle(b, &other.PublicKey); err == nil {
+		t.Error("another key must not verify")
+	}
+	tampered := b
+	tampered.Policies = map[string]string{"p.cedar": "permit (principal, action, resource);"}
+	if err := policy.CheckRevision(tampered); err == nil {
+		t.Error("changed content must fail the revision check")
+	}
+	tampered = b
+	tampered.Revision = "0000"
+	if err := policy.VerifyBundle(tampered, &key.PublicKey); err == nil {
+		t.Error("a signature over another revision must not verify")
+	}
+	tampered.Signature = "!!"
+	if err := policy.VerifyBundle(tampered, &key.PublicKey); err == nil {
+		t.Error("a malformed signature must not verify")
+	}
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err := policy.SignBundle(&b, p384); err == nil {
+		t.Error("only P-256 keys sign bundles")
 	}
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -42,6 +43,8 @@ func newAgentCommand() *cobra.Command {
 		pdpMaxAge    time.Duration
 		pdpBuffer    int
 		pdpRemote    bool
+		bundleKey    string
+		spoolPath    string
 		serverCA     string
 		clientCert   string
 		clientKey    string
@@ -91,6 +94,12 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				return err
 			}
 
+			if bundleKey != "" && pdpAddr == "" {
+				return errors.New("--policy-bundle-key verifies the local PDP's bundles; it needs --local-pdp-addr")
+			}
+			if pdpAddr != "" && bundleKey == "" {
+				fmt.Fprintln(os.Stderr, "omega agent: WARN local PDP without --policy-bundle-key: bundles are trusted on TLS alone, even if the control plane signs them (ADR 0018)")
+			}
 			if pdpAddr != "" {
 				if err := checkLocalPDP(pdpAddr, pdpRemote, serverURL, serverCA, clientCert); err != nil {
 					return err
@@ -99,10 +108,19 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				if err != nil {
 					return err
 				}
+				var verifyKey *ecdsa.PublicKey
+				if bundleKey != "" {
+					if verifyKey, err = loadBundleVerifyKey(bundleKey); err != nil {
+						return err
+					}
+				}
 				pdp := localpdp.New(localpdp.Config{
-					ServerURL: serverURL, SyncInterval: pdpSync, MaxAge: pdpMaxAge, BufferSize: pdpBuffer, TrustDomain: td,
+					ServerURL: serverURL, SyncInterval: pdpSync, MaxAge: pdpMaxAge, BufferSize: pdpBuffer, TrustDomain: td, BundleKey: verifyKey, SpoolPath: spoolPath,
 					HTTPClient: &http.Client{Transport: transport, Timeout: 10 * time.Second},
 				})
+				if err := pdp.RestoreSpool(); err != nil {
+					return err
+				}
 				ran := make(chan struct{})
 				go func() {
 					pdp.Run(ctx)
@@ -171,6 +189,8 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 	cmd.Flags().StringVar(&pdpAddr, "local-pdp-addr", "", "serve an AuthZEN evaluation endpoint on this address (e.g. 127.0.0.1:8181), deciding locally from the control plane's policy bundle and shipping every decision to its audit chain. Empty disables it.")
 	cmd.Flags().DurationVar(&pdpSync, "policy-sync-interval", 10*time.Second, "how often the local PDP re-fetches the policy bundle")
 	cmd.Flags().DurationVar(&pdpMaxAge, "policy-max-age", time.Minute, "the local PDP refuses to decide (503) when its last successful bundle sync is older than this")
+	cmd.Flags().StringVar(&bundleKey, "policy-bundle-key", "", "the control plane's bundle signing public key (PEM public key or certificate); when set, the local PDP refuses any bundle without a valid signature from it")
+	cmd.Flags().StringVar(&spoolPath, "decision-spool", "", "file the local PDP writes and syncs every decision to before answering, and requeues from at start, so decisions survive an agent crash (costs one fsync per decision)")
 	cmd.Flags().BoolVar(&pdpRemote, "local-pdp-allow-remote", false, "let --local-pdp-addr bind a non-loopback address; the endpoint has no authentication, so anyone who reaches it can query policy and fill the decision buffer")
 	cmd.Flags().IntVar(&pdpBuffer, "decision-buffer", 10000, "decisions the local PDP may hold before they reach the audit chain; when full it refuses to decide (503)")
 	return cmd

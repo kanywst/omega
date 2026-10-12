@@ -47,6 +47,9 @@ spec:
             {{- range .Values.server.decisionRecorders }}
             - --decision-recorder={{ . }}
             {{- end }}
+            {{- if .Values.server.policyBundleSigningKeySecret }}
+            - --policy-bundle-signing-key=/etc/omega/bundle-signing/bundle.key
+            {{- end }}
             {{- range .Values.server.scimProviders }}
             - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
             {{- end }}
@@ -79,6 +82,11 @@ spec:
               mountPath: {{ .Values.server.policyDir }}
               readOnly: true
             {{- end }}
+            {{- if .Values.server.policyBundleSigningKeySecret }}
+            - name: bundle-signing
+              mountPath: /etc/omega/bundle-signing
+              readOnly: true
+            {{- end }}
             {{- range $i, $p := .Values.server.scimProviders }}
             - name: scim-{{ $i }}
               mountPath: /etc/omega/scim/{{ $p.name }}
@@ -87,7 +95,8 @@ spec:
       {{- $hasPolicy := and .Values.policy.inline (gt (len .Values.policy.inline) 0) .Values.server.policyDir -}}
       {{- $hasEmpty := not .Values.server.persistence.enabled -}}
       {{- $hasSCIM := gt (len .Values.server.scimProviders) 0 -}}
-      {{- if or $hasPolicy $hasEmpty $hasSCIM }}
+      {{- $hasSigning := .Values.server.policyBundleSigningKeySecret -}}
+      {{- if or $hasPolicy $hasEmpty $hasSCIM $hasSigning }}
       volumes:
         {{- if $hasPolicy }}
         - name: policy
@@ -97,6 +106,14 @@ spec:
         {{- if $hasEmpty }}
         - name: data
           emptyDir: {}
+        {{- end }}
+        {{- if $hasSigning }}
+        - name: bundle-signing
+          secret:
+            secretName: {{ .Values.server.policyBundleSigningKeySecret }}
+            items:
+              - key: bundle.key
+                path: bundle.key
         {{- end }}
         {{- range $i, $p := .Values.server.scimProviders }}
         - name: scim-{{ $i }}

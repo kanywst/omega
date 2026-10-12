@@ -5,8 +5,10 @@
 package localpdp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +18,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -44,6 +48,13 @@ type Config struct {
 	// bundle for another one, or for none, is refused, and without it
 	// no bundle is loaded at all.
 	TrustDomain string
+	// BundleKey, when set, is the control plane's bundle signing key: a
+	// bundle without a valid signature from it is refused.
+	BundleKey *ecdsa.PublicKey
+	// SpoolPath, when set, is a file every decision is written and
+	// synced to before it is answered, so decisions survive a crash of
+	// the agent; RestoreSpool reloads them at start.
+	SpoolPath string
 }
 
 // PDP evaluates locally against the last synced bundle.
@@ -54,6 +65,7 @@ type PDP struct {
 
 	mu       sync.Mutex
 	revision string
+	issuedAt time.Time // newest signed bundle loaded
 	synced   time.Time
 	pending  []queued
 	// reserved counts decisions being made that already hold a buffer
@@ -74,6 +86,163 @@ type PDP struct {
 	// batchCap shrinks while the control plane rejects batches, to
 	// isolate the decision it will not accept.
 	batchCap int
+
+	// removed counts decisions taken off pending (recorded or dropped),
+	// so Flush knows whether the spool is out of date.
+	removed int
+
+	// spoolMu serialises spool writes; take it before mu.
+	spoolMu sync.Mutex
+	spool   *os.File
+}
+
+// spoolEntry is one line of the spool file.
+type spoolEntry struct {
+	ID       string          `json:"id"`
+	Revision string          `json:"revision"`
+	Decision json.RawMessage `json:"decision"`
+}
+
+// RestoreSpool opens the spool and requeues every decision in it: ones
+// answered before a crash or restart that never reached the control
+// plane. Call it once, before serving. Without SpoolPath it does nothing.
+func (p *PDP) RestoreSpool() error {
+	if p.cfg.SpoolPath == "" {
+		return nil
+	}
+	p.spoolMu.Lock()
+	defer p.spoolMu.Unlock()
+	// #nosec G304 -- operator-supplied --decision-spool path.
+	raw, err := os.ReadFile(p.cfg.SpoolPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read decision spool: %w", err)
+	}
+	var restored []queued
+	lines := bytes.Split(raw, []byte("\n"))
+	last := len(lines) - 1
+	for last >= 0 && len(bytes.TrimSpace(lines[last])) == 0 {
+		last--
+	}
+	for i, line := range lines {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var e spoolEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			if i == last {
+				// A torn last line is what a crash mid-write leaves; its
+				// decision was never answered, so it is safe to skip.
+				slog.Warn("local pdp: skipping a torn last line in the decision spool", "line", i+1, "err", err)
+				continue
+			}
+			// Anywhere else it is an answered decision that would never
+			// reach the chain: refuse to start rather than lose it quietly.
+			return fmt.Errorf("decision spool line %d is unreadable: %w", i+1, err)
+		}
+		restored = append(restored, queued{id: e.ID, raw: e.Decision, revision: e.Revision})
+	}
+	if t, err := p.loadIssuedAt(); err != nil {
+		return err
+	} else if !t.IsZero() {
+		p.mu.Lock()
+		p.issuedAt = t
+		p.mu.Unlock()
+	}
+	p.mu.Lock()
+	p.pending = append(restored, p.pending...)
+	p.mu.Unlock()
+	if len(restored) > 0 {
+		slog.Info("local pdp: requeued decisions from the spool", "decisions", len(restored))
+	}
+	return p.rewriteSpoolLocked()
+}
+
+// spoolDecision writes q to the spool and syncs it. Callers hold spoolMu.
+func (p *PDP) spoolDecision(q queued) error {
+	line, err := json.Marshal(spoolEntry{ID: q.id, Revision: q.revision, Decision: q.raw})
+	if err != nil {
+		return err
+	}
+	st, err := p.spool.Stat()
+	if err != nil {
+		return fmt.Errorf("stat decision spool: %w", err)
+	}
+	werr := writeSync(p.spool, append(line, '\n'))
+	if werr == nil {
+		return nil
+	}
+	// The decision is answered with an error, so none of its bytes may
+	// stay: a partial line would merge with the next one and take an
+	// answered decision with it, and a synced-but-failed line would
+	// requeue a decision nobody received. Cut back to where it started,
+	// or rebuild the file from what is pending.
+	if terr := p.spool.Truncate(st.Size()); terr != nil {
+		if rerr := p.rewriteSpoolLocked(); rerr != nil {
+			return fmt.Errorf("%w; and the spool could not be repaired: %v", werr, rerr)
+		}
+	}
+	return werr
+}
+
+// spoolFile is the part of *os.File the spool writes through; tests swap
+// in one that fails.
+type spoolFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+}
+
+var writeSync = func(f spoolFile, b []byte) error {
+	if _, err := f.Write(b); err != nil {
+		return fmt.Errorf("write decision spool: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync decision spool: %w", err)
+	}
+	return nil
+}
+
+// rewriteSpoolLocked replaces the spool with what is still pending.
+// Callers hold spoolMu.
+func (p *PDP) rewriteSpoolLocked() error {
+	p.mu.Lock()
+	pending := slices.Clone(p.pending)
+	p.mu.Unlock()
+	tmp := p.cfg.SpoolPath + ".tmp"
+	// #nosec G304 -- derived from the operator-supplied spool path.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("rewrite decision spool: %w", err)
+	}
+	w := bufio.NewWriter(f)
+	for _, q := range pending {
+		line, err := json.Marshal(spoolEntry{ID: q.id, Revision: q.revision, Decision: q.raw})
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		_, _ = w.Write(append(line, '\n'))
+	}
+	if err := w.Flush(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("rewrite decision spool: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("rewrite decision spool: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, p.cfg.SpoolPath); err != nil {
+		return fmt.Errorf("rewrite decision spool: %w", err)
+	}
+	syncDir(filepath.Dir(p.cfg.SpoolPath))
+	if p.spool != nil {
+		_ = p.spool.Close()
+	}
+	// #nosec G304 -- operator-supplied --decision-spool path.
+	p.spool, err = os.OpenFile(p.cfg.SpoolPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	return err
 }
 
 type decision struct {
@@ -169,8 +338,11 @@ func (p *PDP) Sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// With a signing key every refresh must be a signed 200: a 304 carries
+	// no signature, so honouring it would let whoever answers the poll
+	// keep the agent on a stale bundle past --policy-max-age.
 	p.mu.Lock()
-	if p.revision != "" {
+	if p.revision != "" && p.cfg.BundleKey == nil {
 		req.Header.Set("If-None-Match", `"`+p.revision+`"`)
 	}
 	p.mu.Unlock()
@@ -181,6 +353,9 @@ func (p *PDP) Sync(ctx context.Context) error {
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusNotModified:
+		if p.cfg.BundleKey != nil {
+			return errors.New("fetch bundle: unsigned 304 when a signed bundle is required")
+		}
 		p.mu.Lock()
 		p.synced = time.Now()
 		p.mu.Unlock()
@@ -200,13 +375,50 @@ func (p *PDP) Sync(ctx context.Context) error {
 	if b.Directory.TrustDomain != p.cfg.TrustDomain {
 		return fmt.Errorf("bundle is for trust domain %q, not %q", b.Directory.TrustDomain, p.cfg.TrustDomain)
 	}
+	if p.cfg.BundleKey != nil {
+		if err := policy.CheckRevision(b); err != nil {
+			return err
+		}
+		if err := policy.VerifyBundle(b, p.cfg.BundleKey); err != nil {
+			return err
+		}
+		// A validly signed bundle can still be an old one replayed: refuse
+		// one issued before the newest already loaded, or too long ago to
+		// be current.
+		p.mu.Lock()
+		newest := p.issuedAt
+		p.mu.Unlock()
+		if b.IssuedAt.Before(newest) {
+			return fmt.Errorf("bundle issued at %s is older than the one already loaded (%s)", b.IssuedAt, newest)
+		}
+		if age := time.Since(b.IssuedAt); age > p.cfg.MaxAge {
+			return fmt.Errorf("bundle was issued %s ago, longer than --policy-max-age", age.Round(time.Second))
+		}
+		if ahead := time.Until(b.IssuedAt); ahead > maxClockSkew {
+			return fmt.Errorf("bundle is issued %s in the future; check the clocks", ahead.Round(time.Second))
+		}
+	}
 	if err := p.engine.LoadBundle(b); err != nil {
 		return err
 	}
 	p.mu.Lock()
 	p.revision = b.Revision
+	// A bundle from a replica whose clock runs ahead must not raise the
+	// mark past now, or bundles from correctly clocked replicas would be
+	// refused until time caught up.
+	mark := b.IssuedAt
+	if now := time.Now(); mark.After(now) {
+		mark = now
+	}
+	advanced := mark.After(p.issuedAt)
+	if advanced {
+		p.issuedAt = mark
+	}
 	p.synced = time.Now()
 	p.mu.Unlock()
+	if advanced {
+		p.saveIssuedAt(mark)
+	}
 	return nil
 }
 
@@ -248,8 +460,21 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 	if err != nil {
 		return policy.EvalResponse{}, err
 	}
+	q := queued{id: id, raw: raw, revision: rev}
+	if p.cfg.SpoolPath != "" {
+		// On disk before it is answered: a crash after this point loses
+		// nothing; a failed write answers an error instead of a decision.
+		p.spoolMu.Lock()
+		defer p.spoolMu.Unlock()
+		if p.spool == nil {
+			return policy.EvalResponse{}, errors.New("decision spool is not open")
+		}
+		if err := p.spoolDecision(q); err != nil {
+			return policy.EvalResponse{}, err
+		}
+	}
 	p.mu.Lock()
-	p.pending = append(p.pending, queued{id: id, raw: raw, revision: rev})
+	p.pending = append(p.pending, q)
 	p.reserved--
 	p.mu.Unlock()
 	queuedOK = true
@@ -259,6 +484,25 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 // Flush ships queued decisions in batches; on a failed batch it keeps
 // that batch and everything after it for the next attempt.
 func (p *PDP) Flush(ctx context.Context) error {
+	p.mu.Lock()
+	before := p.removed
+	p.mu.Unlock()
+	err := p.flush(ctx)
+	p.mu.Lock()
+	unchanged := p.removed == before
+	p.mu.Unlock()
+	// Nothing shipped or dropped: the spool already says what is pending.
+	if p.cfg.SpoolPath != "" && !unchanged {
+		p.spoolMu.Lock()
+		if serr := p.rewriteSpoolLocked(); serr != nil && err == nil {
+			err = serr
+		}
+		p.spoolMu.Unlock()
+	}
+	return err
+}
+
+func (p *PDP) flush(ctx context.Context) error {
 	for {
 		p.mu.Lock()
 		if len(p.pending) == 0 && len(p.droppedIDs) == 0 {
@@ -321,6 +565,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 			if json.Unmarshal(msg, &partial) == nil && partial.Recorded > 0 && partial.Recorded < n {
 				p.mu.Lock()
 				p.pending = p.pending[partial.Recorded:]
+				p.removed += partial.Recorded
 				p.mu.Unlock()
 			}
 			// A batch the control plane cannot accept as sent would block
@@ -354,6 +599,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 					p.droppedDigests = append(p.droppedDigests, hex.EncodeToString(sum[:]))
 					p.dropTimes = append(p.dropTimes, time.Now())
 					p.pending = p.pending[1:]
+					p.removed++
 					p.dropStreak++
 					p.batchCap = 0
 				}
@@ -364,6 +610,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 		}
 		p.mu.Lock()
 		p.pending = p.pending[n:]
+		p.removed += n
 		if len(droppedIDs) > 0 {
 			p.droppedIDs = p.droppedIDs[len(droppedIDs):]
 			p.droppedDigests = p.droppedDigests[len(droppedDigests):]
@@ -448,4 +695,81 @@ func (p *PDP) recentDrops() int {
 	}
 	p.dropTimes = keep
 	return len(keep)
+}
+
+// maxClockSkew is how far in the future a signed bundle's issue time may
+// be, to absorb clock differences between the agent and the control plane.
+const maxClockSkew = time.Minute
+
+// issuedAtPath keeps the newest signed bundle's issue time next to the
+// spool, so a restarted agent still refuses older bundles.
+func (p *PDP) issuedAtPath() string { return p.cfg.SpoolPath + ".bundle-issued-at" }
+
+func (p *PDP) loadIssuedAt() (time.Time, error) {
+	// #nosec G304 -- derived from the operator-supplied spool path.
+	raw, err := os.ReadFile(p.issuedAtPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read bundle high-water mark: %w", err)
+	}
+	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
+	if err != nil {
+		// A power loss can leave it empty. Losing it only narrows replay
+		// protection to --policy-max-age until the next sync, so start.
+		slog.Warn("local pdp: ignoring an unreadable bundle high-water mark", "err", err)
+		return time.Time{}, nil
+	}
+	return t, nil
+}
+
+// saveIssuedAt records t when a spool is configured, synced before the
+// rename so a power loss leaves the old or the new value. Called without
+// mu held. A failure only weakens replay protection after a restart, so
+// it is logged.
+func (p *PDP) saveIssuedAt(t time.Time) {
+	if p.cfg.SpoolPath == "" {
+		return
+	}
+	if err := writeFileSync(p.issuedAtPath(), []byte(t.UTC().Format(time.RFC3339Nano))); err != nil {
+		slog.Warn("local pdp: could not save the bundle high-water mark", "err", err)
+	}
+}
+
+// writeFileSync writes data to path through a synced temporary file and
+// a rename.
+func writeFileSync(path string, data []byte) error {
+	tmp := path + ".tmp"
+	// #nosec G304 -- derived from the operator-supplied spool path.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	syncDir(filepath.Dir(path))
+	return nil
+}
+
+// syncDir makes a rename in dir durable; best effort, since not every
+// platform supports syncing a directory.
+func syncDir(dir string) {
+	// #nosec G304 -- the directory of an operator-supplied path.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 }
