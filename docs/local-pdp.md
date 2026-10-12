@@ -61,6 +61,7 @@ flowchart TD
 | `--decision-buffer` | `10000` | Decisions that may wait to be recorded before the PDP refuses |
 | `--server-ca`, `--client-cert`, `--client-key` | none | TLS to the control plane. The local PDP needs an `https` `--server`, `--server-ca`, and a client certificate (the agent's SVID), re-read when the files change. The SVID's trust domain is the only one the PDP loads a bundle for |
 | `--local-pdp-allow-remote` | off | Allow `--local-pdp-addr` to bind a non-loopback address |
+| `--map` | none | Optional with `--local-pdp-addr`: without it the agent serves no Workload API and only decides, which is the shape beside a SPIRE agent ([examples/spire-authz](../examples/spire-authz/)) |
 
 An evaluation request is capped at 64 KiB (larger ones get `413`), and queued decisions are shipped in batches that stay under the control plane's body limit, so a backlog always drains.
 

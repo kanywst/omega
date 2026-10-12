@@ -1,0 +1,107 @@
+# compose.yaml: authorization and audit on top of a real SPIRE deployment.
+#
+# SPIRE issues every identity. Omega consumes SPIRE's trust domain
+# (--identity-source=spire-upstream), authenticates callers by their SPIRE
+# X.509-SVIDs, decides with Cedar, takes people from an identity provider
+# over SCIM, and records everything in one audit chain. omega-agent decides
+# on the node from a synced copy of the policy, authenticated by its own
+# SPIRE SVID. run-demo.sh brings the services up in order.
+
+name: omega-spire-authz
+
+services:
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:1.15.3
+    hostname: spire-server
+    user: "0:0"
+    command: ["-config", "/opt/spire/conf/server/server.conf"]
+    volumes:
+      - ./conf/server.conf:/opt/spire/conf/server/server.conf:ro
+      - spire-server-data:/opt/spire/data/server
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.15.3
+    hostname: spire-agent
+    user: "0:0"
+    pid: "host"
+    command:
+      ["-config", "/opt/spire/conf/agent/agent.conf", "-joinToken", "${SPIRE_JOIN_TOKEN:-}"]
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    volumes:
+      - ./conf/agent.conf:/opt/spire/conf/agent/agent.conf:ro
+      - ./run/bootstrap.crt:/opt/spire/conf/agent/bootstrap.crt:ro
+      - agent-sockets:/run/spire/sockets
+      - ./run/svids:/svids
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/run/spire/sockets/agent.sock"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  omega:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: omega:dev
+    user: "0:0"
+    command:
+      - server
+      - --http-addr=0.0.0.0:8443
+      - --data-dir=/var/lib/omega
+      - --identity-source=spire-upstream
+      - --trust-domain=upstream.demo
+      - --identity-source-workload-api=unix:///run/spire/sockets/agent.sock
+      - --identity-source-workload-api-jwt
+      - --policy-dir=/etc/omega/policy
+      - --tls-cert=/run/demo/omega.pem
+      - --tls-key=/run/demo/omega.key
+      - --client-ca=/run/demo/spire-bundle.pem
+      - --client-cert-optional
+      - --require-auth
+      - --domain-root-admin=spiffe://upstream.demo/platform/admin
+      - --decision-recorder=spiffe://upstream.demo/nodes/
+      - --scim-idp=name=corp,domain=people,token-file=/run/demo/scim-token
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+    volumes:
+      - agent-sockets:/run/spire/sockets:ro
+      - ./policies:/etc/omega/policy:ro
+      - ./run/demo:/run/demo:ro
+      - omega-data:/var/lib/omega
+    ports:
+      - "18895:8443"
+
+  omega-agent:
+    image: omega:dev
+    user: "0:0"
+    command:
+      - agent
+      - --socket=/tmp/omega-agent.sock
+      - --server=https://omega:8443
+      - --server-ca=/run/demo/demo-ca.pem
+      - --client-cert=/run/demo/node.pem
+      - --client-key=/run/demo/node.key
+      - --local-pdp-addr=0.0.0.0:8181
+      # Published to the host so the demo can call it; on a real node the
+      # PEP runs beside the agent and the address stays on loopback.
+      - --local-pdp-allow-remote
+      - --policy-sync-interval=1s
+    depends_on:
+      - omega
+    volumes:
+      - ./run/demo:/run/demo:ro
+    ports:
+      - "18182:8181"
+
+volumes:
+  spire-server-data:
+  agent-sockets:
+  omega-data:
