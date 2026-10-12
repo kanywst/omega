@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -231,6 +232,7 @@ func (p *PDP) rewriteSpoolLocked() error {
 	if err := os.Rename(tmp, p.cfg.SpoolPath); err != nil {
 		return fmt.Errorf("rewrite decision spool: %w", err)
 	}
+	syncDir(filepath.Dir(p.cfg.SpoolPath))
 	if p.spool != nil {
 		_ = p.spool.Close()
 	}
@@ -397,14 +399,21 @@ func (p *PDP) Sync(ctx context.Context) error {
 	}
 	p.mu.Lock()
 	p.revision = b.Revision
-	advanced := b.IssuedAt.After(p.issuedAt)
+	// A bundle from a replica whose clock runs ahead must not raise the
+	// mark past now, or bundles from correctly clocked replicas would be
+	// refused until time caught up.
+	mark := b.IssuedAt
+	if now := time.Now(); mark.After(now) {
+		mark = now
+	}
+	advanced := mark.After(p.issuedAt)
 	if advanced {
-		p.issuedAt = b.IssuedAt
+		p.issuedAt = mark
 	}
 	p.synced = time.Now()
 	p.mu.Unlock()
 	if advanced {
-		p.saveIssuedAt(b.IssuedAt)
+		p.saveIssuedAt(mark)
 	}
 	return nil
 }
@@ -471,8 +480,15 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 // Flush ships queued decisions in batches; on a failed batch it keeps
 // that batch and everything after it for the next attempt.
 func (p *PDP) Flush(ctx context.Context) error {
+	p.mu.Lock()
+	before := len(p.pending)
+	p.mu.Unlock()
 	err := p.flush(ctx)
-	if p.cfg.SpoolPath != "" {
+	p.mu.Lock()
+	unchanged := len(p.pending) == before
+	p.mu.Unlock()
+	// Nothing shipped or dropped: the spool already says what is pending.
+	if p.cfg.SpoolPath != "" && !unchanged {
 		p.spoolMu.Lock()
 		if serr := p.rewriteSpoolLocked(); serr != nil && err == nil {
 			err = serr
@@ -734,5 +750,19 @@ func writeFileSync(path string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	syncDir(filepath.Dir(path))
+	return nil
+}
+
+// syncDir makes a rename in dir durable; best effort, since not every
+// platform supports syncing a directory.
+func syncDir(dir string) {
+	// #nosec G304 -- the directory of an operator-supplied path.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 }

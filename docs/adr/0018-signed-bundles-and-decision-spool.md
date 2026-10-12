@@ -23,6 +23,7 @@ Easier:
 Harder:
 
 - The signing key is one more secret, shared by every replica, and rotating it means restarting the agents with the new public key. Agents and the control plane need roughly synchronised clocks for the issue-time check.
+- Signing does not shorten revocation latency: a captured signed bundle stays acceptable until it is `--policy-max-age` old, the same window an agent cut off from the control plane already decides in.
 - With a signing key every sync downloads the whole bundle. Replicas stamp `issued_at` with their own clocks, so replicas whose clocks differ can make a lagging one's bundles look older than one already loaded, which shows as failed syncs; keep the control plane's clocks synchronised. Without the spool the newest issue time is kept in memory only.
 - Delivery from the spool is at least once: an agent that crashes after a batch was recorded but before the spool was rewritten sends it again, so the chain can hold a decision twice; count by `decision_id`.
 - The spool costs one fsync per decision and serialises decisions on it. The spool file holds request contents on the node's disk.
