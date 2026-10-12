@@ -149,3 +149,24 @@ func TestRecordDecisionsReportsHowManyWereRecorded(t *testing.T) {
 		t.Fatalf("failed append: %d %s", code, body)
 	}
 }
+
+func TestRecordDecisionsRecordsALoss(t *testing.T) {
+	env := newDomainEnv(t, "", "spiffe://omega.local/nodes/")
+	agent := env.as(t, "spiffe://omega.local/nodes/n1")
+	if code, body := call(t, agent, "POST", env.srv.URL+"/v1/audit/decisions", api.DecisionBatch{BundleRevision: "r1", Dropped: 2}); code != http.StatusOK {
+		t.Fatalf("loss report: %d %s", code, body)
+	}
+	if code, _ := call(t, agent, "POST", env.srv.URL+"/v1/audit/decisions", api.DecisionBatch{Dropped: -1}); code != http.StatusBadRequest {
+		t.Fatalf("negative dropped: %d", code)
+	}
+	events, _ := env.store.ListAudit(t.Context(), 0, 20)
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == "access.evaluate.local.dropped" && ev.Actor == "spiffe://omega.local/nodes/n1" && strings.Contains(string(ev.Payload), `"dropped":2`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the loss must be in the chain")
+	}
+}

@@ -56,6 +56,12 @@ type PDP struct {
 	// reserved counts decisions being made that already hold a buffer
 	// slot, so concurrent callers cannot overrun BufferSize.
 	reserved int
+	// dropped counts decisions discarded after the control plane
+	// rejected them, until it has recorded that they were lost.
+	dropped int
+	// batchCap shrinks while the control plane rejects batches, to
+	// isolate the decision it will not accept.
+	batchCap int
 }
 
 type decision struct {
@@ -227,15 +233,25 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 func (p *PDP) Flush(ctx context.Context) error {
 	for {
 		p.mu.Lock()
-		if len(p.pending) == 0 {
+		if len(p.pending) == 0 && p.dropped == 0 {
 			p.mu.Unlock()
 			return nil
 		}
+		limit := maxBatchDecisions
+		if p.batchCap > 0 {
+			limit = p.batchCap
+		}
+		dropped := p.dropped
 		// A batch carries one bundle revision and stays under the
 		// control plane's body and count limits.
-		rev := p.pending[0].revision
+		rev := ""
+		if len(p.pending) > 0 {
+			rev = p.pending[0].revision
+		}
 		n, size := 0, 0
-		for n < len(p.pending) && n < maxBatchDecisions && p.pending[n].revision == rev {
+		// A pending loss report goes out on its own, so a rejected
+		// decision can never hold it back.
+		for dropped == 0 && n < len(p.pending) && n < limit && p.pending[n].revision == rev {
 			if n > 0 && size+len(p.pending[n].raw)+1 > maxBatchBytes {
 				break
 			}
@@ -248,7 +264,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 		}
 		p.mu.Unlock()
 
-		body, err := json.Marshal(map[string]any{"bundle_revision": rev, "decisions": batch})
+		body, err := json.Marshal(map[string]any{"bundle_revision": rev, "decisions": batch, "dropped": dropped})
 		if err != nil {
 			return err
 		}
@@ -276,13 +292,26 @@ func (p *PDP) Flush(ctx context.Context) error {
 				p.mu.Unlock()
 			}
 			// A batch the control plane cannot accept as sent would block
-			// the queue forever: drop it, loudly. Any other refusal, such
-			// as 403 for an agent that is not a decision recorder, keeps
-			// it, so the PDP fails closed once the buffer fills.
-			if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge {
-				slog.Error("local pdp: control plane rejected a decision batch; dropping it", "status", resp.StatusCode, "decisions", n-partial.Recorded, "body", strings.TrimSpace(string(msg)))
+			// the queue forever. Halve the batch until the rejected
+			// decision is alone, then drop just that one, loudly, and
+			// have the control plane record that a decision was lost.
+			// Any other refusal, such as 403 for an agent that is not a
+			// decision recorder, keeps the batch, so the PDP fails closed
+			// once the buffer fills.
+			if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && n > 0 {
+				left := n
+				if partial.Recorded > 0 && partial.Recorded < n {
+					left -= partial.Recorded
+				}
 				p.mu.Lock()
-				p.pending = p.pending[n-partial.Recorded:]
+				if left > 1 {
+					p.batchCap = (left + 1) / 2
+				} else {
+					slog.Error("local pdp: control plane rejected a decision; dropping it", "status", resp.StatusCode, "body", strings.TrimSpace(string(msg)))
+					p.pending = p.pending[1:]
+					p.dropped++
+					p.batchCap = 0
+				}
 				p.mu.Unlock()
 				continue
 			}
@@ -290,6 +319,8 @@ func (p *PDP) Flush(ctx context.Context) error {
 		}
 		p.mu.Lock()
 		p.pending = p.pending[n:]
+		p.dropped -= dropped
+		p.batchCap = 0
 		p.mu.Unlock()
 	}
 }

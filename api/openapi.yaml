@@ -1422,10 +1422,13 @@ components:
 
     DecisionBatch:
       type: object
-      required: [decisions]
       properties:
         bundle_revision:
           type: string
+        dropped:
+          type: integer
+          minimum: 0
+          description: Decisions the agent discarded after a rejection; recorded as access.evaluate.local.dropped.
         decisions:
           type: array
           maxItems: 1000

@@ -78,6 +78,10 @@ type LocalDecision struct {
 type DecisionBatch struct {
 	BundleRevision string          `json:"bundle_revision"`
 	Decisions      []LocalDecision `json:"decisions"`
+	// Dropped counts decisions the agent made but had to discard because
+	// the control plane rejected them; it is recorded as its own event so
+	// the gap is visible in the chain.
+	Dropped int `json:"dropped,omitempty"`
 }
 
 // recordDecisions appends decisions made by a local evaluator to the
@@ -94,6 +98,23 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	var batch DecisionBatch
 	if !decodeJSONBody(w, r, &batch) {
 		return
+	}
+	if batch.Dropped < 0 {
+		writeErr(w, http.StatusBadRequest, errors.New("dropped must not be negative"))
+		return
+	}
+	if batch.Dropped > 0 {
+		if err := s.appendAudit(r.Context(), storage.AuditEvent{
+			Kind: localDecisionKind + ".dropped", Actor: agent, Decision: "error",
+			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "bundle_revision": batch.BundleRevision}),
+		}); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "recorded": 0})
+			return
+		}
+		if len(batch.Decisions) == 0 {
+			writeJSON(w, http.StatusOK, map[string]int{"recorded": 0})
+			return
+		}
 	}
 	if len(batch.Decisions) == 0 {
 		writeErr(w, http.StatusBadRequest, errors.New("decisions is empty"))

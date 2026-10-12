@@ -350,21 +350,55 @@ func TestLocalPDPDropsWhatWasRecordedBeforeRetrying(t *testing.T) {
 	}
 }
 
-func TestLocalPDPDropsABatchTheControlPlaneRejects(t *testing.T) {
-	srv, _ := fakeRecorder(t, func(w http.ResponseWriter, _ int) { w.WriteHeader(http.StatusBadRequest) })
+func TestLocalPDPIsolatesARejectedDecisionAndReportsTheLoss(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		recorded []string
+		dropped  int
+	)
+	b, err := policy.New().Bundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(b)
+			return
+		}
+		var batch api.DecisionBatch
+		_ = json.NewDecoder(r.Body).Decode(&batch)
+		for _, d := range batch.Decisions {
+			if d.Request.Subject.ID == "bad" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		}
+		mu.Lock()
+		dropped += batch.Dropped
+		for _, d := range batch.Decisions {
+			recorded = append(recorded, d.Request.Subject.ID)
+		}
+		mu.Unlock()
+	}))
+	t.Cleanup(srv.Close)
 	ctx := context.Background()
 	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Evaluate(evalReq("spiffe://omega.local/x", "read")); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{"a", "b", "bad", "c", "d"} {
+		if _, err := p.Evaluate(evalReq(id, "read")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := p.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, pending := p.Status(); pending != 0 {
-		t.Fatalf("a rejected batch must not block the queue: %d pending", pending)
+		t.Fatalf("a rejected decision must not block the queue: %d pending", pending)
+	}
+	if len(recorded) != 4 || dropped != 1 {
+		t.Fatalf("every other decision is recorded and the loss is reported: %v, dropped %d", recorded, dropped)
 	}
 }
 
