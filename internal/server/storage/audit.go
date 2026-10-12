@@ -464,11 +464,32 @@ func (s *Store) AppendAuditOnce(ctx context.Context, key string, ev AuditEvent) 
 	}
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now()
-	res, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO audit_once(k, created_at) VALUES (?, ?) ON CONFLICT (k) DO NOTHING`), key, now.UnixNano())
+	sum := sha256.Sum256(append([]byte(ev.Kind+"\x00"+ev.Actor+"\x00"+ev.Subject+"\x00"+ev.Decision+"\x00"), ev.Payload...))
+	digest := hex.EncodeToString(sum[:])
+	res, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO audit_once(k, digest, created_at) VALUES (?, ?, ?) ON CONFLICT (k) DO NOTHING`), key, digest, now.UnixNano())
 	if err != nil {
 		return false, fmt.Errorf("audit: record key: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		// A resend of the same event is the expected case. A different
+		// event under a key already used is not: record that it happened,
+		// so the first write winning does not erase the attempt.
+		var seen string
+		if err := tx.QueryRowContext(ctx, s.rebind(`SELECT digest FROM audit_once WHERE k = ?`), key).Scan(&seen); err != nil {
+			return false, fmt.Errorf("audit: read key: %w", err)
+		}
+		if seen == digest {
+			return false, nil
+		}
+		conflict := AuditEvent{Kind: ev.Kind + ".conflict", Actor: ev.Actor, Subject: ev.Subject, Decision: "error",
+			Payload: mustMarshal(map[string]any{"key": key, "recorded_digest": seen, "resent_digest": digest})}
+		if _, err := s.appendAuditTx(ctx, tx, conflict); err != nil {
+			return false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("audit: commit: %w", err)
+		}
+		s.auditCommitted()
 		return false, nil
 	}
 	if _, err := s.appendAuditTx(ctx, tx, ev); err != nil {
@@ -487,4 +508,12 @@ func (s *Store) AppendAuditOnce(ctx context.Context, key string, ev AuditEvent) 
 		}
 	}
 	return true, nil
+}
+
+func mustMarshal(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return b
 }

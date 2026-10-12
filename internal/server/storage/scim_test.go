@@ -237,12 +237,17 @@ func exerciseAppendOnce(t *testing.T, s *storage.Store) {
 	if got, err := s.AppendAuditOnce(ctx, "k2", ev); err != nil || !got {
 		t.Fatalf("another key: %v %v", got, err)
 	}
+	// A different event under a used key is not recorded, but leaves a
+	// conflict row.
+	if got, err := s.AppendAuditOnce(ctx, "k1", storage.AuditEvent{Kind: "x", Actor: "a", Decision: "allow"}); err != nil || got {
+		t.Fatalf("conflicting resend: %v %v", got, err)
+	}
 	if _, err := s.AppendAuditOnce(ctx, "", ev); err == nil {
 		t.Fatal("an empty key must be refused")
 	}
 	events, _ := s.ListAudit(ctx, 0, 10)
-	if len(events) != 2 {
-		t.Fatalf("rows: %d", len(events))
+	if len(events) != 3 || events[2].Kind != "x.conflict" {
+		t.Fatalf("rows: %+v", events)
 	}
 	if v, err := s.VerifyAudit(ctx, nil); err != nil || !v.Valid {
 		t.Fatalf("verify: %+v %v", v, err)

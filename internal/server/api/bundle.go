@@ -123,7 +123,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || len(batch.DroppedDigests) != len(batch.DroppedIDs) || (batch.Dropped > 0 && batch.LossID == "") || len(batch.LossID) > 128 || !validLossEntries(batch) {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("a loss report needs dropped equal to the number of dropped_ids (at most %d) and a loss_id", maxDecisionBatch))
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("a loss report needs dropped equal to the number of dropped_ids (at most %d), a digest for each, and a loss_id of at most 128 bytes", maxDecisionBatch))
 		return
 	}
 	if batch.Dropped > 0 && len(batch.Decisions) > 0 {
@@ -144,7 +144,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	// leaves nothing in the chain to be written again on a retry.
 	for i, d := range batch.Decisions {
 		if d.ID == "" || len(d.ID) > 128 || d.DecidedAt.IsZero() {
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d needs id and decided_at", i))
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d needs an id of at most 128 bytes and decided_at", i))
 			return
 		}
 		if err := policy.Validate(d.Request); err != nil {

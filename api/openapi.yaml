@@ -1896,6 +1896,7 @@ components:
           description: Hex SHA-256 of each dropped decision, in the order of dropped_ids; required with them.
         loss_id:
           type: string
+          maxLength: 128
           description: Identifies a loss report across retries, so a reader counts each loss once.
         decisions:
           type: array
@@ -1906,6 +1907,7 @@ components:
             properties:
               id:
                 type: string
+                maxLength: 128
               decided_at:
                 type: string
                 format: date-time

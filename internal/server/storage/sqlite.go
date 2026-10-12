@@ -185,6 +185,7 @@ func (s *Store) schemaDDL() []string {
 			 )`,
 			`CREATE TABLE IF NOT EXISTS audit_once (
 			   k          TEXT   PRIMARY KEY,
+		   digest     TEXT   NOT NULL DEFAULT '',
 			   created_at BIGINT NOT NULL
 			 )`,
 			`CREATE TABLE IF NOT EXISTS scim_users (
@@ -274,6 +275,7 @@ func (s *Store) schemaDDL() []string {
 		 )`,
 		`CREATE TABLE IF NOT EXISTS audit_once (
 		   k          TEXT   PRIMARY KEY,
+		   digest     TEXT   NOT NULL DEFAULT '',
 		   created_at BIGINT NOT NULL
 		 )`,
 		`CREATE TABLE IF NOT EXISTS scim_users (
