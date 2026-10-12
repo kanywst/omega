@@ -140,10 +140,24 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				case <-ctx.Done():
 					return nil
 				case err := <-pdpFailed:
+					stop() // end Run now rather than waiting out its flush timeout
 					return err
 				}
 			}
-			return runAgent(ctx, socket, serverURL, mapping, transport)
+			if pdpFailed == nil {
+				return runAgent(ctx, socket, serverURL, mapping, transport)
+			}
+			// Workload API and local PDP together: either failing ends the
+			// process, so a PDP that cannot listen is not silently absent.
+			apiDone := make(chan error, 1)
+			go func() { apiDone <- runAgent(ctx, socket, serverURL, mapping, transport) }()
+			select {
+			case err := <-apiDone:
+				return err
+			case err := <-pdpFailed:
+				stop()
+				return err
+			}
 		},
 	}
 	cmd.Flags().StringVar(&socket, "socket", "/tmp/omega-agent.sock", "Workload API unix socket path")

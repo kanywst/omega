@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -183,18 +184,23 @@ func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 	}
 	defer busy.Close()
 
-	cmd := newAgentCommand()
-	cmd.SilenceErrors, cmd.SilenceUsage = true, true
-	cmd.SetArgs([]string{"--server", "https://127.0.0.1:1", "--server-ca", cert, "--client-cert", cert, "--client-key", keyFile,
-		"--local-pdp-addr", busy.Addr().String()})
-	done := make(chan error, 1)
-	go func() { done <- cmd.Execute() }()
-	select {
-	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "local PDP") {
-			t.Fatalf("want the listener error, got %v", err)
+	base := []string{"--server", "https://127.0.0.1:1", "--server-ca", cert, "--client-cert", cert, "--client-key", keyFile, "--local-pdp-addr", busy.Addr().String()}
+	for name, extra := range map[string][]string{
+		"local PDP only":        nil,
+		"with the Workload API": {"--socket", filepath.Join(dir, "a.sock"), "--map", "uid=0,id=spiffe://omega.local/x"},
+	} {
+		cmd := newAgentCommand()
+		cmd.SilenceErrors, cmd.SilenceUsage = true, true
+		cmd.SetArgs(append(slices.Clone(base), extra...))
+		done := make(chan error, 1)
+		go func() { done <- cmd.Execute() }()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "local PDP") {
+				t.Fatalf("%s: want the listener error, got %v", name, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: an agent whose local PDP cannot listen must exit", name)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("an agent whose only job cannot listen must exit")
 	}
 }
