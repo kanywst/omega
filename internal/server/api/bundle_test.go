@@ -164,7 +164,7 @@ func TestRecordDecisionsRecordsALoss(t *testing.T) {
 		"digests disagree":   {Dropped: 1, DroppedIDs: []string{"a"}, LossID: "l"},
 		"bad digest":         {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"zz"}, LossID: "l"},
 		"empty id":           {Dropped: 1, DroppedIDs: []string{""}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l"},
-		"bad decision after": {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l2", Decisions: []api.LocalDecision{{ID: "x"}}},
+		"loss with decisions": {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l2", Decisions: []api.LocalDecision{{ID: "x"}}},
 	} {
 		if code, _ := call(t, agent, "POST", env.srv.URL+"/v1/audit/decisions", b); code != http.StatusBadRequest {
 			t.Errorf("%s: %d", name, code)

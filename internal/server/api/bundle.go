@@ -111,6 +111,12 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("a loss report needs dropped equal to the number of dropped_ids (at most %d) and a loss_id", maxDecisionBatch))
 		return
 	}
+	if batch.Dropped > 0 && len(batch.Decisions) > 0 {
+		// A loss report travels alone, so a retry of a batch whose
+		// decisions failed cannot record the loss twice.
+		writeErr(w, http.StatusBadRequest, errors.New("send a loss report without decisions"))
+		return
+	}
 	if batch.Dropped == 0 && len(batch.Decisions) == 0 {
 		writeErr(w, http.StatusBadRequest, errors.New("decisions is empty"))
 		return

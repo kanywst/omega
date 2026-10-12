@@ -76,6 +76,8 @@ omega agent --server https://omega:8443 --server-ca ca.pem \
   --local-pdp-addr 127.0.0.1:8181
 ```
 
+The local PDP serves `POST /access/v1/evaluation` and `GET /healthz` only; batch evaluation, search and the AuthZEN metadata document stay on the control plane. When it refuses to decide it answers `503` with `Retry-After`, which AuthZEN 1.0 does not define, so treat any non-200 from it as a deny in the PEP.
+
 `GET /healthz` on the local PDP reports the bundle revision, when it last synced, and how many decisions are waiting.
 
 ## Changing policy

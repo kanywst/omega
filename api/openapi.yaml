@@ -1054,6 +1054,8 @@ paths:
         with `--decision-recorder`. At most 1000 decisions per batch. A
         failed append answers 500 with `recorded`, the number of leading
         decisions already in the chain, so the caller resends only the rest.
+        A loss report (`dropped`, `dropped_ids`, `dropped_digests`,
+        `loss_id`) is sent without decisions.
       requestBody:
         required: true
         content:
@@ -1067,6 +1069,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "403":
           description: The caller is not a listed decision recorder, or the server runs without --require-auth.
+        "413":
+          description: The body is larger than 1 MiB.
         "500":
           description: An append failed after `recorded` decisions were written.
           content:
@@ -1434,6 +1438,13 @@ components:
           maxItems: 1000
           items:
             type: string
+        dropped_digests:
+          type: array
+          maxItems: 1000
+          items:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+          description: Hex SHA-256 of each dropped decision, in the order of dropped_ids; required with them.
         loss_id:
           type: string
           description: Identifies a loss report across retries, so a reader counts each loss once.
