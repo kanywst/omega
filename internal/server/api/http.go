@@ -517,6 +517,25 @@ func (s *Server) appendAudit(ctx context.Context, ev storage.AuditEvent) error {
 	return nil
 }
 
+// appendAuditOnce is appendAudit deduplicated on key (see
+// storage.AppendAuditOnce).
+func (s *Server) appendAuditOnce(ctx context.Context, key string, ev storage.AuditEvent) (bool, error) {
+	if s.auditFault != nil {
+		if err := s.auditFault(ev); err != nil {
+			return false, err
+		}
+	}
+	appended, err := s.store.AppendAuditOnce(ctx, key, ev)
+	if err != nil {
+		slog.Error("audit append failed", "kind", ev.Kind, "err", err)
+		return false, err
+	}
+	if appended {
+		metrics.AuditAppended.WithLabelValues(ev.Kind).Inc()
+	}
+	return appended, nil
+}
+
 func mustJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)
 	if err != nil {

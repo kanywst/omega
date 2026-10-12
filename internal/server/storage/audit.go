@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -438,4 +439,81 @@ func macAuditEvent(ev AuditEvent, key []byte) []byte {
 // hashAuditEvent is the hex-encoded MAC stored in audit_log.hash.
 func hashAuditEvent(ev AuditEvent, key []byte) string {
 	return hex.EncodeToString(macAuditEvent(ev, key))
+}
+
+// auditOnceRetention is how long AppendAuditOnce remembers a key. A retry
+// of the same event comes within minutes; this only has to outlast that.
+const auditOnceRetention = 30 * 24 * time.Hour
+
+// AppendAuditOnce appends ev unless an event was already appended under
+// key, and reports whether it appended. The key and the event commit in
+// one transaction, so a retry after a lost response cannot record the
+// same event twice. Keys older than 30 days are forgotten.
+func (s *Store) AppendAuditOnce(ctx context.Context, key string, ev AuditEvent) (bool, error) {
+	if !s.IsLeader() {
+		return false, ErrNotLeader
+	}
+	if ev.Kind == "" || key == "" {
+		return false, errors.New("audit: kind and key are required")
+	}
+	auditMu.Lock()
+	defer auditMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("audit: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now()
+	sum := sha256.Sum256(append([]byte(ev.Kind+"\x00"+ev.Actor+"\x00"+ev.Subject+"\x00"+ev.Decision+"\x00"), ev.Payload...))
+	digest := hex.EncodeToString(sum[:])
+	res, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO audit_once(k, digest, created_at) VALUES (?, ?, ?) ON CONFLICT (k) DO NOTHING`), key, digest, now.UnixNano())
+	if err != nil {
+		return false, fmt.Errorf("audit: record key: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// A resend of the same event is the expected case. A different
+		// event under a key already used is not: record that it happened,
+		// so the first write winning does not erase the attempt.
+		var seen string
+		if err := tx.QueryRowContext(ctx, s.rebind(`SELECT digest FROM audit_once WHERE k = ?`), key).Scan(&seen); err != nil {
+			return false, fmt.Errorf("audit: read key: %w", err)
+		}
+		if seen == digest {
+			return false, nil
+		}
+		conflict := AuditEvent{Kind: ev.Kind + ".conflict", Actor: ev.Actor, Subject: ev.Subject, Decision: "error",
+			Payload: mustMarshal(map[string]any{"key": key, "recorded_digest": seen, "resent_digest": digest})}
+		if _, err := s.appendAuditTx(ctx, tx, conflict); err != nil {
+			return false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("audit: commit: %w", err)
+		}
+		s.auditCommitted()
+		return false, nil
+	}
+	if _, err := s.appendAuditTx(ctx, tx, ev); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("audit: commit: %w", err)
+	}
+	s.auditCommitted()
+	// Housekeeping after the commit, at most hourly, and never at the
+	// cost of the record: a failure is only logged.
+	if now.Sub(s.oncePrunedAt) > time.Hour {
+		s.oncePrunedAt = now
+		if _, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM audit_once WHERE created_at < ?`), now.Add(-auditOnceRetention).UnixNano()); err != nil {
+			slog.Warn("audit: could not prune remembered keys", "err", err)
+		}
+	}
+	return true, nil
+}
+
+func mustMarshal(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return b
 }
