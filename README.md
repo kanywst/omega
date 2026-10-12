@@ -28,6 +28,8 @@ Cedar joined the CNCF Sandbox on 2025-10-08 and runs in production at Cloudflare
 | Audit | Hash-chained log with webhook and OTLP forwarding | [observability.md](docs/observability.md) |
 | Kubernetes | Helm chart, `OmegaDomain` CRD, and a cert-manager `Issuer` / `ClusterIssuer` | [charts/omega](charts/omega/README.md) |
 
+Already running SPIRE? [examples/spire-authz](examples/spire-authz/) keeps SPIRE as the issuer and adds Omega's authorization, SCIM-provisioned people, node-local decisions and audit on top, end to end in one `make demo`.
+
 One binary runs every role: `omega server`, `omega agent`, `omega operator`, and the CLI (`omega domain`, `omega group`, `omega policy`, `omega svid`).
 
 ## Three subjects, one model

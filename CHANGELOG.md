@@ -8,6 +8,14 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`examples/spire-authz`.** Real SPIRE issues every identity; Omega, on SPIRE's trust domain, authenticates callers by their SPIRE SVIDs, decides with Cedar by SPIRE path and by groups pushed over SCIM, decides locally on the node, and records it all in one audit chain.
+
+### Changed
+
+- **`omega agent` runs without `--map` when `--local-pdp-addr` is set**, serving only the local PDP. That is how it runs beside a SPIRE agent, which issues the identities.
+
 ## [0.7.0] - 2026-10-12
 
 Adds delegated administration of the namespace and the identity data
