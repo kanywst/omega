@@ -100,11 +100,10 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 		return err
 	}
 	dir := policy.Directory{TrustDomain: td, Domains: tree, Memberships: map[string][]policy.Membership{}}
+	// Every group is projected, whether or not its domain made it into
+	// the tree: a group entity has no parents, and dropping one would
+	// silently disarm a forbid on it.
 	for _, g := range groups {
-		if _, ok := tree[g.Domain]; !ok {
-			slog.Warn("group not projected into policy: its domain is not in the tree", "group", g.ID())
-			continue
-		}
 		dir.Groups = append(dir.Groups, g.ID())
 		for _, m := range g.Members {
 			dir.Memberships[m.Principal] = append(dir.Memberships[m.Principal], policy.Membership{Group: g.ID(), ExpiresAt: m.ExpiresAt})

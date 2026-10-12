@@ -2,12 +2,17 @@ package api_test
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kanywst/omega/internal/server/identity"
 
 	"github.com/kanywst/omega/internal/server/api"
 	"github.com/kanywst/omega/internal/server/policy"
@@ -164,5 +169,51 @@ func TestGroupMembershipAuditRecordsExpiries(t *testing.T) {
 	}
 	if !strings.Contains(payloads[3], `"expires_at"`) {
 		t.Errorf("a removal must record the expiry it removed: %s", payloads[3])
+	}
+}
+
+func TestGroupOfAnUnprojectedDomainStillReachesPolicy(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := t.Context()
+	// A domain an earlier version stored under a name that is no longer
+	// valid is left out of the tree, but its groups must still count.
+	raw, err := sql.Open("sqlite", filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `INSERT INTO domains(name, parent, description, created_at) VALUES ('Media', '', '', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	if _, err := store.CreateGroup(ctx, storage.Group{Domain: "Media", Name: "suspended"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutGroupMember(ctx, "Media", "suspended", storage.GroupMember{Principal: bob}); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pdir, "p.cedar"), []byte("permit (principal, action, resource);\nforbid (principal in Group::\"Media:suspended\", action, resource);"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pdp := policy.New()
+	if err := pdp.LoadDir(pdir); err != nil {
+		t.Fatal(err)
+	}
+	s := api.NewServer(store, ca, pdp)
+	if err := s.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r, err := pdp.Evaluate(policy.EvalRequest{Subject: policy.Entity{Type: "Spiffe", ID: bob}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"}})
+	if err != nil || r.Decision {
+		t.Fatalf("the forbid on Media:suspended must still apply: %+v %v", r, err)
 	}
 }
