@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -162,5 +163,38 @@ func TestAgentNeedsAMapOrALocalPDP(t *testing.T) {
 	cmd.SetArgs([]string{"--local-pdp-addr", "127.0.0.1:0", "--server", "http://cp"})
 	if err := cmd.Execute(); err == nil || strings.Contains(err.Error(), "--map") {
 		t.Fatalf("want the local PDP's own checks, got: %v", err)
+	}
+}
+
+func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
+	dir := t.TempDir()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	u, _ := url.Parse("spiffe://omega.local/nodes/n1")
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(3), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), URIs: []*url.URL{u}}
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	kd, _ := x509.MarshalECPrivateKey(key)
+	cert, keyFile := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+	_ = os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600)
+	_ = os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kd}), 0o600)
+
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+
+	cmd := newAgentCommand()
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	cmd.SetArgs([]string{"--server", "https://127.0.0.1:1", "--server-ca", cert, "--client-cert", cert, "--client-key", keyFile,
+		"--local-pdp-addr", busy.Addr().String()})
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "local PDP") {
+			t.Fatalf("want the listener error, got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("an agent whose only job cannot listen must exit")
 	}
 }

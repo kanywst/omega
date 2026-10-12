@@ -85,6 +85,7 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				_ = shutdownTracing(flushCtx)
 			}()
 
+			var pdpFailed chan error
 			transport, err := controlPlaneTransport(serverURL, serverCA, clientCert, clientKey)
 			if err != nil {
 				return err
@@ -116,11 +117,12 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 					case <-time.After(6 * time.Second):
 					}
 				}()
+				pdpFailed = make(chan error, 1)
 				srv := &http.Server{Addr: pdpAddr, Handler: pdp.Handler(), ReadHeaderTimeout: 5 * time.Second}
 				go func() {
 					fmt.Fprintf(os.Stderr, "omega agent: local PDP on %s\n", pdpAddr)
 					if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-						fmt.Fprintf(os.Stderr, "omega agent: local PDP: %v\n", err)
+						pdpFailed <- fmt.Errorf("local PDP: %w", err)
 					}
 				}()
 				defer func() {
@@ -131,9 +133,15 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 			}
 
 			if len(mapping) == 0 {
+				// The local PDP is all this agent does, so a listener that
+				// cannot serve ends the process and the orchestrator sees it.
 				fmt.Fprintln(os.Stderr, "omega agent: no --map, so no Workload API; serving the local PDP only")
-				<-ctx.Done()
-				return nil
+				select {
+				case <-ctx.Done():
+					return nil
+				case err := <-pdpFailed:
+					return err
+				}
 			}
 			return runAgent(ctx, socket, serverURL, mapping, transport)
 		},

@@ -103,10 +103,16 @@ dc up -d spire-agent >/dev/null 2>&1
 wait_healthy spire-agent
 
 echo "[demo] fetching the admin's and the node agent's SVIDs from SPIRE"
+# Written inside the agent container and copied out with compose cp, so the
+# files belong to whoever runs the demo rather than to the container's root.
 for _ in $(seq 1 30); do
-	dc exec -T spire-agent /opt/spire/bin/spire-agent api fetch x509 \
-		-socketPath /run/spire/sockets/agent.sock -write /svids >/dev/null 2>&1 &&
+	if dc exec -T spire-agent /opt/spire/bin/spire-agent api fetch x509 \
+		-socketPath /run/spire/sockets/agent.sock -write /run/spire/sockets >/dev/null 2>&1; then
+		for f in svid.0.pem svid.0.key svid.1.pem svid.1.key bundle.0.pem; do
+			dc cp "spire-agent:/run/spire/sockets/$f" "$RUN_DIR/svids/$f" >/dev/null 2>&1 || true
+		done
 		[ -f "$RUN_DIR/svids/svid.1.pem" ] && break
+	fi
 	sleep 2
 done
 for pem in "$RUN_DIR"/svids/svid.*.pem; do

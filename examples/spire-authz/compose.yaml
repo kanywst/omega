@@ -38,7 +38,6 @@ services:
       - ./conf/agent.conf:/opt/spire/conf/agent/agent.conf:ro
       - ./run/bootstrap.crt:/opt/spire/conf/agent/bootstrap.crt:ro
       - agent-sockets:/run/spire/sockets
-      - ./run/svids:/svids
     healthcheck:
       test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/run/spire/sockets/agent.sock"]
       interval: 2s
@@ -77,7 +76,7 @@ services:
       - ./run/demo:/run/demo:ro
       - omega-data:/var/lib/omega
     ports:
-      - "18895:8443"
+      - "127.0.0.1:18895:8443"
 
   omega-agent:
     image: omega:dev
@@ -99,7 +98,7 @@ services:
     volumes:
       - ./run/demo:/run/demo:ro
     ports:
-      - "18182:8181"
+      - "127.0.0.1:18182:8181"
 
 volumes:
   spire-server-data:
