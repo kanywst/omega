@@ -12,11 +12,7 @@ release as features are ready rather than on a fixed cadence; see
 
 ## Now (next release, post-0.7.0)
 
-- Sign the policy bundle with the control plane's key, so a node agent
-  can verify it independently of the TLS channel
-  ([ADR 0016](docs/adr/0016-local-policy-decisions.md)).
-- Spool local decisions to disk on the node, so an agent killed before
-  a flush does not lose the record of decisions it already answered.
+Nothing is committed beyond what is on `main`: signed policy bundles and the decision spool ([ADR 0018](docs/adr/0018-signed-bundles-and-decision-spool.md)) have landed.
 
 ## Next (3-6 months)
 

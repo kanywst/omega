@@ -25,6 +25,10 @@ server:
   # local PDP (--decision-recorder): only they may read the policy bundle
   # and record local decisions. Needs --require-auth.
   decisionRecorders: []
+  # Secret whose "bundle.key" holds an ECDSA P-256 private key; when set,
+  # every policy bundle served to node agents is signed with it
+  # (--policy-bundle-signing-key). Agents verify with the public half.
+  policyBundleSigningKeySecret: ""
   # Identity providers that provision users and groups over SCIM 2.0
   # (--scim-idp). Each entry: name, domain (must exist), tokenSecret (a
   # Secret in this namespace whose "token" key holds the bearer token)
@@ -72,6 +76,11 @@ agent:
     enabled: false
     addr: "127.0.0.1:8181"
     tlsSecret: ""
+    # Verify bundle signatures with "bundle.pub" from tlsSecret.
+    verifyBundle: false
+    # Spool decisions to the node so they survive an agent crash
+    # (hostPath under this directory; one fsync per decision).
+    spoolDir: ""
   extraArgs: []
 
 policy:

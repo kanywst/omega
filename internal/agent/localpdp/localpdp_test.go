@@ -1,7 +1,11 @@
 package localpdp_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"net"
@@ -11,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -534,5 +539,120 @@ func TestLocalPDPRejectsAMalformedRequestAs400(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("missing subject and resource: %d", resp.StatusCode)
+	}
+}
+
+func signedRecorder(t *testing.T, key *ecdsa.PrivateKey) *httptest.Server {
+	t.Helper()
+	b, err := testBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != nil {
+		if err := policy.SignBundle(&b, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(b)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestLocalPDPVerifiesTheBundleSignature(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ctx := context.Background()
+	cfg := func(url string, pub *ecdsa.PublicKey) localpdp.Config {
+		return localpdp.Config{ServerURL: url, TrustDomain: "omega.local", BundleKey: pub}
+	}
+	if err := localpdp.New(cfg(signedRecorder(t, key).URL, &key.PublicKey)).Sync(ctx); err != nil {
+		t.Fatalf("a bundle signed with the configured key: %v", err)
+	}
+	if err := localpdp.New(cfg(signedRecorder(t, other).URL, &key.PublicKey)).Sync(ctx); err == nil {
+		t.Fatal("a bundle signed with another key must be refused")
+	}
+	if err := localpdp.New(cfg(signedRecorder(t, nil).URL, &key.PublicKey)).Sync(ctx); err == nil {
+		t.Fatal("an unsigned bundle must be refused when a key is configured")
+	}
+	if err := localpdp.New(cfg(signedRecorder(t, nil).URL, nil)).Sync(ctx); err != nil {
+		t.Fatalf("without a key, an unsigned bundle loads: %v", err)
+	}
+}
+
+func TestLocalPDPSpoolSurvivesARestart(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		recorded int
+		up       atomic.Bool
+	)
+	b, err := testBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(b)
+			return
+		}
+		if !up.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		var batch api.DecisionBatch
+		_ = json.NewDecoder(r.Body).Decode(&batch)
+		mu.Lock()
+		recorded += len(batch.Decisions)
+		mu.Unlock()
+	}))
+	t.Cleanup(srv.Close)
+	spool := filepath.Join(t.TempDir(), "decisions.spool")
+	ctx := context.Background()
+	cfg := localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", SpoolPath: spool}
+
+	first := localpdp.New(cfg)
+	if err := first.RestoreSpool(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := first.Evaluate(evalReq("spiffe://omega.local/x", "read")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The control plane is down, then the agent dies without a flush.
+	if err := first.Flush(ctx); err == nil {
+		t.Fatal("flush to an unavailable control plane must fail")
+	}
+	// A crash mid-write leaves a torn line; it must not stop the restore.
+	f, err := os.OpenFile(spool, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(`{"id":"torn`)
+	_ = f.Close()
+
+	second := localpdp.New(cfg)
+	if err := second.RestoreSpool(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pending := second.Status(); pending != 3 {
+		t.Fatalf("decisions answered before the restart must be requeued: %d", pending)
+	}
+	up.Store(true)
+	if err := second.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != 3 {
+		t.Fatalf("recorded after restart: %d", recorded)
+	}
+	raw, err := os.ReadFile(spool)
+	if err != nil || len(bytes.TrimSpace(raw)) != 0 {
+		t.Fatalf("the spool must be empty once everything is recorded: %q %v", raw, err)
 	}
 }

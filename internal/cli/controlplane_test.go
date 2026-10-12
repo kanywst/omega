@@ -204,3 +204,39 @@ func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 		}
 	}
 }
+
+func TestBundleKeyLoaders(t *testing.T) {
+	dir := t.TempDir()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	sec1, _ := x509.MarshalECPrivateKey(key)
+	pkcs8, _ := x509.MarshalPKCS8PrivateKey(key)
+	pub, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	p384der, _ := x509.MarshalECPrivateKey(p384)
+	write := func(name, typ string, der []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for _, p := range []string{write("sec1.pem", "EC PRIVATE KEY", sec1), write("pkcs8.pem", "PRIVATE KEY", pkcs8)} {
+		if _, err := loadBundleSigningKey(p); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	if _, err := loadBundleVerifyKey(write("pub.pem", "PUBLIC KEY", pub)); err != nil {
+		t.Errorf("public key: %v", err)
+	}
+	for name, err := range map[string]error{
+		"P-384 signing key":   func() error { _, e := loadBundleSigningKey(write("p384.pem", "EC PRIVATE KEY", p384der)); return e }(),
+		"wrong signing type":  func() error { _, e := loadBundleSigningKey(write("x.pem", "CERTIFICATE", []byte("x"))); return e }(),
+		"missing signing key": func() error { _, e := loadBundleSigningKey(filepath.Join(dir, "nope")); return e }(),
+		"private as public":   func() error { _, e := loadBundleVerifyKey(write("sec1b.pem", "EC PRIVATE KEY", sec1)); return e }(),
+		"no PEM":              func() error { _, e := loadBundleVerifyKey(write("junk", "", nil)); return e }(),
+	} {
+		if err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}

@@ -1,6 +1,10 @@
 package api_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -184,5 +188,25 @@ func TestRecordDecisionsRecordsALoss(t *testing.T) {
 		if strings.Contains(string(ev.Payload), `"l2"`) {
 			t.Error("a rejected batch must leave no loss row behind")
 		}
+	}
+}
+
+func TestPolicyBundleIsSignedWhenAKeyIsSet(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	env := newDomainEnv(t, `permit (principal, action, resource);`, "spiffe://omega.local/nodes/")
+	env.api.WithBundleSigningKey(key)
+	code, body := call(t, env.as(t, "spiffe://omega.local/nodes/n1"), "GET", env.srv.URL+"/v1/policy/bundle", nil)
+	if code != http.StatusOK {
+		t.Fatalf("bundle: %d %s", code, body)
+	}
+	var b policy.Bundle
+	if err := json.Unmarshal(body, &b); err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.CheckRevision(b); err != nil {
+		t.Fatalf("the signature must not change the revision: %v", err)
+	}
+	if err := policy.VerifyBundle(b, &key.PublicKey); err != nil {
+		t.Fatalf("served bundle must verify: %v", err)
 	}
 }

@@ -40,6 +40,12 @@ spec:
             - --server-ca=/etc/omega/agent-tls/ca.crt
             - --client-cert=/etc/omega/agent-tls/tls.crt
             - --client-key=/etc/omega/agent-tls/tls.key
+            {{- if .Values.agent.localPDP.verifyBundle }}
+            - --policy-bundle-key=/etc/omega/agent-tls/bundle.pub
+            {{- end }}
+            {{- if .Values.agent.localPDP.spoolDir }}
+            - --decision-spool=/var/lib/omega-agent/decisions.spool
+            {{- end }}
             {{- end }}
             {{- range .Values.agent.extraArgs }}
             - {{ . | quote }}
@@ -53,6 +59,10 @@ spec:
             - name: agent-tls
               mountPath: /etc/omega/agent-tls
               readOnly: true
+            {{- if .Values.agent.localPDP.spoolDir }}
+            - name: decision-spool
+              mountPath: /var/lib/omega-agent
+            {{- end }}
             {{- end }}
       volumes:
         - name: agent-sock
@@ -63,5 +73,11 @@ spec:
         - name: agent-tls
           secret:
             secretName: {{ required "agent.localPDP.tlsSecret is required when agent.localPDP.enabled" .Values.agent.localPDP.tlsSecret }}
+        {{- if .Values.agent.localPDP.spoolDir }}
+        - name: decision-spool
+          hostPath:
+            path: {{ .Values.agent.localPDP.spoolDir }}
+            type: DirectoryOrCreate
+        {{- end }}
         {{- end }}
 {{- end }}

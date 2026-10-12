@@ -102,6 +102,7 @@ func newServerCommand() *cobra.Command {
 		clientCertOptional         bool
 		domainRootAdmins           []string
 		decisionRecorders          []string
+		bundleSigningKeyFile       string
 		scimIDPs                   []string
 		identitySource             string
 		identitySourceBundle       string
@@ -534,6 +535,13 @@ func newServerCommand() *cobra.Command {
 			}
 
 			apiServer = apiServer.WithDomainRootAdmins(domainRootAdmins).WithDecisionRecorders(decisionRecorders)
+			if bundleSigningKeyFile != "" {
+				key, err := loadBundleSigningKey(bundleSigningKeyFile)
+				if err != nil {
+					return err
+				}
+				apiServer = apiServer.WithBundleSigningKey(key)
+			}
 			if len(scimIDPs) > 0 {
 				cfgs, err := parseSCIMIDPFlags(scimIDPs, ca.TrustDomain().Name())
 				if err != nil {
@@ -723,6 +731,8 @@ func newServerCommand() *cobra.Command {
 		"let an identity provider provision users and groups over SCIM 2.0 at /scim/v2/<name>/ (repeatable), as 'name=<name>,domain=<domain>,token-file=<path>[,template=<spiffe-id-template>]'. The provider authenticates with the bearer token in token-file, its groups are created in domain, and each user's memberships go to the SPIFFE ID the template gives ({idp}, {externalId}, {userName}; default spiffe://<trust-domain>/humans/{idp}/{externalId}).")
 	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
+	cmd.Flags().StringVar(&bundleSigningKeyFile, "policy-bundle-signing-key", "",
+		"ECDSA P-256 private key (PEM) that signs every policy bundle served to node agents, so they can verify it with --policy-bundle-key independently of TLS. Every replica must use the same key.")
 	cmd.Flags().StringArrayVar(&decisionRecorders, "decision-recorder", nil,
 		"SPIFFE ID, or a prefix ending in '/', allowed to read GET /v1/policy/bundle and record decisions through POST /v1/audit/decisions (repeatable): the node agents running --local-pdp-addr. Needs --require-auth; with none set both endpoints refuse every caller.")
 	cmd.Flags().BoolVar(&clientCertOptional, "client-cert-optional", false,

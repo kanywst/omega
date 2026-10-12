@@ -18,4 +18,4 @@ make demo
 | policy file replaced, server `SIGHUP` | the node denies after its next sync |
 | control plane stopped | the node keeps answering, then `503` after `--policy-max-age` |
 
-The script makes a throwaway CA with `openssl` and issues the server certificate, a root admin SVID for its own calls, and the agent's SVID; the server lists `spiffe://omega.local/nodes/` as `--decision-recorder`. The agent runs with `--policy-sync-interval 1s --policy-max-age 4s` so the demo is quick. `make down` cleans up.
+The script makes a throwaway CA with `openssl` and issues the server certificate, a root admin SVID for its own calls, and the agent's SVID; the server lists `spiffe://omega.local/nodes/` as `--decision-recorder`. The server signs every policy bundle (`--policy-bundle-signing-key`) and the agent accepts only bundles with that signature (`--policy-bundle-key`), and spools each decision to disk before answering (`--decision-spool`), per [ADR 0018](../../docs/adr/0018-signed-bundles-and-decision-spool.md). The agent runs with `--policy-sync-interval 1s --policy-max-age 4s` so the demo is quick. `make down` cleans up.

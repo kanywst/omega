@@ -5,8 +5,10 @@
 package localpdp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -44,6 +47,13 @@ type Config struct {
 	// bundle for another one, or for none, is refused, and without it
 	// no bundle is loaded at all.
 	TrustDomain string
+	// BundleKey, when set, is the control plane's bundle signing key: a
+	// bundle without a valid signature from it is refused.
+	BundleKey *ecdsa.PublicKey
+	// SpoolPath, when set, is a file every decision is written and
+	// synced to before it is answered, so decisions survive a crash of
+	// the agent; RestoreSpool reloads them at start.
+	SpoolPath string
 }
 
 // PDP evaluates locally against the last synced bundle.
@@ -74,6 +84,112 @@ type PDP struct {
 	// batchCap shrinks while the control plane rejects batches, to
 	// isolate the decision it will not accept.
 	batchCap int
+
+	// spoolMu serialises spool writes; take it before mu.
+	spoolMu sync.Mutex
+	spool   *os.File
+}
+
+// spoolEntry is one line of the spool file.
+type spoolEntry struct {
+	ID       string          `json:"id"`
+	Revision string          `json:"revision"`
+	Decision json.RawMessage `json:"decision"`
+}
+
+// RestoreSpool opens the spool and requeues every decision in it: ones
+// answered before a crash or restart that never reached the control
+// plane. Call it once, before serving. Without SpoolPath it does nothing.
+func (p *PDP) RestoreSpool() error {
+	if p.cfg.SpoolPath == "" {
+		return nil
+	}
+	p.spoolMu.Lock()
+	defer p.spoolMu.Unlock()
+	// #nosec G304 -- operator-supplied --decision-spool path.
+	raw, err := os.ReadFile(p.cfg.SpoolPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read decision spool: %w", err)
+	}
+	var restored []queued
+	for i, line := range bytes.Split(raw, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var e spoolEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			// A torn last line is what a crash mid-write leaves; its
+			// decision was never answered, so it is safe to skip.
+			slog.Warn("local pdp: skipping an unreadable decision spool line", "line", i+1, "err", err)
+			continue
+		}
+		restored = append(restored, queued{id: e.ID, raw: e.Decision, revision: e.Revision})
+	}
+	p.mu.Lock()
+	p.pending = append(restored, p.pending...)
+	p.mu.Unlock()
+	if len(restored) > 0 {
+		slog.Info("local pdp: requeued decisions from the spool", "decisions", len(restored))
+	}
+	return p.rewriteSpoolLocked()
+}
+
+// spoolDecision writes q to the spool and syncs it. Callers hold spoolMu.
+func (p *PDP) spoolDecision(q queued) error {
+	line, err := json.Marshal(spoolEntry{ID: q.id, Revision: q.revision, Decision: q.raw})
+	if err != nil {
+		return err
+	}
+	if _, err := p.spool.Write(append(line, '\n')); err != nil {
+		return fmt.Errorf("write decision spool: %w", err)
+	}
+	if err := p.spool.Sync(); err != nil {
+		return fmt.Errorf("sync decision spool: %w", err)
+	}
+	return nil
+}
+
+// rewriteSpoolLocked replaces the spool with what is still pending.
+// Callers hold spoolMu.
+func (p *PDP) rewriteSpoolLocked() error {
+	p.mu.Lock()
+	pending := slices.Clone(p.pending)
+	p.mu.Unlock()
+	tmp := p.cfg.SpoolPath + ".tmp"
+	// #nosec G304 -- derived from the operator-supplied spool path.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("rewrite decision spool: %w", err)
+	}
+	w := bufio.NewWriter(f)
+	for _, q := range pending {
+		line, err := json.Marshal(spoolEntry{ID: q.id, Revision: q.revision, Decision: q.raw})
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		_, _ = w.Write(append(line, '\n'))
+	}
+	if err := w.Flush(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("rewrite decision spool: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("rewrite decision spool: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, p.cfg.SpoolPath); err != nil {
+		return fmt.Errorf("rewrite decision spool: %w", err)
+	}
+	if p.spool != nil {
+		_ = p.spool.Close()
+	}
+	// #nosec G304 -- operator-supplied --decision-spool path.
+	p.spool, err = os.OpenFile(p.cfg.SpoolPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	return err
 }
 
 type decision struct {
@@ -200,6 +316,14 @@ func (p *PDP) Sync(ctx context.Context) error {
 	if b.Directory.TrustDomain != p.cfg.TrustDomain {
 		return fmt.Errorf("bundle is for trust domain %q, not %q", b.Directory.TrustDomain, p.cfg.TrustDomain)
 	}
+	if p.cfg.BundleKey != nil {
+		if err := policy.CheckRevision(b); err != nil {
+			return err
+		}
+		if err := policy.VerifyBundle(b, p.cfg.BundleKey); err != nil {
+			return err
+		}
+	}
 	if err := p.engine.LoadBundle(b); err != nil {
 		return err
 	}
@@ -248,8 +372,21 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 	if err != nil {
 		return policy.EvalResponse{}, err
 	}
+	q := queued{id: id, raw: raw, revision: rev}
+	if p.cfg.SpoolPath != "" {
+		// On disk before it is answered: a crash after this point loses
+		// nothing; a failed write answers an error instead of a decision.
+		p.spoolMu.Lock()
+		defer p.spoolMu.Unlock()
+		if p.spool == nil {
+			return policy.EvalResponse{}, errors.New("decision spool is not open")
+		}
+		if err := p.spoolDecision(q); err != nil {
+			return policy.EvalResponse{}, err
+		}
+	}
 	p.mu.Lock()
-	p.pending = append(p.pending, queued{id: id, raw: raw, revision: rev})
+	p.pending = append(p.pending, q)
 	p.reserved--
 	p.mu.Unlock()
 	queuedOK = true
@@ -259,6 +396,18 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 // Flush ships queued decisions in batches; on a failed batch it keeps
 // that batch and everything after it for the next attempt.
 func (p *PDP) Flush(ctx context.Context) error {
+	err := p.flush(ctx)
+	if p.cfg.SpoolPath != "" {
+		p.spoolMu.Lock()
+		if serr := p.rewriteSpoolLocked(); serr != nil && err == nil {
+			err = serr
+		}
+		p.spoolMu.Unlock()
+	}
+	return err
+}
+
+func (p *PDP) flush(ctx context.Context) error {
 	for {
 		p.mu.Lock()
 		if len(p.pending) == 0 && len(p.droppedIDs) == 0 {

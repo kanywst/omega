@@ -69,6 +69,10 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=
 issue server "" 127.0.0.1
 issue root spiffe://omega.local/platform/root
 issue agent spiffe://omega.local/nodes/n1
+# The control plane signs every bundle; the agent accepts only bundles
+# signed with this key (ADR 0018).
+openssl ecparam -name prime256v1 -genkey -noout -out "$DEMO_DIR/pki/bundle.key" 2>/dev/null
+openssl ec -in "$DEMO_DIR/pki/bundle.key" -pubout -out "$DEMO_DIR/pki/bundle.pub" 2>/dev/null
 
 CP="https://127.0.0.1:$SERVER_PORT"
 echo "[demo] starting the control plane on :$SERVER_PORT (mTLS, --require-auth)"
@@ -76,7 +80,8 @@ echo "[demo] starting the control plane on :$SERVER_PORT (mTLS, --require-auth)"
 	--data-dir "$DEMO_DIR/server" --policy-dir "$DEMO_DIR/policies" \
 	--tls-cert "$DEMO_DIR/pki/server.pem" --tls-key "$DEMO_DIR/pki/server.key" --client-ca "$DEMO_DIR/pki/ca.pem" \
 	--require-auth --domain-root-admin spiffe://omega.local/platform/root \
-	--decision-recorder spiffe://omega.local/nodes/ >"$DEMO_DIR/server.log" 2>&1 &
+	--decision-recorder spiffe://omega.local/nodes/ \
+	--policy-bundle-signing-key "$DEMO_DIR/pki/bundle.key" >"$DEMO_DIR/server.log" 2>&1 &
 echo $! >"$DEMO_DIR/server.pid"
 wait_up "$CP/healthz" cp_curl
 cp_curl -fsS -X POST "$CP/v1/domains" -H 'Content-Type: application/json' -d '{"name":"media"}' >/dev/null
@@ -84,6 +89,7 @@ cp_curl -fsS -X POST "$CP/v1/domains" -H 'Content-Type: application/json' -d '{"
 echo "[demo] starting the agent with a local PDP on :$PDP_PORT"
 "$DEMO_DIR/omega" agent --socket "$DEMO_DIR/agent.sock" --server "$CP" \
 	--server-ca "$DEMO_DIR/pki/ca.pem" --client-cert "$DEMO_DIR/pki/agent.pem" --client-key "$DEMO_DIR/pki/agent.key" \
+	--policy-bundle-key "$DEMO_DIR/pki/bundle.pub" --decision-spool "$DEMO_DIR/decisions.spool" \
 	--map "uid=$(id -u),id=spiffe://omega.local/media/web" \
 	--local-pdp-addr "127.0.0.1:$PDP_PORT" --policy-sync-interval 1s --policy-max-age 4s \
 	>"$DEMO_DIR/agent.log" 2>&1 &
