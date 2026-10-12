@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -56,9 +57,13 @@ type PDP struct {
 	// reserved counts decisions being made that already hold a buffer
 	// slot, so concurrent callers cannot overrun BufferSize.
 	reserved int
-	// dropped counts decisions discarded after the control plane
-	// rejected them, until it has recorded that they were lost.
-	dropped int
+	// droppedIDs are decisions discarded after the control plane
+	// rejected them, until it has recorded the loss under lossID, which
+	// stays the same across retries so a reader can dedupe the report.
+	droppedIDs []string
+	lossID     string
+	// dropStreak counts drops since a decision was last recorded.
+	dropStreak int
 	// batchCap shrinks while the control plane rejects batches, to
 	// isolate the decision it will not accept.
 	batchCap int
@@ -74,9 +79,16 @@ type decision struct {
 // queued is a decision encoded for shipping, with the bundle revision
 // it was made with.
 type queued struct {
+	id       string
 	raw      json.RawMessage
 	revision string
 }
+
+// maxDropStreak is how many decisions in a row may be dropped as
+// rejected before the PDP stops dropping and fails closed: one bad
+// decision is isolated, a control plane rejecting everything is not
+// allowed to empty the queue unrecorded.
+const maxDropStreak = 3
 
 const (
 	// MaxRequestBytes caps one evaluation request, so a single decision
@@ -216,12 +228,13 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 	if err != nil {
 		return policy.EvalResponse{}, err
 	}
-	raw, err := json.Marshal(decision{ID: newID(), DecidedAt: time.Now().UTC(), Request: req, Response: resp})
+	id := newID()
+	raw, err := json.Marshal(decision{ID: id, DecidedAt: time.Now().UTC(), Request: req, Response: resp})
 	if err != nil {
 		return policy.EvalResponse{}, err
 	}
 	p.mu.Lock()
-	p.pending = append(p.pending, queued{raw: raw, revision: rev})
+	p.pending = append(p.pending, queued{id: id, raw: raw, revision: rev})
 	p.reserved--
 	p.mu.Unlock()
 	queuedOK = true
@@ -233,7 +246,7 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 func (p *PDP) Flush(ctx context.Context) error {
 	for {
 		p.mu.Lock()
-		if len(p.pending) == 0 && p.dropped == 0 {
+		if len(p.pending) == 0 && len(p.droppedIDs) == 0 {
 			p.mu.Unlock()
 			return nil
 		}
@@ -241,7 +254,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 		if p.batchCap > 0 {
 			limit = p.batchCap
 		}
-		dropped := p.dropped
+		droppedIDs, lossID := slices.Clone(p.droppedIDs), p.lossID
 		// A batch carries one bundle revision and stays under the
 		// control plane's body and count limits.
 		rev := ""
@@ -251,7 +264,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 		n, size := 0, 0
 		// A pending loss report goes out on its own, so a rejected
 		// decision can never hold it back.
-		for dropped == 0 && n < len(p.pending) && n < limit && p.pending[n].revision == rev {
+		for len(droppedIDs) == 0 && n < len(p.pending) && n < limit && p.pending[n].revision == rev {
 			if n > 0 && size+len(p.pending[n].raw)+1 > maxBatchBytes {
 				break
 			}
@@ -264,7 +277,11 @@ func (p *PDP) Flush(ctx context.Context) error {
 		}
 		p.mu.Unlock()
 
-		body, err := json.Marshal(map[string]any{"bundle_revision": rev, "decisions": batch, "dropped": dropped})
+		payload := map[string]any{"bundle_revision": rev, "decisions": batch}
+		if len(droppedIDs) > 0 {
+			payload["dropped"], payload["dropped_ids"], payload["loss_id"] = len(droppedIDs), droppedIDs, lossID
+		}
+		body, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
@@ -304,12 +321,22 @@ func (p *PDP) Flush(ctx context.Context) error {
 					left -= partial.Recorded
 				}
 				p.mu.Lock()
-				if left > 1 {
+				switch {
+				case left > 1:
 					p.batchCap = (left + 1) / 2
-				} else {
-					slog.Error("local pdp: control plane rejected a decision; dropping it", "status", resp.StatusCode, "body", strings.TrimSpace(string(msg)))
+				case p.dropStreak >= maxDropStreak:
+					// Too many rejections in a row: this is the control
+					// plane, not one decision. Keep the queue; fail closed.
+					p.mu.Unlock()
+					return fmt.Errorf("ship decisions: %d rejected in a row, not dropping more: %d %s", p.dropStreak, resp.StatusCode, strings.TrimSpace(string(msg)))
+				default:
+					slog.Error("local pdp: control plane rejected a decision; dropping it", "id", p.pending[0].id, "status", resp.StatusCode, "body", strings.TrimSpace(string(msg)))
+					if p.lossID == "" {
+						p.lossID = newID()
+					}
+					p.droppedIDs = append(p.droppedIDs, p.pending[0].id)
 					p.pending = p.pending[1:]
-					p.dropped++
+					p.dropStreak++
 					p.batchCap = 0
 				}
 				p.mu.Unlock()
@@ -319,7 +346,15 @@ func (p *PDP) Flush(ctx context.Context) error {
 		}
 		p.mu.Lock()
 		p.pending = p.pending[n:]
-		p.dropped -= dropped
+		if len(droppedIDs) > 0 {
+			p.droppedIDs = p.droppedIDs[len(droppedIDs):]
+			if len(p.droppedIDs) == 0 {
+				p.lossID = ""
+			}
+		}
+		if n > 0 {
+			p.dropStreak = 0
+		}
 		p.batchCap = 0
 		p.mu.Unlock()
 	}

@@ -421,3 +421,83 @@ func TestLocalPDPBufferIsAHardCap(t *testing.T) {
 		t.Fatalf("buffer overrun: %d pending", pending)
 	}
 }
+
+func TestLocalPDPStopsDroppingWhenEverythingIsRejected(t *testing.T) {
+	srv, _ := fakeRecorder(t, func() []func(http.ResponseWriter, int) {
+		var out []func(http.ResponseWriter, int)
+		for range 100 {
+			out = append(out, func(w http.ResponseWriter, _ int) { w.WriteHeader(http.StatusBadRequest) })
+		}
+		return out
+	}()...)
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := p.Evaluate(evalReq("spiffe://omega.local/x", "read")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Whether it stops at the streak limit or at the rejected loss
+	// report, it must stop: never empty the queue unrecorded.
+	for range 5 {
+		if err := p.Flush(ctx); err == nil {
+			t.Fatal("a control plane rejecting everything must make Flush fail")
+		}
+	}
+	if _, _, pending := p.Status(); pending < 10-3 {
+		t.Fatalf("at most 3 decisions may be dropped; %d left", pending)
+	}
+}
+
+func TestLocalPDPLossReportKeepsItsIDAcrossRetries(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		reports []api.DecisionBatch
+	)
+	b, err := policy.New().Bundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(b)
+			return
+		}
+		var batch api.DecisionBatch
+		_ = json.NewDecoder(r.Body).Decode(&batch)
+		if len(batch.Decisions) > 0 && batch.Decisions[0].Request.Subject.ID == "bad" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if batch.Dropped > 0 {
+			mu.Lock()
+			reports = append(reports, batch)
+			first := len(reports) == 1
+			mu.Unlock()
+			if first {
+				w.WriteHeader(http.StatusBadGateway)
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Evaluate(evalReq("bad", "read")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Flush(ctx); err == nil {
+		t.Fatal("the first loss report fails")
+	}
+	if err := p.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 2 || reports[0].LossID == "" || reports[0].LossID != reports[1].LossID || len(reports[1].DroppedIDs) != 1 {
+		t.Fatalf("a retried loss report must keep its id and name the dropped decision: %+v", reports)
+	}
+}

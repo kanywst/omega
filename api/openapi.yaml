@@ -1429,6 +1429,14 @@ components:
           type: integer
           minimum: 0
           description: Decisions the agent discarded after a rejection; recorded as access.evaluate.local.dropped.
+        dropped_ids:
+          type: array
+          maxItems: 1000
+          items:
+            type: string
+        loss_id:
+          type: string
+          description: Identifies a loss report across retries, so a reader counts each loss once.
         decisions:
           type: array
           maxItems: 1000

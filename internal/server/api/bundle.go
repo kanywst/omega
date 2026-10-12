@@ -82,6 +82,10 @@ type DecisionBatch struct {
 	// the control plane rejected them; it is recorded as its own event so
 	// the gap is visible in the chain.
 	Dropped int `json:"dropped,omitempty"`
+	// DroppedIDs names the dropped decisions, and LossID identifies the
+	// report across retries so a reader can count each loss once.
+	DroppedIDs []string `json:"dropped_ids,omitempty"`
+	LossID     string   `json:"loss_id,omitempty"`
 }
 
 // recordDecisions appends decisions made by a local evaluator to the
@@ -99,14 +103,14 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &batch) {
 		return
 	}
-	if batch.Dropped < 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("dropped must not be negative"))
+	if batch.Dropped < 0 || len(batch.DroppedIDs) > maxDecisionBatch {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("dropped must not be negative, and at most %d dropped ids", maxDecisionBatch))
 		return
 	}
 	if batch.Dropped > 0 {
 		if err := s.appendAudit(r.Context(), storage.AuditEvent{
 			Kind: localDecisionKind + ".dropped", Actor: agent, Decision: "error",
-			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "bundle_revision": batch.BundleRevision}),
+			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "dropped_ids": batch.DroppedIDs, "loss_id": batch.LossID, "bundle_revision": batch.BundleRevision}),
 		}); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "recorded": 0})
 			return

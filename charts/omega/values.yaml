@@ -21,6 +21,10 @@ server:
   # it here: whoever may create OmegaDomain objects acts with the
   # operator's domain authority, and spec.admins can name anyone.
   domainRootAdmins: []
+  # SPIFFE IDs, or prefixes ending in "/", of the node agents running a
+  # local PDP (--decision-recorder): only they may read the policy bundle
+  # and record local decisions. Needs --require-auth.
+  decisionRecorders: []
   extraArgs: []
   resources:
     limits:

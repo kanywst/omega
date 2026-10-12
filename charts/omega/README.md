@@ -22,6 +22,8 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `image.repository`        | `ghcr.io/kanywst/omega`  | Container image                      |
 | `server.trustDomain`      | `omega.local`            | SPIFFE trust domain                  |
 | `server.policyDir`        | `""`                     | Mount Cedar policies into this path  |
+| `server.domainRootAdmins` | `[]`                   | `--domain-root-admin` SPIFFE IDs     |
+| `server.decisionRecorders` | `[]`                  | Node agents allowed to read the policy bundle and record local decisions (`--decision-recorder`) |
 | `policy.inline`           | `{}`                     | Inline `*.cedar` files via ConfigMap |
 | `agent.uidMap`            | `[]`                     | `uid=N,id=spiffe://...` mappings     |
 | `agent.hostSocketPath`    | `/run/omega`             | hostPath for the workload socket     |
