@@ -821,3 +821,45 @@ func TestLocalPDPStartsWithAnEmptyHighWaterMark(t *testing.T) {
 		t.Fatalf("an empty mark left by a power loss must not stop the agent: %v", err)
 	}
 }
+
+func TestLocalPDPSpoolDropsShippedDecisionsEvenWhenThePendingCountIsUnchanged(t *testing.T) {
+	spool := filepath.Join(t.TempDir(), "s")
+	var p *localpdp.PDP
+	var once atomic.Bool
+	b, _ := testBundle()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(b)
+			return
+		}
+		// While the first batch is being recorded, a new decision
+		// arrives, so pending ends that batch with the length it started
+		// with. Later batches (the new decision) are refused, so it stays.
+		if once.CompareAndSwap(false, true) {
+			if _, err := p.Evaluate(evalReq("spiffe://omega.local/new", "read")); err != nil {
+				t.Error(err)
+			}
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	p = localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", SpoolPath: spool})
+	if err := p.RestoreSpool(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Evaluate(evalReq("spiffe://omega.local/old", "read")); err != nil {
+		t.Fatal(err)
+	}
+	_ = p.Flush(context.Background()) // the second batch is refused
+	raw, _ := os.ReadFile(spool)
+	if bytes.Contains(raw, []byte("/old")) {
+		t.Fatal("a shipped decision must leave the spool")
+	}
+	if !bytes.Contains(raw, []byte("/new")) {
+		t.Fatal("the decision made during the flush must stay in the spool")
+	}
+}

@@ -87,6 +87,10 @@ type PDP struct {
 	// isolate the decision it will not accept.
 	batchCap int
 
+	// removed counts decisions taken off pending (recorded or dropped),
+	// so Flush knows whether the spool is out of date.
+	removed int
+
 	// spoolMu serialises spool writes; take it before mu.
 	spoolMu sync.Mutex
 	spool   *os.File
@@ -481,11 +485,11 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 // that batch and everything after it for the next attempt.
 func (p *PDP) Flush(ctx context.Context) error {
 	p.mu.Lock()
-	before := len(p.pending)
+	before := p.removed
 	p.mu.Unlock()
 	err := p.flush(ctx)
 	p.mu.Lock()
-	unchanged := len(p.pending) == before
+	unchanged := p.removed == before
 	p.mu.Unlock()
 	// Nothing shipped or dropped: the spool already says what is pending.
 	if p.cfg.SpoolPath != "" && !unchanged {
@@ -561,6 +565,7 @@ func (p *PDP) flush(ctx context.Context) error {
 			if json.Unmarshal(msg, &partial) == nil && partial.Recorded > 0 && partial.Recorded < n {
 				p.mu.Lock()
 				p.pending = p.pending[partial.Recorded:]
+				p.removed += partial.Recorded
 				p.mu.Unlock()
 			}
 			// A batch the control plane cannot accept as sent would block
@@ -594,6 +599,7 @@ func (p *PDP) flush(ctx context.Context) error {
 					p.droppedDigests = append(p.droppedDigests, hex.EncodeToString(sum[:]))
 					p.dropTimes = append(p.dropTimes, time.Now())
 					p.pending = p.pending[1:]
+					p.removed++
 					p.dropStreak++
 					p.batchCap = 0
 				}
@@ -604,6 +610,7 @@ func (p *PDP) flush(ctx context.Context) error {
 		}
 		p.mu.Lock()
 		p.pending = p.pending[n:]
+		p.removed += n
 		if len(droppedIDs) > 0 {
 			p.droppedIDs = p.droppedIDs[len(droppedIDs):]
 			p.droppedDigests = p.droppedDigests[len(droppedDigests):]
