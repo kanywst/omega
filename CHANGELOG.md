@@ -8,6 +8,21 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-12
+
+Adds delegated administration of the namespace and the identity data
+policies decide on: a domain tree with per-domain admins, domain-owned
+groups with expiring membership, SCIM 2.0 provisioning from an identity
+provider, and local policy decisions on the node agent with central
+audit. Also adds the ID-JAG authorization grant for AI agents, with
+DPoP.
+
+A minor rather than a patch: `POST /v1/domains` now requires a domain's
+parent to exist and accepts only dot-separated lowercase labels, and
+under `--require-auth` domain writes need an admin of the parent (or a
+`--domain-root-admin`). `POST /v1/token/exchange` now enforces a token's
+`cnf` binding.
+
 ### Added
 
 - **SCIM 2.0 provisioning.** `--scim-idp name=,domain=,token-file=[,template=]` lets an identity provider push users and groups to `/scim/v2/<name>/` with a bearer token. Users map to SPIFFE IDs through the template (default `spiffe://<trust-domain>/humans/{idp}/{externalId}`, matching the ID-JAG grant), and each SCIM group becomes the Omega group `<domain>:<slug>` whose members are its active users. Deactivating or deleting a user removes it from every group at once. Each change commits in one transaction with its `scim.*` audit row, and groups a provider owns are read-only through the Omega group API. See [ADR 0017](docs/adr/0017-scim-provisioning.md), [docs/scim.md](docs/scim.md) and `examples/scim/`.
@@ -870,7 +885,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/kanywst/omega/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kanywst/omega/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kanywst/omega/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kanywst/omega/compare/v0.3.1...v0.4.0
