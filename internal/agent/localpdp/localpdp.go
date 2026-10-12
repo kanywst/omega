@@ -400,13 +400,20 @@ func (p *PDP) Handler() http.Handler {
 			writeJSON(w, code, map[string]string{"error": err.Error()})
 			return
 		}
+		// A malformed request is the caller's fault (400); any other
+		// failure to decide is ours (500). Neither returns a decision.
+		if err := policy.Validate(req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		resp, err := p.Evaluate(req)
 		switch {
 		case errors.Is(err, ErrUnavailable):
 			w.Header().Set("Retry-After", "5")
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 		case err != nil:
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			slog.Error("local pdp: evaluation failed", "err", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "evaluation failed"})
 		default:
 			writeJSON(w, http.StatusOK, resp)
 		}

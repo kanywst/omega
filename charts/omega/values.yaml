@@ -55,6 +55,15 @@ agent:
       memory: 32Mi
   hostSocketPath: /run/omega
   hostNetwork: false
+  # Local policy decisions on the node (--local-pdp-addr). Needs an
+  # https serverURL and a Secret holding the agent's SVID: ca.crt (the
+  # control plane's CA), tls.crt and tls.key. List the agents' SPIFFE IDs
+  # in server.decisionRecorders.
+  localPDP:
+    enabled: false
+    addr: "127.0.0.1:8181"
+    tlsSecret: ""
+  extraArgs: []
 
 policy:
   # Inline Cedar policies rendered into a ConfigMap and mounted at server.policyDir.

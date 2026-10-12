@@ -99,7 +99,20 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 					ServerURL: serverURL, SyncInterval: pdpSync, MaxAge: pdpMaxAge, BufferSize: pdpBuffer, TrustDomain: td,
 					HTTPClient: &http.Client{Transport: transport, Timeout: 10 * time.Second},
 				})
-				go pdp.Run(ctx)
+				ran := make(chan struct{})
+				go func() {
+					pdp.Run(ctx)
+					close(ran)
+				}()
+				// Deferred first so it runs last: once the listener has
+				// stopped, wait for Run's final flush (itself bounded at
+				// five seconds) so answered decisions reach the chain.
+				defer func() {
+					select {
+					case <-ran:
+					case <-time.After(6 * time.Second):
+					}
+				}()
 				srv := &http.Server{Addr: pdpAddr, Handler: pdp.Handler(), ReadHeaderTimeout: 5 * time.Second}
 				go func() {
 					fmt.Fprintf(os.Stderr, "omega agent: local PDP on %s\n", pdpAddr)

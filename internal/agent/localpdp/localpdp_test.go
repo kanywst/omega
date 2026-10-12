@@ -518,3 +518,21 @@ func TestLocalPDPNeedsATrustDomain(t *testing.T) {
 		t.Fatal("without a trust domain no bundle may be loaded")
 	}
 }
+
+func TestLocalPDPRejectsAMalformedRequestAs400(t *testing.T) {
+	srv, _ := fakeRecorder(t)
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local"})
+	if err := p.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h := httptest.NewServer(p.Handler())
+	t.Cleanup(h.Close)
+	resp, err := http.Post(h.URL+"/access/v1/evaluation", "application/json", strings.NewReader(`{"action":{"name":"read"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing subject and resource: %d", resp.StatusCode)
+	}
+}
