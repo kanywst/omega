@@ -60,9 +60,11 @@ func newCAState(active *x509.Certificate, key crypto.Signer, extra ...*x509.Cert
 	return st
 }
 
-// readDiskState loads the directory's active, next and prev CAs. It also
-// finishes an activation that a crash interrupted between its two
-// renames (the new key in place, its certificate still under next).
+// readDiskState loads the directory's active, next and prev CAs without
+// changing anything. If a crash interrupted an activation between its two
+// renames (the new key in place, its certificate still under next), it
+// uses the next certificate as the active one; the next mutating command
+// moves the file (repairActivation).
 func readDiskState(dir string) (*caState, error) {
 	keyPath, crtPath := filepath.Join(dir, caKeyFile), filepath.Join(dir, caCertFile)
 	key, err := readKey(keyPath)
@@ -73,18 +75,16 @@ func readDiskState(dir string) (*caState, error) {
 	if err != nil {
 		return nil, err
 	}
+	names := []string{caNextCrtFile, caPrevCrtFile}
 	if !keyMatches(key, cert) {
 		next, nerr := readCert(filepath.Join(dir, caNextCrtFile))
 		if nerr != nil || !keyMatches(key, next) {
 			return nil, errors.New("ca.key does not match ca.crt")
 		}
-		if err := os.Rename(filepath.Join(dir, caNextCrtFile), crtPath); err != nil {
-			return nil, fmt.Errorf("finish an interrupted activation: %w", err)
-		}
-		cert = next
+		cert, names = next, []string{caPrevCrtFile}
 	}
 	var extra []*x509.Certificate
-	for _, name := range []string{caNextCrtFile, caPrevCrtFile} {
+	for _, name := range names {
 		c, err := readCert(filepath.Join(dir, name))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -205,9 +205,36 @@ func ReadCAStatus(dir string) (CAStatus, error) {
 	return s, nil
 }
 
+// repairActivation finishes an activation a crash interrupted between
+// moving the key and moving the certificate.
+func repairActivation(dir string) error {
+	key, err := readKey(filepath.Join(dir, caKeyFile))
+	if err != nil {
+		return err
+	}
+	cert, err := readCert(filepath.Join(dir, caCertFile))
+	if err != nil {
+		return err
+	}
+	if keyMatches(key, cert) {
+		return nil
+	}
+	next, err := readCert(filepath.Join(dir, caNextCrtFile))
+	if err != nil || !keyMatches(key, next) {
+		return errors.New("ca.key does not match ca.crt")
+	}
+	if err := os.Rename(filepath.Join(dir, caNextCrtFile), filepath.Join(dir, caCertFile)); err != nil {
+		return fmt.Errorf("finish an interrupted activation: %w", err)
+	}
+	return nil
+}
+
 // PrepareCA generates the next CA in dir. It refuses if one is already
 // prepared.
 func PrepareCA(dir string) (CAInfo, error) {
+	if err := repairActivation(dir); err != nil {
+		return CAInfo{}, err
+	}
 	if _, err := os.Stat(filepath.Join(dir, caNextKeyFile)); err == nil {
 		return CAInfo{}, errors.New("a next CA is already prepared; activate it first")
 	}
@@ -225,13 +252,13 @@ func PrepareCA(dir string) (CAInfo, error) {
 // active certificate as prev. It refuses while a previous CA is still
 // retained, so there are never more than three trusted CAs.
 func ActivateCA(dir string) (CAInfo, error) {
+	if err := repairActivation(dir); err != nil {
+		return CAInfo{}, err
+	}
 	if _, err := os.Stat(filepath.Join(dir, caNextKeyFile)); err != nil {
 		return CAInfo{}, errors.New("no next CA is prepared; run prepare first")
 	}
-	if _, err := os.Stat(filepath.Join(dir, caPrevCrtFile)); err == nil {
-		return CAInfo{}, errors.New("a previous CA is still trusted; retire it first")
-	}
-	st, err := readDiskState(dir)
+	nextKey, err := readKey(filepath.Join(dir, caNextKeyFile))
 	if err != nil {
 		return CAInfo{}, err
 	}
@@ -239,10 +266,27 @@ func ActivateCA(dir string) (CAInfo, error) {
 	if err != nil {
 		return CAInfo{}, err
 	}
-	// The old certificate is kept first, so a crash at any later point
-	// leaves it trusted. The key moves before the certificate; a crash
-	// between the two is finished by the next load.
-	if err := writeFileSync(filepath.Join(dir, caPrevCrtFile), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: st.cert.Raw}), 0o644); err != nil {
+	if !keyMatches(nextKey, next) {
+		return CAInfo{}, errors.New("ca.next.key does not match ca.next.crt; prepare again")
+	}
+	active, err := readCert(filepath.Join(dir, caCertFile))
+	if err != nil {
+		return CAInfo{}, err
+	}
+	// A previous CA that is the current active one is what a crash right
+	// after the first write below leaves: resume. Any other is still in
+	// use and must be retired first.
+	prevPath := filepath.Join(dir, caPrevCrtFile)
+	if prev, err := readCert(prevPath); err == nil {
+		if !prev.Equal(active) {
+			return CAInfo{}, errors.New("a previous CA is still trusted; retire it first")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return CAInfo{}, err
+	} else if err := writeFileSync(prevPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: active.Raw}), 0o644); err != nil {
+		// The old certificate is kept first, so a crash at any later
+		// point leaves it trusted. The key moves before the certificate;
+		// a crash between the two is finished by repairActivation.
 		return CAInfo{}, err
 	}
 	if err := os.Rename(filepath.Join(dir, caNextKeyFile), filepath.Join(dir, caKeyFile)); err != nil {
@@ -258,6 +302,9 @@ func ActivateCA(dir string) (CAInfo, error) {
 // before RetireAfter has passed since the activation, while SVIDs and
 // JWT-SVIDs that CA signed may still be in use.
 func RetireCA(dir string, force bool) error {
+	if err := repairActivation(dir); err != nil {
+		return err
+	}
 	path := filepath.Join(dir, caPrevCrtFile)
 	fi, err := os.Stat(path)
 	if err != nil {

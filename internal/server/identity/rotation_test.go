@@ -169,13 +169,23 @@ func TestCAActivationInterruptedBetweenRenamesIsFinishedOnLoad(t *testing.T) {
 	}
 	a, err := loadOrCreateDisk(dir, "omega.local")
 	if err != nil {
-		t.Fatalf("a half-done activation must be finished, not fatal: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, caNextCrtFile)); !os.IsNotExist(err) {
-		t.Fatal("the next certificate must have been moved into place")
+		t.Fatalf("a half-done activation must load, not fail: %v", err)
 	}
 	if countCerts(a.BundlePEM()) != 2 {
 		t.Fatalf("active and previous must both be trusted: %d", countCerts(a.BundlePEM()))
+	}
+	if _, err := ReadCAStatus(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, caNextCrtFile)); err != nil {
+		t.Fatal("reading must not change the directory")
+	}
+	// The next mutating command finishes it.
+	if err := RetireCA(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, caNextCrtFile)); !os.IsNotExist(err) {
+		t.Fatal("the next certificate must have been moved into place")
 	}
 }
 
@@ -207,5 +217,48 @@ func TestCAReloadKeepsTheOldStateOnBadFiles(t *testing.T) {
 	}
 	if err := RetireCA(dir, false); err == nil {
 		t.Fatal("retire without a previous CA must be refused")
+	}
+}
+
+func TestCAActivationResumesAfterACrashThatOnlyWroteThePrevious(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadOrCreateDisk(dir, "omega.local"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareCA(dir); err != nil {
+		t.Fatal(err)
+	}
+	cur, _ := os.ReadFile(filepath.Join(dir, caCertFile))
+	_ = os.WriteFile(filepath.Join(dir, caPrevCrtFile), cur, 0o644)
+	if _, err := ActivateCA(dir); err != nil {
+		t.Fatalf("activate must resume, not refuse: %v", err)
+	}
+	st, err := ReadCAStatus(dir)
+	if err != nil || st.Next != nil || st.Prev == nil {
+		t.Fatalf("after resume: %+v %v", st, err)
+	}
+}
+
+func TestCAActivationRefusesAMismatchedNextPair(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadOrCreateDisk(dir, "omega.local"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareCA(dir); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	kd, _ := x509.MarshalPKCS8PrivateKey(other)
+	_ = os.WriteFile(filepath.Join(dir, caNextKeyFile), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kd}), 0o600)
+	before, _ := os.ReadFile(filepath.Join(dir, caKeyFile))
+	if _, err := ActivateCA(dir); err == nil {
+		t.Fatal("a next key that does not match its certificate must be refused")
+	}
+	after, _ := os.ReadFile(filepath.Join(dir, caKeyFile))
+	if string(before) != string(after) {
+		t.Fatal("a refused activation must not move anything")
+	}
+	if _, err := os.Stat(filepath.Join(dir, caPrevCrtFile)); !os.IsNotExist(err) {
+		t.Fatal("a refused activation must not write the previous CA")
 	}
 }
