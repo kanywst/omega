@@ -38,6 +38,9 @@ type Config struct {
 	// BufferSize caps decisions waiting to be shipped. When it is full the
 	// local PDP refuses to decide rather than make an unrecorded decision.
 	BufferSize int
+	// TrustDomain, when set, is the only trust domain a bundle may be
+	// for; a bundle for another one, or for none, is refused.
+	TrustDomain string
 }
 
 // PDP evaluates locally against the last synced bundle.
@@ -50,6 +53,9 @@ type PDP struct {
 	revision string
 	synced   time.Time
 	pending  []queued
+	// reserved counts decisions being made that already hold a buffer
+	// slot, so concurrent callers cannot overrun BufferSize.
+	reserved int
 }
 
 type decision struct {
@@ -158,6 +164,9 @@ func (p *PDP) Sync(ctx context.Context) error {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&b); err != nil {
 		return fmt.Errorf("decode bundle: %w", err)
 	}
+	if p.cfg.TrustDomain != "" && b.Directory.TrustDomain != p.cfg.TrustDomain {
+		return fmt.Errorf("bundle is for trust domain %q, not %q", b.Directory.TrustDomain, p.cfg.TrustDomain)
+	}
 	if err := p.engine.LoadBundle(b); err != nil {
 		return err
 	}
@@ -173,15 +182,28 @@ var ErrUnavailable = errors.New("local pdp unavailable")
 
 // Evaluate decides locally and queues the decision for the audit chain.
 func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
+	// Check freshness and take a buffer slot in one step, so concurrent
+	// callers cannot all pass the check and overrun the buffer.
 	p.mu.Lock()
-	synced, waiting := p.synced, len(p.pending)
-	p.mu.Unlock()
+	synced, waiting := p.synced, len(p.pending)+p.reserved
 	if synced.IsZero() || time.Since(synced) > p.cfg.MaxAge {
+		p.mu.Unlock()
 		return policy.EvalResponse{}, fmt.Errorf("%w: the policy bundle has not synced within %s", ErrUnavailable, p.cfg.MaxAge)
 	}
 	if waiting >= p.cfg.BufferSize {
+		p.mu.Unlock()
 		return policy.EvalResponse{}, fmt.Errorf("%w: %d decisions are waiting to be recorded", ErrUnavailable, waiting)
 	}
+	p.reserved++
+	p.mu.Unlock()
+	queuedOK := false
+	defer func() {
+		if !queuedOK {
+			p.mu.Lock()
+			p.reserved--
+			p.mu.Unlock()
+		}
+	}()
 	// The engine reports the revision it decided with, so a sync racing
 	// this call cannot mislabel the decision.
 	resp, rev, err := p.engine.EvaluateRevision(req)
@@ -194,7 +216,9 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 	}
 	p.mu.Lock()
 	p.pending = append(p.pending, queued{raw: raw, revision: rev})
+	p.reserved--
 	p.mu.Unlock()
+	queuedOK = true
 	return resp, nil
 }
 
@@ -237,9 +261,31 @@ func (p *PDP) Flush(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("ship decisions: %w", err)
 		}
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
+			// The control plane says how many of the batch it recorded
+			// before failing; drop those, so a retry does not record
+			// them twice.
+			var partial struct {
+				Recorded int `json:"recorded"`
+			}
+			if json.Unmarshal(msg, &partial) == nil && partial.Recorded > 0 && partial.Recorded < n {
+				p.mu.Lock()
+				p.pending = p.pending[partial.Recorded:]
+				p.mu.Unlock()
+			}
+			// A batch the control plane cannot accept as sent would block
+			// the queue forever: drop it, loudly. Any other refusal, such
+			// as 403 for an agent that is not a decision recorder, keeps
+			// it, so the PDP fails closed once the buffer fills.
+			if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge {
+				slog.Error("local pdp: control plane rejected a decision batch; dropping it", "status", resp.StatusCode, "decisions", n-partial.Recorded, "body", strings.TrimSpace(string(msg)))
+				p.mu.Lock()
+				p.pending = p.pending[n-partial.Recorded:]
+				p.mu.Unlock()
+				continue
+			}
 			return fmt.Errorf("ship decisions: %d %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 		}
 		p.mu.Lock()

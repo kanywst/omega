@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +59,11 @@ func newControlPlane(t *testing.T, cedarSrc string) *controlPlane {
 	}
 	tca, tcaKey, pool := newTestCA(t)
 	s := api.NewServer(store, ca, pdp).WithRequireAuth(true).WithDecisionRecorders([]string{"spiffe://omega.local/nodes/"})
+	// The server projects the directory, trust domain included, before
+	// it serves.
+	if err := s.RefreshDirectory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewUnstartedServer(s.Handler())
 	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{issue(t, tca, tcaKey, "", net.ParseIP("127.0.0.1"))}, ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert}
 	srv.StartTLS()
@@ -261,20 +267,123 @@ func TestLocalPDPSplitsLargeBacklogs(t *testing.T) {
 	}
 }
 
-func TestLocalPDPFromAnUnlistedAgentStaysQueued(t *testing.T) {
+func TestLocalPDPOfAnUnlistedAgentNeverDecides(t *testing.T) {
 	cp := newControlPlane(t, `permit (principal, action, resource);`)
-	ctx := context.Background()
 	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.clientFor("spiffe://omega.local/media/web")})
+	if err := p.Sync(context.Background()); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("a workload that is not a decision recorder must not get the bundle: %v", err)
+	}
+	if _, err := p.Evaluate(evalReq("spiffe://omega.local/x", "read")); err == nil {
+		t.Fatal("without a bundle the PDP must not decide")
+	}
+}
+
+func TestLocalPDPRefusesABundleForAnotherTrustDomain(t *testing.T) {
+	cp := newControlPlane(t, `permit (principal, action, resource);`)
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client, TrustDomain: "other.example"})
+	if err := p.Sync(context.Background()); err == nil || !strings.Contains(err.Error(), "trust domain") {
+		t.Fatalf("a bundle for another trust domain must be refused: %v", err)
+	}
+	ok := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client, TrustDomain: "omega.local"})
+	if err := ok.Sync(context.Background()); err != nil {
+		t.Fatalf("own trust domain: %v", err)
+	}
+}
+
+// fakeRecorder serves a real bundle and answers decision batches with
+// the scripted responses, recording how many decisions each batch held.
+func fakeRecorder(t *testing.T, replies ...func(w http.ResponseWriter, n int)) (*httptest.Server, *[]int) {
+	t.Helper()
+	b, err := policy.New().Bundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sizes []int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(b)
+			return
+		}
+		var batch api.DecisionBatch
+		_ = json.NewDecoder(r.Body).Decode(&batch)
+		mu.Lock()
+		sizes = append(sizes, len(batch.Decisions))
+		i := len(sizes) - 1
+		mu.Unlock()
+		if i < len(replies) {
+			replies[i](w, len(batch.Decisions))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &sizes
+}
+
+func TestLocalPDPDropsWhatWasRecordedBeforeRetrying(t *testing.T) {
+	srv, sizes := fakeRecorder(t, func(w http.ResponseWriter, _ int) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"disk full","recorded":2}`))
+	})
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := p.Evaluate(evalReq("spiffe://omega.local/x", "read")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.Flush(ctx); err == nil {
+		t.Fatal("a failed batch is an error")
+	}
+	if _, _, pending := p.Status(); pending != 1 {
+		t.Fatalf("the two recorded decisions must be dropped: %d pending", pending)
+	}
+	if err := p.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := *sizes; len(got) != 2 || got[1] != 1 {
+		t.Fatalf("retry must resend only the unrecorded decision: %v", got)
+	}
+}
+
+func TestLocalPDPDropsABatchTheControlPlaneRejects(t *testing.T) {
+	srv, _ := fakeRecorder(t, func(w http.ResponseWriter, _ int) { w.WriteHeader(http.StatusBadRequest) })
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.Evaluate(evalReq("spiffe://omega.local/x", "read")); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Flush(ctx); err == nil || !strings.Contains(err.Error(), "403") {
-		t.Fatalf("a workload that is not a decision recorder must be refused: %v", err)
+	if err := p.Flush(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if _, _, pending := p.Status(); pending != 1 {
-		t.Fatalf("refused decisions stay queued, so the PDP eventually fails closed: %d", pending)
+	if _, _, pending := p.Status(); pending != 0 {
+		t.Fatalf("a rejected batch must not block the queue: %d pending", pending)
+	}
+}
+
+func TestLocalPDPBufferIsAHardCap(t *testing.T) {
+	srv, _ := fakeRecorder(t)
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, BufferSize: 5})
+	if err := p.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = p.Evaluate(evalReq("spiffe://omega.local/x", "read"))
+		}()
+	}
+	wg.Wait()
+	if _, _, pending := p.Status(); pending > 5 {
+		t.Fatalf("buffer overrun: %d pending", pending)
 	}
 }

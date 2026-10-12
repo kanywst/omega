@@ -15,8 +15,11 @@ import (
 )
 
 func TestPolicyBundleEndpoint(t *testing.T) {
-	env := newDomainEnv(t, `permit (principal, action, resource);`)
-	root := env.as(t, rootAdmin)
+	env := newDomainEnv(t, `permit (principal, action, resource);`, "spiffe://omega.local/nodes/")
+	if code, _ := call(t, env.as(t, rootAdmin), "GET", env.srv.URL+"/v1/policy/bundle", nil); code != http.StatusForbidden {
+		t.Fatalf("a caller that is not a decision recorder must not read the bundle: %d", code)
+	}
+	root := env.as(t, "spiffe://omega.local/nodes/n1")
 
 	code, body := call(t, root, "GET", env.srv.URL+"/v1/policy/bundle", nil)
 	if code != http.StatusOK || !strings.Contains(string(body), `"revision"`) || !strings.Contains(string(body), "p.cedar") {
@@ -131,5 +134,18 @@ func TestRecordDecisionsRefusedWithoutRequireAuth(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("without --require-auth: %d", resp.StatusCode)
+	}
+}
+
+func TestRecordDecisionsReportsHowManyWereRecorded(t *testing.T) {
+	env := newDomainEnv(t, "", "spiffe://omega.local/nodes/")
+	env.api.FailAuditForTest("access.evaluate.local")
+	batch := api.DecisionBatch{Decisions: []api.LocalDecision{{
+		ID: "d1", DecidedAt: time.Now(),
+		Request: policy.EvalRequest{Subject: policy.Entity{Type: "User", ID: "u"}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"}},
+	}}}
+	code, body := call(t, env.as(t, "spiffe://omega.local/nodes/n1"), "POST", env.srv.URL+"/v1/audit/decisions", batch)
+	if code != http.StatusInternalServerError || !strings.Contains(string(body), `"recorded":0`) {
+		t.Fatalf("failed append: %d %s", code, body)
 	}
 }

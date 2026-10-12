@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,8 +110,39 @@ func TestCheckLocalPDP(t *testing.T) {
 		{"127.0.0.1:8181", "https://cp", "", false, false},
 		{"nonsense", "https://cp", "c.pem", false, false},
 	} {
-		if err := checkLocalPDP(tc.addr, tc.remote, tc.server, tc.cert); (err == nil) != tc.ok {
+		if err := checkLocalPDP(tc.addr, tc.remote, tc.server, "ca.pem", tc.cert); (err == nil) != tc.ok {
 			t.Errorf("%+v: %v", tc, err)
 		}
+	}
+	if err := checkLocalPDP("127.0.0.1:8181", false, "https://cp", "", "c.pem"); err == nil {
+		t.Error("a local PDP without --server-ca must be refused")
+	}
+}
+
+func TestTrustDomainOfCert(t *testing.T) {
+	dir := t.TempDir()
+	cf, _ := writePair(t, dir, "plain", time.Now())
+	if _, err := trustDomainOfCert(cf); err == nil {
+		t.Error("a certificate without a SPIFFE ID must be refused")
+	}
+	if _, err := trustDomainOfCert(filepath.Join(dir, "missing")); err == nil {
+		t.Error("a missing file must be refused")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "junk"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := trustDomainOfCert(filepath.Join(dir, "junk")); err == nil {
+		t.Error("a file without PEM must be refused")
+	}
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	u, _ := url.Parse("spiffe://omega.local/nodes/n1")
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), URIs: []*url.URL{u}}
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	svid := filepath.Join(dir, "svid.pem")
+	if err := os.WriteFile(svid, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if td, err := trustDomainOfCert(svid); err != nil || td != "omega.local" {
+		t.Errorf("svid: %q %v", td, err)
 	}
 }

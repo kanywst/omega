@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 	workloadpb "github.com/spiffe/go-spiffe/v2/proto/spiffe/workload"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -85,11 +88,15 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 			}
 
 			if pdpAddr != "" {
-				if err := checkLocalPDP(pdpAddr, pdpRemote, serverURL, clientCert); err != nil {
+				if err := checkLocalPDP(pdpAddr, pdpRemote, serverURL, serverCA, clientCert); err != nil {
+					return err
+				}
+				td, err := trustDomainOfCert(clientCert)
+				if err != nil {
 					return err
 				}
 				pdp := localpdp.New(localpdp.Config{
-					ServerURL: serverURL, SyncInterval: pdpSync, MaxAge: pdpMaxAge, BufferSize: pdpBuffer,
+					ServerURL: serverURL, SyncInterval: pdpSync, MaxAge: pdpMaxAge, BufferSize: pdpBuffer, TrustDomain: td,
 					HTTPClient: &http.Client{Transport: transport, Timeout: 10 * time.Second},
 				})
 				go pdp.Run(ctx)
@@ -160,9 +167,12 @@ func parseMappings(specs []string) (workloadapi.Mapping, error) {
 // expose it: decisions are recorded under the agent's SVID, so the
 // control plane must be reached over https with a client certificate,
 // and the unauthenticated endpoint stays on loopback unless allowed.
-func checkLocalPDP(addr string, allowRemote bool, serverURL, clientCert string) error {
+func checkLocalPDP(addr string, allowRemote bool, serverURL, serverCA, clientCert string) error {
 	if u, err := url.Parse(serverURL); err != nil || u.Scheme != "https" || clientCert == "" {
 		return errors.New("--local-pdp-addr needs an https --server and --client-cert: decisions are recorded under the agent's SVID")
+	}
+	if serverCA == "" {
+		return errors.New("--local-pdp-addr needs --server-ca: the policy bundle is trusted only as far as the TLS connection it came over")
 	}
 	if allowRemote {
 		return nil
@@ -200,4 +210,31 @@ func runAgent(ctx context.Context, socketPath, serverURL string, mapping workloa
 	case err := <-errCh:
 		return err
 	}
+}
+
+// trustDomainOfCert returns the trust domain of the SPIFFE ID in the
+// first certificate of a PEM file: the agent's own SVID, whose trust
+// domain is the only one its local PDP may load a bundle for.
+func trustDomainOfCert(path string) (string, error) {
+	// #nosec G304 -- operator-supplied --client-cert path.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read --client-cert: %w", err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return "", errors.New("--client-cert holds no PEM certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parse --client-cert: %w", err)
+	}
+	if len(cert.URIs) != 1 {
+		return "", errors.New("--client-cert must be an X.509-SVID with exactly one URI SAN")
+	}
+	id, err := spiffeid.FromURI(cert.URIs[0])
+	if err != nil {
+		return "", fmt.Errorf("--client-cert: %w", err)
+	}
+	return id.TrustDomain().Name(), nil
 }

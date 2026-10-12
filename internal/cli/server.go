@@ -713,7 +713,7 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
 	cmd.Flags().StringArrayVar(&decisionRecorders, "decision-recorder", nil,
-		"SPIFFE ID, or a prefix ending in '/', allowed to record local decisions through POST /v1/audit/decisions (repeatable), normally the node agents running --local-pdp-addr. Needs --require-auth; with none set the endpoint refuses every caller.")
+		"SPIFFE ID, or a prefix ending in '/', allowed to read GET /v1/policy/bundle and record decisions through POST /v1/audit/decisions (repeatable): the node agents running --local-pdp-addr. Needs --require-auth; with none set both endpoints refuse every caller.")
 	cmd.Flags().BoolVar(&clientCertOptional, "client-cert-optional", false,
 		"with --client-ca and --require-auth, verify a client certificate when one is presented instead of requiring it on every connection. Endpoints gated by --require-auth still require a verified SPIFFE client certificate; ungated ones become reachable without one: health and leader state, GET /v1/domains, the trust and federation bundles, discovery documents, /metrics, the enrollment paths, and POST /oauth2/token, which authenticates its own client. See ADR 0012. Lets JWT-SVID clients use the spiffe_jwt method of the ID-JAG grant under --require-auth.")
 	cmd.Flags().BoolVar(&requireAuth, "require-auth", false,

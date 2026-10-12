@@ -10,11 +10,11 @@ Every authorization decision was a network call from the policy enforcement poin
 
 ## Decision
 
-1. **A policy bundle.** `GET /v1/policy/bundle` returns everything the control plane evaluates against: the Cedar sources, the static `entities.json`, and the projected domain and group directory (ADRs 0014 and 0015). Its revision is a hash of that content and doubles as the ETag, so an unchanged bundle costs a `304`. It needs the same caller authentication as audit reads and is served by followers. `--policy-dir` is reloaded on `SIGHUP`, so a policy change produces a new revision without a restart.
+1. **A policy bundle.** `GET /v1/policy/bundle` returns everything the control plane evaluates against: the Cedar sources, the static `entities.json`, and the projected domain and group directory (ADRs 0014 and 0015). Its revision is a hash of that content and doubles as the ETag, so an unchanged bundle costs a `304`. Only the node agents listed with `--decision-recorder` may read it, under `--require-auth`, and followers serve it. `--policy-dir` is reloaded on `SIGHUP`, so a policy change produces a new revision without a restart.
 2. **A local PDP in the agent.** `omega agent --local-pdp-addr 127.0.0.1:8181` serves `POST /access/v1/evaluation` on the node. It syncs the bundle every `--policy-sync-interval`, loads it into the same policy engine the server uses (so domain placement, group membership and evaluation-time expiry behave identically), and refuses a bundle whose content does not match its revision.
 3. **Fail closed.** The local PDP answers `503` until its first sync, once its last successful sync is older than `--policy-max-age`, and while `--decision-buffer` decisions are waiting to be recorded. It never decides from a policy it cannot vouch for, or without being able to record the decision. Requests are capped at 64 KiB and batches stay under the server's body limit, so no single decision can block the queue.
-4. **One audit trail, written only by named recorders.** Each local decision is queued with an id, its time and the revision the engine decided with, and shipped in batches to `POST /v1/audit/decisions`. The server accepts them only under `--require-auth` and only from callers listed with `--decision-recorder` (an ID or a `/`-terminated prefix), and appends them as `access.evaluate.local` with the caller's SPIFFE ID as actor, so they can never pass for the server's own `access.evaluate` rows. A batch that fails is kept and retried; the decision id lets a reader recognise a row written twice by such a retry.
-5. **Transport.** The local PDP requires an `https` control plane and a client certificate, re-read when it rotates. The same `--server-ca`, `--client-cert` and `--client-key` serve SVID issuance. The local endpoint binds loopback unless `--local-pdp-allow-remote`.
+4. **One audit trail, written only by named recorders.** Each local decision is queued with an id, its time and the revision the engine decided with, and shipped in batches to `POST /v1/audit/decisions`. The server accepts them only under `--require-auth` and only from callers listed with `--decision-recorder` (an ID or a `/`-terminated prefix), and appends them as `access.evaluate.local` with the caller's SPIFFE ID as actor, so they can never pass for the server's own `access.evaluate` rows. A batch that fails partway is answered with how many rows were recorded, and the agent resends only the rest; a malformed batch is dropped with an error log rather than blocking the queue.
+5. **Transport.** The local PDP requires an `https` control plane, a pinned `--server-ca`, and a client certificate, re-read when it rotates. It only loads a bundle for its own SVID's trust domain. The same `--server-ca`, `--client-cert` and `--client-key` serve SVID issuance. The local endpoint binds loopback unless `--local-pdp-allow-remote`.
 
 ## Consequences
 
@@ -29,6 +29,8 @@ Harder:
 - Local decisions reach the audit chain a flush interval late, and are lost if the agent dies with them queued. The buffer bound limits how many.
 - The bundle exposes every policy and group membership to each authenticated agent.
 - A listed recorder can write decision rows with any content under its own name. The rows are labelled as local and attributed, not verified against the bundle.
+- The bundle is not signed. Its integrity rests on TLS with a pinned CA; signing it is future work.
+- The queue is in memory, so an agent killed between a decision and a flush loses those records.
 
 ## Scope fit
 

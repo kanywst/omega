@@ -1022,7 +1022,8 @@ paths:
         Cedar sources, static entities and the projected domain and
         group directory. `revision` is a content hash and the ETag; send
         it as `If-None-Match` to get `304` when nothing changed. Needs
-        caller authentication under `--require-auth`; served by followers.
+        `--require-auth` and a caller listed with `--decision-recorder`;
+        served by followers.
       responses:
         "200":
           description: Bundle.
@@ -1036,6 +1037,8 @@ paths:
                 $ref: "#/components/schemas/PolicyBundle"
         "304":
           description: Unchanged since the revision in If-None-Match.
+        "403":
+          description: The caller is not a listed decision recorder, or the server runs without --require-auth.
         "503":
           description: The projected directory is stale.
 
@@ -1049,7 +1052,8 @@ paths:
         `access.evaluate.local`, with the caller's SPIFFE ID as actor and
         the bundle revision. Needs `--require-auth` and a caller listed
         with `--decision-recorder`. At most 1000 decisions per batch. A
-        failed append answers 500 so the caller retries the batch.
+        failed append answers 500 with `recorded`, the number of leading
+        decisions already in the chain, so the caller resends only the rest.
       requestBody:
         required: true
         content:
@@ -1064,7 +1068,16 @@ paths:
         "403":
           description: The caller is not a listed decision recorder, or the server runs without --require-auth.
         "500":
-          $ref: "#/components/responses/InternalError"
+          description: An append failed after `recorded` decisions were written.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  recorded:
+                    type: integer
         "503":
           $ref: "#/components/responses/NotLeader"
 

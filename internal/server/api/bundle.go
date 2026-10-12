@@ -45,6 +45,12 @@ func (s *Server) mayRecordDecisions(caller string) bool {
 // getPolicyBundle serves the policy set and directory a local evaluator
 // needs. The revision is the ETag, so an unchanged bundle costs a 304.
 func (s *Server) getPolicyBundle(w http.ResponseWriter, r *http.Request) {
+	// The bundle is every policy and group membership; only the node
+	// agents that decide from it may read it.
+	if !s.mayRecordDecisions(CallerSPIFFEID(r.Context())) {
+		writeErr(w, http.StatusForbidden, errors.New("reading the policy bundle needs --require-auth and a caller listed in --decision-recorder"))
+		return
+	}
 	b, err := s.policy.Bundle()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -131,7 +137,12 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 			Decision: decision,
 			Payload:  payload,
 		}); err != nil {
-			writeErr(w, http.StatusInternalServerError, fmt.Errorf("recorded %d of %d decisions: %w", i, len(batch.Decisions), err))
+			// Say how many were recorded, so the agent drops those and a
+			// retry does not record them twice.
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error":    fmt.Sprintf("recorded %d of %d decisions: %v", i, len(batch.Decisions), err),
+				"recorded": i,
+			})
 			return
 		}
 		metrics.Decisions.WithLabelValues(decision).Inc()
