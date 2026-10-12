@@ -47,6 +47,9 @@ spec:
             {{- range .Values.server.decisionRecorders }}
             - --decision-recorder={{ . }}
             {{- end }}
+            {{- range .Values.server.scimProviders }}
+            - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
+            {{- end }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}
@@ -76,9 +79,15 @@ spec:
               mountPath: {{ .Values.server.policyDir }}
               readOnly: true
             {{- end }}
+            {{- range .Values.server.scimProviders }}
+            - name: scim-{{ .name }}
+              mountPath: /etc/omega/scim/{{ .name }}
+              readOnly: true
+            {{- end }}
       {{- $hasPolicy := and .Values.policy.inline (gt (len .Values.policy.inline) 0) .Values.server.policyDir -}}
       {{- $hasEmpty := not .Values.server.persistence.enabled -}}
-      {{- if or $hasPolicy $hasEmpty }}
+      {{- $hasSCIM := gt (len .Values.server.scimProviders) 0 -}}
+      {{- if or $hasPolicy $hasEmpty $hasSCIM }}
       volumes:
         {{- if $hasPolicy }}
         - name: policy
@@ -88,6 +97,14 @@ spec:
         {{- if $hasEmpty }}
         - name: data
           emptyDir: {}
+        {{- end }}
+        {{- range .Values.server.scimProviders }}
+        - name: scim-{{ .name }}
+          secret:
+            secretName: {{ .tokenSecret }}
+            items:
+              - key: token
+                path: token
         {{- end }}
       {{- end }}
   {{- if .Values.server.persistence.enabled }}

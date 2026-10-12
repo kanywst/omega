@@ -17,19 +17,20 @@ helm install omega ./charts/omega \
 
 See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 
-| Key                        | Default                 | Notes                                                                  |
-| -------------------------- | ----------------------- | ---------------------------------------------------------------------- |
-| `image.repository`         | `ghcr.io/kanywst/omega` | Container image                                                        |
-| `server.trustDomain`       | `omega.local`           | SPIFFE trust domain                                                    |
-| `server.policyDir`         | `""`                    | Mount Cedar policies into this path                                    |
-| `server.domainRootAdmins`  | `[]`                    | `--domain-root-admin` SPIFFE IDs                                       |
-| `server.decisionRecorders` | `[]`                    | Node agents that may read the policy bundle and record local decisions |
-| `policy.inline`            | `{}`                    | Inline `*.cedar` files via ConfigMap                                   |
-| `agent.uidMap`             | `[]`                    | `uid=N,id=spiffe://...` mappings                                       |
-| `agent.hostSocketPath`     | `/run/omega`            | hostPath for the workload socket                                       |
-| `agent.localPDP.enabled`   | `false`                 | Decide on the node (`--local-pdp-addr`)                                |
-| `agent.localPDP.tlsSecret` | `""`                    | Secret with `ca.crt`, `tls.crt`, `tls.key` for the agent's SVID        |
-| `server.persistence.size`  | `1Gi`                   | PVC for SQLite data dir                                                |
+| Key                        | Default                 | Notes                                                                                            |
+| -------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ |
+| `image.repository`         | `ghcr.io/kanywst/omega` | Container image                                                                                  |
+| `server.trustDomain`       | `omega.local`           | SPIFFE trust domain                                                                              |
+| `server.policyDir`         | `""`                    | Mount Cedar policies into this path                                                              |
+| `server.domainRootAdmins`  | `[]`                    | `--domain-root-admin` SPIFFE IDs                                                                 |
+| `server.decisionRecorders` | `[]`                    | Node agents that may read the policy bundle and record local decisions                           |
+| `server.scimProviders`     | `[]`                    | SCIM providers: `name`, `domain`, `tokenSecret` (Secret with a `token` key), optional `template` |
+| `policy.inline`            | `{}`                    | Inline `*.cedar` files via ConfigMap                                                             |
+| `agent.uidMap`             | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                 |
+| `agent.hostSocketPath`     | `/run/omega`            | hostPath for the workload socket                                                                 |
+| `agent.localPDP.enabled`   | `false`                 | Decide on the node (`--local-pdp-addr`)                                                          |
+| `agent.localPDP.tlsSecret` | `""`                    | Secret with `ca.crt`, `tls.crt`, `tls.key` for the agent's SVID                                  |
+| `server.persistence.size`  | `1Gi`                   | PVC for SQLite data dir                                                                          |
 
 ## Verify
 

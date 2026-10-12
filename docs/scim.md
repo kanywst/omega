@@ -32,6 +32,8 @@ omega server ... \
   --scim-idp name=corp,domain=people,token-file=/etc/omega/scim-corp.token
 ```
 
+With the Helm chart, put the token in a Secret under the key `token` and list the provider in `server.scimProviders` (`name`, `domain`, `tokenSecret`, optional `template`).
+
 In the provider, set the SCIM base URL to `https://<omega>/scim/v2/corp` and the bearer token to the file's content.
 
 | Key | Meaning |
