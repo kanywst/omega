@@ -195,6 +195,7 @@ func (s *Store) schemaDDL() []string {
 			   PRIMARY KEY (idp, id),
 			   UNIQUE (idp, user_name_lc)
 			 )`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_scim_users_external_id ON scim_users(idp, external_id) WHERE external_id <> ''`,
 			`CREATE TABLE IF NOT EXISTS scim_groups (
 			   idp          TEXT   NOT NULL,
 			   id           TEXT   NOT NULL,
@@ -279,6 +280,7 @@ func (s *Store) schemaDDL() []string {
 		   PRIMARY KEY (idp, id),
 		   UNIQUE (idp, user_name_lc)
 		 )`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scim_users_external_id ON scim_users(idp, external_id) WHERE external_id <> ''`,
 		`CREATE TABLE IF NOT EXISTS scim_groups (
 		   idp          TEXT   NOT NULL,
 		   id           TEXT   NOT NULL,

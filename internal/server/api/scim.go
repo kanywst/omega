@@ -60,14 +60,13 @@ const (
 // scimHandler resolves the provider, checks its bearer token and runs h.
 func (s *Server) scimHandler(h func(http.ResponseWriter, *http.Request, SCIMConfig)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// An unknown provider gets the same 401 as a wrong token, so
+		// provider names cannot be probed without a token.
 		cfg, ok := s.scim[r.PathValue("idp")]
-		if !ok {
-			scimError(w, http.StatusNotFound, "", "no such SCIM provider")
-			return
-		}
-		tok, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		sum := sha256.Sum256([]byte(tok))
-		if !found || subtle.ConstantTimeCompare(sum[:], cfg.TokenHash[:]) != 1 {
+		scheme, tok, found := strings.Cut(r.Header.Get("Authorization"), " ")
+		found = found && strings.EqualFold(scheme, "Bearer")
+		sum := sha256.Sum256([]byte(strings.TrimSpace(tok)))
+		if !ok || !found || subtle.ConstantTimeCompare(sum[:], cfg.TokenHash[:]) != 1 {
 			slog.Warn("scim: rejected a request with a missing or wrong bearer token", "idp", cfg.Name)
 			w.Header().Set("WWW-Authenticate", `Bearer realm="omega-scim"`)
 			scimError(w, http.StatusUnauthorized, "", "a valid bearer token is required")
@@ -414,7 +413,11 @@ func (s *Server) scimReplaceUser(w http.ResponseWriter, r *http.Request, cfg SCI
 	}
 	s.updateUser(w, r, cfg, "scim.user.replace", func(u *storage.SCIMUser) error {
 		u.UserName, u.ExternalID, u.DisplayName = body.UserName, body.ExternalID, body.DisplayName
-		u.Active = body.Active == nil || *body.Active
+		// A PUT without active keeps the current state, so a full
+		// replace cannot silently reactivate a deactivated user.
+		if body.Active != nil {
+			u.Active = *body.Active
+		}
 		return nil
 	})
 }

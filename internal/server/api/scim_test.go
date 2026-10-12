@@ -121,8 +121,18 @@ func TestSCIMAuthentication(t *testing.T) {
 			t.Errorf("%s: %d", name, code)
 		}
 	}
-	if code, _ := e.do(t, "GET", e.srv.URL+"/scim/v2/other/Users", nil); code != http.StatusNotFound {
-		t.Errorf("unknown provider: %d", code)
+	if code, _ := e.do(t, "GET", e.srv.URL+"/scim/v2/other/Users", nil); code != http.StatusUnauthorized {
+		t.Errorf("unknown provider must look like a bad token: %d", code)
+	}
+	req, _ := http.NewRequest("GET", e.base+"/Users", nil)
+	req.Header.Set("Authorization", "bearer "+scimToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("the auth scheme is case-insensitive: %d", resp.StatusCode)
 	}
 	for _, p := range []string{"/ServiceProviderConfig", "/ResourceTypes", "/Schemas"} {
 		if code, _ := e.do(t, "GET", p, nil); code != http.StatusOK {
@@ -432,5 +442,27 @@ func TestSCIMTemplateValuesAreOneSegment(t *testing.T) {
 		if code, _ := e.do(t, "POST", "/Users", map[string]any{"userName": "u" + ext, "externalId": ext}); code != http.StatusBadRequest {
 			t.Errorf("externalId %q: %d", ext, code)
 		}
+	}
+}
+
+func TestSCIMPutKeepsADeactivatedUserDeactivated(t *testing.T) {
+	e := newSCIMEnv(t)
+	_, u := e.do(t, "POST", "/Users", map[string]any{"userName": "alice", "externalId": "00u1"})
+	id := u["id"].(string)
+	if code, _ := e.do(t, "PATCH", "/Users/"+id, patchOp(map[string]any{"op": "replace", "path": "active", "value": false})); code != http.StatusOK {
+		t.Fatal("deactivate")
+	}
+	if code, body := e.do(t, "PUT", "/Users/"+id, map[string]any{"userName": "alice", "externalId": "00u1", "displayName": "Alice"}); code != http.StatusOK || body["active"] != false {
+		t.Fatalf("a PUT without active must not reactivate: %d %v", code, body)
+	}
+}
+
+func TestSCIMExternalIDIsUniquePerProvider(t *testing.T) {
+	e := newSCIMEnv(t)
+	if code, _ := e.do(t, "POST", "/Users", map[string]any{"userName": "alice", "externalId": "00u1"}); code != http.StatusCreated {
+		t.Fatal("create")
+	}
+	if code, body := e.do(t, "POST", "/Users", map[string]any{"userName": "alice2", "externalId": "00u1"}); code != http.StatusConflict {
+		t.Fatalf("two users on one externalId would share a SPIFFE ID: %d %v", code, body)
 	}
 }

@@ -79,9 +79,9 @@ spec:
               mountPath: {{ .Values.server.policyDir }}
               readOnly: true
             {{- end }}
-            {{- range .Values.server.scimProviders }}
-            - name: scim-{{ .name }}
-              mountPath: /etc/omega/scim/{{ .name }}
+            {{- range $i, $p := .Values.server.scimProviders }}
+            - name: scim-{{ $i }}
+              mountPath: /etc/omega/scim/{{ $p.name }}
               readOnly: true
             {{- end }}
       {{- $hasPolicy := and .Values.policy.inline (gt (len .Values.policy.inline) 0) .Values.server.policyDir -}}
@@ -98,10 +98,10 @@ spec:
         - name: data
           emptyDir: {}
         {{- end }}
-        {{- range .Values.server.scimProviders }}
-        - name: scim-{{ .name }}
+        {{- range $i, $p := .Values.server.scimProviders }}
+        - name: scim-{{ $i }}
           secret:
-            secretName: {{ .tokenSecret }}
+            secretName: {{ $p.tokenSecret }}
             items:
               - key: token
                 path: token
