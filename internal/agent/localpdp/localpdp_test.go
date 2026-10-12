@@ -656,3 +656,77 @@ func TestLocalPDPSpoolSurvivesARestart(t *testing.T) {
 		t.Fatalf("the spool must be empty once everything is recorded: %q %v", raw, err)
 	}
 }
+
+func TestLocalPDPSpoolLeavesNoTraceOfAFailedWrite(t *testing.T) {
+	srv, _ := fakeRecorder(t)
+	spool := filepath.Join(t.TempDir(), "decisions.spool")
+	cfg := localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", SpoolPath: spool}
+	p := localpdp.New(cfg)
+	if err := p.RestoreSpool(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Evaluate(evalReq("spiffe://omega.local/a", "read")); err != nil {
+		t.Fatal(err)
+	}
+	restore := localpdp.FailSpoolWritesForTest(1)
+	if _, err := p.Evaluate(evalReq("spiffe://omega.local/failed", "read")); err == nil {
+		t.Fatal("a decision that could not be spooled must not be answered")
+	}
+	restore()
+	if _, err := p.Evaluate(evalReq("spiffe://omega.local/b", "read")); err != nil {
+		t.Fatal(err)
+	}
+	// A restart must find exactly the two answered decisions.
+	again := localpdp.New(cfg)
+	if err := again.RestoreSpool(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pending := again.Status(); pending != 2 {
+		t.Fatalf("answered decisions after a failed write: %d, want 2", pending)
+	}
+	raw, _ := os.ReadFile(spool)
+	if bytes.Contains(raw, []byte("failed")) {
+		t.Fatal("the failed decision's bytes must not stay in the spool")
+	}
+}
+
+func TestLocalPDPRefusesReplayedSignedBundles(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	sign := func() policy.Bundle {
+		b, err := testBundle()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := policy.SignBundle(&b, key); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	older := sign()
+	time.Sleep(10 * time.Millisecond)
+	newer := sign()
+	var serve atomic.Pointer[policy.Bundle]
+	serve.Store(&newer)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(serve.Load())
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BundleKey: &key.PublicKey})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	serve.Store(&older)
+	if err := p.Sync(ctx); err == nil || !strings.Contains(err.Error(), "older") {
+		t.Fatalf("an older signed bundle must not roll the agent back: %v", err)
+	}
+
+	stale := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BundleKey: &key.PublicKey, MaxAge: 20 * time.Millisecond})
+	time.Sleep(40 * time.Millisecond)
+	if err := stale.Sync(ctx); err == nil || !strings.Contains(err.Error(), "issued") {
+		t.Fatalf("a bundle issued longer ago than MaxAge must be refused: %v", err)
+	}
+}

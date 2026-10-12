@@ -76,7 +76,9 @@ agent:
     enabled: false
     addr: "127.0.0.1:8181"
     tlsSecret: ""
-    # Verify bundle signatures with "bundle.pub" from tlsSecret.
+    # Verify bundle signatures with "bundle.pub", the public half of
+    # server.policyBundleSigningKeySecret, which tlsSecret must then hold.
+    # Needs server.policyBundleSigningKeySecret.
     verifyBundle: false
     # Spool decisions to the node so they survive an agent crash
     # (hostPath under this directory; one fsync per decision).

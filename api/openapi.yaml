@@ -1831,9 +1831,13 @@ components:
       properties:
         revision:
           type: string
+        issued_at:
+          type: string
+          format: date-time
+          description: With --policy-bundle-signing-key, when the bundle was served; signed.
         signature:
           type: string
-          description: With --policy-bundle-signing-key, a base64url ECDSA P-256 (ASN.1) signature over SHA-256("omega-policy-bundle-v1:" + revision).
+          description: With --policy-bundle-signing-key, a base64url ECDSA P-256 (ASN.1) signature over SHA-256("omega-policy-bundle-v1:" + revision + ":" + issued_at in Unix nanoseconds).
         policies:
           type: object
           additionalProperties:

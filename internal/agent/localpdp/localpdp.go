@@ -64,6 +64,7 @@ type PDP struct {
 
 	mu       sync.Mutex
 	revision string
+	issuedAt time.Time // newest signed bundle loaded
 	synced   time.Time
 	pending  []queued
 	// reserved counts decisions being made that already hold a buffer
@@ -140,10 +141,39 @@ func (p *PDP) spoolDecision(q queued) error {
 	if err != nil {
 		return err
 	}
-	if _, err := p.spool.Write(append(line, '\n')); err != nil {
+	st, err := p.spool.Stat()
+	if err != nil {
+		return fmt.Errorf("stat decision spool: %w", err)
+	}
+	werr := writeSync(p.spool, append(line, '\n'))
+	if werr == nil {
+		return nil
+	}
+	// The decision is answered with an error, so none of its bytes may
+	// stay: a partial line would merge with the next one and take an
+	// answered decision with it, and a synced-but-failed line would
+	// requeue a decision nobody received. Cut back to where it started,
+	// or rebuild the file from what is pending.
+	if terr := p.spool.Truncate(st.Size()); terr != nil {
+		if rerr := p.rewriteSpoolLocked(); rerr != nil {
+			return fmt.Errorf("%w; and the spool could not be repaired: %v", werr, rerr)
+		}
+	}
+	return werr
+}
+
+// spoolFile is the part of *os.File the spool writes through; tests swap
+// in one that fails.
+type spoolFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+}
+
+var writeSync = func(f spoolFile, b []byte) error {
+	if _, err := f.Write(b); err != nil {
 		return fmt.Errorf("write decision spool: %w", err)
 	}
-	if err := p.spool.Sync(); err != nil {
+	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync decision spool: %w", err)
 	}
 	return nil
@@ -323,12 +353,27 @@ func (p *PDP) Sync(ctx context.Context) error {
 		if err := policy.VerifyBundle(b, p.cfg.BundleKey); err != nil {
 			return err
 		}
+		// A validly signed bundle can still be an old one replayed: refuse
+		// one issued before the newest already loaded, or too long ago to
+		// be current.
+		p.mu.Lock()
+		newest := p.issuedAt
+		p.mu.Unlock()
+		if b.IssuedAt.Before(newest) {
+			return fmt.Errorf("bundle issued at %s is older than the one already loaded (%s)", b.IssuedAt, newest)
+		}
+		if age := time.Since(b.IssuedAt); age > p.cfg.MaxAge {
+			return fmt.Errorf("bundle was issued %s ago, longer than --policy-max-age", age.Round(time.Second))
+		}
 	}
 	if err := p.engine.LoadBundle(b); err != nil {
 		return err
 	}
 	p.mu.Lock()
 	p.revision = b.Revision
+	if b.IssuedAt.After(p.issuedAt) {
+		p.issuedAt = b.IssuedAt
+	}
 	p.synced = time.Now()
 	p.mu.Unlock()
 	return nil

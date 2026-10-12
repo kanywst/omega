@@ -41,6 +41,9 @@ spec:
             - --client-cert=/etc/omega/agent-tls/tls.crt
             - --client-key=/etc/omega/agent-tls/tls.key
             {{- if .Values.agent.localPDP.verifyBundle }}
+            {{- if not .Values.server.policyBundleSigningKeySecret }}
+            {{- fail "agent.localPDP.verifyBundle needs server.policyBundleSigningKeySecret: an agent that verifies signatures refuses every unsigned bundle" }}
+            {{- end }}
             - --policy-bundle-key=/etc/omega/agent-tls/bundle.pub
             {{- end }}
             {{- if .Values.agent.localPDP.spoolDir }}
