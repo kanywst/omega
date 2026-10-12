@@ -8,6 +8,12 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-13
+
+Hardens local policy decisions: the control plane can sign the policy bundle, the node agent refuses unsigned, replayed or stale bundles, decisions survive an agent crash through an on-disk spool, and each local decision is recorded once however often it is resent. Adds `examples/spire-authz`, Omega as the authorization and audit layer on top of a real SPIRE deployment, and builds the arm64 image natively.
+
+A minor rather than a patch: `POST /v1/audit/decisions` now refuses decision and loss ids longer than 128 bytes, and a loss report must carry a digest for each dropped decision.
+
 ### Added
 
 - **`examples/spire-authz`.** Real SPIRE issues every identity; Omega, on SPIRE's trust domain, authenticates callers by their SPIRE SVIDs, decides with Cedar by SPIRE path and by groups pushed over SCIM, decides locally on the node, and records it all in one audit chain.
@@ -897,7 +903,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/kanywst/omega/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kanywst/omega/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kanywst/omega/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kanywst/omega/compare/v0.4.0...v0.5.0

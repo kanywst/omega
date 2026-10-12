@@ -10,9 +10,9 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.7.0)
+## Now (next release, post-0.8.0)
 
-Nothing is committed beyond what is on `main`: signed policy bundles and the decision spool ([ADR 0018](docs/adr/0018-signed-bundles-and-decision-spool.md)) have landed.
+Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 0018](docs/adr/0018-signed-bundles-and-decision-spool.md)) shipped in 0.8.0.
 
 ## Next (3-6 months)
 
