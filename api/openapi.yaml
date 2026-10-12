@@ -1333,6 +1333,8 @@ paths:
         with `--decision-recorder`. At most 1000 decisions per batch. A
         failed append answers 500 with `recorded`, the number of leading
         decisions already in the chain, so the caller resends only the rest.
+        Each decision is recorded once per caller and id, and each loss
+        report once per loss_id, so a resent batch adds nothing.
         A loss report (`dropped`, `dropped_ids`, `dropped_digests`,
         `loss_id`) is sent without decisions.
       requestBody:

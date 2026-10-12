@@ -439,3 +439,49 @@ func macAuditEvent(ev AuditEvent, key []byte) []byte {
 func hashAuditEvent(ev AuditEvent, key []byte) string {
 	return hex.EncodeToString(macAuditEvent(ev, key))
 }
+
+// auditOnceRetention is how long AppendAuditOnce remembers a key. A retry
+// of the same event comes within minutes; this only has to outlast that.
+const auditOnceRetention = 30 * 24 * time.Hour
+
+// AppendAuditOnce appends ev unless an event was already appended under
+// key, and reports whether it appended. The key and the event commit in
+// one transaction, so a retry after a lost response cannot record the
+// same event twice. Keys older than 30 days are forgotten.
+func (s *Store) AppendAuditOnce(ctx context.Context, key string, ev AuditEvent) (bool, error) {
+	if !s.IsLeader() {
+		return false, ErrNotLeader
+	}
+	if ev.Kind == "" || key == "" {
+		return false, errors.New("audit: kind and key are required")
+	}
+	auditMu.Lock()
+	defer auditMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("audit: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now()
+	res, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO audit_once(k, created_at) VALUES (?, ?) ON CONFLICT (k) DO NOTHING`), key, now.UnixNano())
+	if err != nil {
+		return false, fmt.Errorf("audit: record key: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	if _, err := s.appendAuditTx(ctx, tx, ev); err != nil {
+		return false, err
+	}
+	s.onceCount++
+	if s.onceCount%1000 == 0 {
+		if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM audit_once WHERE created_at < ?`), now.Add(-auditOnceRetention).UnixNano()); err != nil {
+			return false, fmt.Errorf("audit: prune keys: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("audit: commit: %w", err)
+	}
+	s.auditCommitted()
+	return true, nil
+}

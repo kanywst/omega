@@ -143,7 +143,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	// Validate everything before appending anything, so a rejected batch
 	// leaves nothing in the chain to be written again on a retry.
 	for i, d := range batch.Decisions {
-		if d.ID == "" || d.DecidedAt.IsZero() {
+		if d.ID == "" || len(d.ID) > 128 || d.DecidedAt.IsZero() {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d needs id and decided_at", i))
 			return
 		}
@@ -153,7 +153,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if batch.Dropped > 0 {
-		if err := s.appendAudit(r.Context(), storage.AuditEvent{
+		if _, err := s.appendAuditOnce(r.Context(), agent+"\x00loss\x00"+batch.LossID, storage.AuditEvent{
 			Kind: localDecisionKind + ".dropped", Actor: agent, Decision: "error",
 			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "dropped_ids": batch.DroppedIDs, "dropped_digests": batch.DroppedDigests, "loss_id": batch.LossID, "bundle_revision": batch.BundleRevision}),
 		}); err != nil {
@@ -178,13 +178,16 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		if err := s.appendAudit(r.Context(), storage.AuditEvent{
+		// Keyed by agent and decision id, so a batch resent after a lost
+		// response or replayed from an agent's spool is recorded once.
+		appended, err := s.appendAuditOnce(r.Context(), agent+"\x00decision\x00"+d.ID, storage.AuditEvent{
 			Kind:     localDecisionKind,
 			Actor:    agent,
 			Subject:  d.Request.Subject.ID,
 			Decision: decision,
 			Payload:  payload,
-		}); err != nil {
+		})
+		if err != nil {
 			// Say how many were recorded, so the agent drops those and a
 			// retry does not record them twice.
 			writeJSON(w, http.StatusInternalServerError, map[string]any{
@@ -193,7 +196,9 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		metrics.Decisions.WithLabelValues(decision).Inc()
+		if appended {
+			metrics.Decisions.WithLabelValues(decision).Inc()
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"recorded": len(batch.Decisions)})
 }

@@ -45,6 +45,8 @@ type Store struct {
 	// once the keying-epoch row exists. Guarded by auditMu (AppendAudit is
 	// serialized through it).
 	keyedEpochRecorded bool
+	// onceCount paces pruning in AppendAuditOnce; guarded by auditMu.
+	onceCount int
 }
 
 type Domain struct {
@@ -181,6 +183,10 @@ func (s *Store) schemaDDL() []string {
 			   expires_at BIGINT NOT NULL DEFAULT 0,
 			   PRIMARY KEY (domain, grp, principal)
 			 )`,
+			`CREATE TABLE IF NOT EXISTS audit_once (
+			   k          TEXT   PRIMARY KEY,
+			   created_at BIGINT NOT NULL
+			 )`,
 			`CREATE TABLE IF NOT EXISTS scim_users (
 			   idp          TEXT   NOT NULL,
 			   id           TEXT   NOT NULL,
@@ -265,6 +271,10 @@ func (s *Store) schemaDDL() []string {
 		   principal  TEXT   NOT NULL,
 		   expires_at BIGINT NOT NULL DEFAULT 0,
 		   PRIMARY KEY (domain, grp, principal)
+		 )`,
+		`CREATE TABLE IF NOT EXISTS audit_once (
+		   k          TEXT   PRIMARY KEY,
+		   created_at BIGINT NOT NULL
 		 )`,
 		`CREATE TABLE IF NOT EXISTS scim_users (
 		   idp          TEXT   NOT NULL,

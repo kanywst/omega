@@ -210,3 +210,36 @@ func TestPolicyBundleIsSignedWhenAKeyIsSet(t *testing.T) {
 		t.Fatalf("served bundle must verify: %v", err)
 	}
 }
+
+func TestRecordDecisionsRecordsEachDecisionOnce(t *testing.T) {
+	env := newDomainEnv(t, "", "spiffe://omega.local/nodes/")
+	agent := env.as(t, "spiffe://omega.local/nodes/n1")
+	other := env.as(t, "spiffe://omega.local/nodes/n2")
+	batch := api.DecisionBatch{Decisions: []api.LocalDecision{{
+		ID: "same-id", DecidedAt: time.Now(),
+		Request: policy.EvalRequest{Subject: policy.Entity{Type: "User", ID: "u"}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"}},
+	}}}
+	loss := api.DecisionBatch{Dropped: 1, DroppedIDs: []string{"x"}, DroppedDigests: []string{strings.Repeat("a", 64)}, LossID: "loss-1"}
+	for range 3 {
+		for _, c := range []*http.Client{agent, other} {
+			for _, b := range []api.DecisionBatch{batch, loss} {
+				if code, body := call(t, c, "POST", env.srv.URL+"/v1/audit/decisions", b); code != http.StatusOK {
+					t.Fatalf("%d %s", code, body)
+				}
+			}
+		}
+	}
+	events, _ := env.store.ListAudit(t.Context(), 0, 100)
+	count := map[string]int{}
+	for _, ev := range events {
+		count[ev.Kind+" "+ev.Actor]++
+	}
+	for _, k := range []string{
+		"access.evaluate.local spiffe://omega.local/nodes/n1", "access.evaluate.local spiffe://omega.local/nodes/n2",
+		"access.evaluate.local.dropped spiffe://omega.local/nodes/n1", "access.evaluate.local.dropped spiffe://omega.local/nodes/n2",
+	} {
+		if count[k] != 1 {
+			t.Errorf("%s: %d rows, want 1 (resends must not duplicate; ids are per agent)", k, count[k])
+		}
+	}
+}
