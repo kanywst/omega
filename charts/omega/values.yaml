@@ -80,9 +80,9 @@ agent:
     # server.policyBundleSigningKeySecret, which tlsSecret must then hold.
     # Needs server.policyBundleSigningKeySecret.
     verifyBundle: false
-    # Spool decisions to the node so they survive an agent crash
-    # (hostPath under this directory; one fsync per decision).
-    spoolDir: ""
+    # Spool decisions to an emptyDir so they survive an agent container
+    # crash and restart (not the pod's deletion); one fsync per decision.
+    spool: false
   extraArgs: []
 
 policy:

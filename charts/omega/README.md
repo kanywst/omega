@@ -32,7 +32,7 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `agent.localPDP.tlsSecret`            | `""`                    | Secret with `ca.crt`, `tls.crt`, `tls.key` for the agent's SVID                                  |
 | `server.policyBundleSigningKeySecret` | `""`                    | Secret with `bundle.key` (ECDSA P-256) that signs policy bundles                                 |
 | `agent.localPDP.verifyBundle`         | `false`                 | Verify bundle signatures with `bundle.pub` from `agent.localPDP.tlsSecret`                       |
-| `agent.localPDP.spoolDir`             | `""`                    | hostPath for the decision spool                                                                  |
+| `agent.localPDP.spool`                | `false`                    | Spool decisions to an emptyDir                                                                   |
 | `server.persistence.size`             | `1Gi`                   | PVC for SQLite data dir                                                                          |
 
 ## Verify

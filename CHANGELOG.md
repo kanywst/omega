@@ -12,7 +12,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 - **`examples/spire-authz`.** Real SPIRE issues every identity; Omega, on SPIRE's trust domain, authenticates callers by their SPIRE SVIDs, decides with Cedar by SPIRE path and by groups pushed over SCIM, decides locally on the node, and records it all in one audit chain.
 - **Signed policy bundles.** `omega server --policy-bundle-signing-key` (ECDSA P-256, the same on every replica) signs every bundle; `omega agent --policy-bundle-key` refuses an unsigned or wrongly signed one, so a bundle's trust no longer rests on TLS alone. The Helm chart gains `server.policyBundleSigningKeySecret` and `agent.localPDP.verifyBundle`. See [ADR 0018](docs/adr/0018-signed-bundles-and-decision-spool.md).
-- **Decision spool.** `omega agent --decision-spool FILE` writes and syncs each decision before answering and requeues the file at start, so an agent crash loses no answered decision. Helm: `agent.localPDP.spoolDir`.
+- **Decision spool.** `omega agent --decision-spool FILE` writes and syncs each decision before answering and requeues the file at start, so an agent crash loses no answered decision. Helm: `agent.localPDP.spool` (an emptyDir, kept across container restarts).
 
 ### Changed
 
