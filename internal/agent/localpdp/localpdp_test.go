@@ -730,3 +730,83 @@ func TestLocalPDPRefusesReplayedSignedBundles(t *testing.T) {
 		t.Fatalf("a bundle issued longer ago than MaxAge must be refused: %v", err)
 	}
 }
+
+func TestLocalPDPWithASigningKeyNeverTrustsA304(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	b, _ := testBundle()
+	if err := policy.SignBundle(&b, key); err != nil {
+		t.Fatal(err)
+	}
+	var sawINM atomic.Bool
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") != "" {
+			sawINM.Store(true)
+		}
+		if calls.Add(1) > 1 {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(b)
+	}))
+	t.Cleanup(srv.Close)
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BundleKey: &key.PublicKey})
+	ctx := context.Background()
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Sync(ctx); err == nil || !strings.Contains(err.Error(), "304") {
+		t.Fatalf("an unsigned 304 must not count as a sync: %v", err)
+	}
+	if sawINM.Load() {
+		t.Fatal("with a signing key the agent must not ask for a 304")
+	}
+}
+
+func TestLocalPDPRemembersTheNewestBundleAcrossRestarts(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	sign := func() policy.Bundle {
+		b, _ := testBundle()
+		if err := policy.SignBundle(&b, key); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	older := sign()
+	time.Sleep(10 * time.Millisecond)
+	newer := sign()
+	var serve atomic.Pointer[policy.Bundle]
+	serve.Store(&newer)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(serve.Load())
+	}))
+	t.Cleanup(srv.Close)
+	cfg := localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BundleKey: &key.PublicKey, SpoolPath: filepath.Join(t.TempDir(), "s")}
+	first := localpdp.New(cfg)
+	if err := first.RestoreSpool(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	serve.Store(&older)
+	second := localpdp.New(cfg)
+	if err := second.RestoreSpool(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Sync(context.Background()); err == nil {
+		t.Fatal("a restarted agent must still refuse a bundle older than the newest it loaded")
+	}
+}
+
+func TestLocalPDPRefusesToStartOnACorruptSpool(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s")
+	good := `{"id":"a","revision":"r","decision":{}}`
+	if err := os.WriteFile(path, []byte(good+"\n{broken\n"+good+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := localpdp.New(localpdp.Config{ServerURL: "http://unused", TrustDomain: "omega.local", SpoolPath: path})
+	if err := p.RestoreSpool(); err == nil {
+		t.Fatal("an unreadable line that is not the last one is an answered decision; refuse to start")
+	}
+}

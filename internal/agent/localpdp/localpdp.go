@@ -113,18 +113,35 @@ func (p *PDP) RestoreSpool() error {
 		return fmt.Errorf("read decision spool: %w", err)
 	}
 	var restored []queued
-	for i, line := range bytes.Split(raw, []byte("\n")) {
+	lines := bytes.Split(raw, []byte("\n"))
+	last := len(lines) - 1
+	for last >= 0 && len(bytes.TrimSpace(lines[last])) == 0 {
+		last--
+	}
+	for i, line := range lines {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var e spoolEntry
 		if err := json.Unmarshal(line, &e); err != nil {
-			// A torn last line is what a crash mid-write leaves; its
-			// decision was never answered, so it is safe to skip.
-			slog.Warn("local pdp: skipping an unreadable decision spool line", "line", i+1, "err", err)
-			continue
+			if i == last {
+				// A torn last line is what a crash mid-write leaves; its
+				// decision was never answered, so it is safe to skip.
+				slog.Warn("local pdp: skipping a torn last line in the decision spool", "line", i+1, "err", err)
+				continue
+			}
+			// Anywhere else it is an answered decision that would never
+			// reach the chain: refuse to start rather than lose it quietly.
+			return fmt.Errorf("decision spool line %d is unreadable: %w", i+1, err)
 		}
 		restored = append(restored, queued{id: e.ID, raw: e.Decision, revision: e.Revision})
+	}
+	if t, err := p.loadIssuedAt(); err != nil {
+		return err
+	} else if !t.IsZero() {
+		p.mu.Lock()
+		p.issuedAt = t
+		p.mu.Unlock()
 	}
 	p.mu.Lock()
 	p.pending = append(restored, p.pending...)
@@ -315,8 +332,11 @@ func (p *PDP) Sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// With a signing key every refresh must be a signed 200: a 304 carries
+	// no signature, so honouring it would let whoever answers the poll
+	// keep the agent on a stale bundle past --policy-max-age.
 	p.mu.Lock()
-	if p.revision != "" {
+	if p.revision != "" && p.cfg.BundleKey == nil {
 		req.Header.Set("If-None-Match", `"`+p.revision+`"`)
 	}
 	p.mu.Unlock()
@@ -327,6 +347,9 @@ func (p *PDP) Sync(ctx context.Context) error {
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusNotModified:
+		if p.cfg.BundleKey != nil {
+			return errors.New("fetch bundle: unsigned 304 when a signed bundle is required")
+		}
 		p.mu.Lock()
 		p.synced = time.Now()
 		p.mu.Unlock()
@@ -365,6 +388,9 @@ func (p *PDP) Sync(ctx context.Context) error {
 		if age := time.Since(b.IssuedAt); age > p.cfg.MaxAge {
 			return fmt.Errorf("bundle was issued %s ago, longer than --policy-max-age", age.Round(time.Second))
 		}
+		if ahead := time.Until(b.IssuedAt); ahead > maxClockSkew {
+			return fmt.Errorf("bundle is issued %s in the future; check the clocks", ahead.Round(time.Second))
+		}
 	}
 	if err := p.engine.LoadBundle(b); err != nil {
 		return err
@@ -373,6 +399,7 @@ func (p *PDP) Sync(ctx context.Context) error {
 	p.revision = b.Revision
 	if b.IssuedAt.After(p.issuedAt) {
 		p.issuedAt = b.IssuedAt
+		p.saveIssuedAt(b.IssuedAt)
 	}
 	p.synced = time.Now()
 	p.mu.Unlock()
@@ -642,4 +669,44 @@ func (p *PDP) recentDrops() int {
 	}
 	p.dropTimes = keep
 	return len(keep)
+}
+
+// maxClockSkew is how far in the future a signed bundle's issue time may
+// be, to absorb clock differences between the agent and the control plane.
+const maxClockSkew = time.Minute
+
+// issuedAtPath keeps the newest signed bundle's issue time next to the
+// spool, so a restarted agent still refuses older bundles.
+func (p *PDP) issuedAtPath() string { return p.cfg.SpoolPath + ".bundle-issued-at" }
+
+func (p *PDP) loadIssuedAt() (time.Time, error) {
+	// #nosec G304 -- derived from the operator-supplied spool path.
+	raw, err := os.ReadFile(p.issuedAtPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read bundle high-water mark: %w", err)
+	}
+	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse bundle high-water mark: %w", err)
+	}
+	return t, nil
+}
+
+// saveIssuedAt records t when a spool is configured. Callers hold mu. A
+// failure only weakens replay protection after a restart, so it is logged.
+func (p *PDP) saveIssuedAt(t time.Time) {
+	if p.cfg.SpoolPath == "" {
+		return
+	}
+	tmp := p.issuedAtPath() + ".tmp"
+	if err := os.WriteFile(tmp, []byte(t.UTC().Format(time.RFC3339Nano)), 0o600); err != nil {
+		slog.Warn("local pdp: could not save the bundle high-water mark", "err", err)
+		return
+	}
+	if err := os.Rename(tmp, p.issuedAtPath()); err != nil {
+		slog.Warn("local pdp: could not save the bundle high-water mark", "err", err)
+	}
 }
