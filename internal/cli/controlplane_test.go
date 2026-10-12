@@ -187,7 +187,7 @@ func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 	base := []string{"--server", "https://127.0.0.1:1", "--server-ca", cert, "--client-cert", cert, "--client-key", keyFile, "--local-pdp-addr", busy.Addr().String()}
 	for name, extra := range map[string][]string{
 		"local PDP only":        nil,
-		"with the Workload API": {"--socket", filepath.Join(dir, "a.sock"), "--map", "uid=0,id=spiffe://omega.local/x"},
+		"with the Workload API": {"--socket", shortSocketPath(t), "--map", "uid=0,id=spiffe://omega.local/x"},
 	} {
 		cmd := newAgentCommand()
 		cmd.SilenceErrors, cmd.SilenceUsage = true, true
@@ -239,4 +239,16 @@ func TestBundleKeyLoaders(t *testing.T) {
 			t.Errorf("%s: want an error", name)
 		}
 	}
+}
+
+// shortSocketPath returns a unix socket path short enough for macOS's
+// 104-byte limit, which t.TempDir under a long test name can exceed.
+func shortSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "oa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "a.sock")
 }
