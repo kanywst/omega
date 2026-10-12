@@ -164,6 +164,7 @@ func TestRecordDecisionsRecordsALoss(t *testing.T) {
 		"negative":            {Dropped: -1},
 		"count without ids":   {Dropped: 1000000, LossID: "l"},
 		"ids disagree":        {Dropped: 2, DroppedIDs: []string{"a"}, LossID: "l"},
+		"long loss id":        {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: strings.Repeat("l", 129)},
 		"no loss id":          {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
 		"digests disagree":    {Dropped: 1, DroppedIDs: []string{"a"}, LossID: "l"},
 		"bad digest":          {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"zz"}, LossID: "l"},

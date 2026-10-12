@@ -45,8 +45,8 @@ type Store struct {
 	// once the keying-epoch row exists. Guarded by auditMu (AppendAudit is
 	// serialized through it).
 	keyedEpochRecorded bool
-	// onceCount paces pruning in AppendAuditOnce; guarded by auditMu.
-	onceCount int
+	// oncePrunedAt paces pruning in AppendAuditOnce; guarded by auditMu.
+	oncePrunedAt time.Time
 }
 
 type Domain struct {

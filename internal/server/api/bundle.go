@@ -122,7 +122,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &batch) {
 		return
 	}
-	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || len(batch.DroppedDigests) != len(batch.DroppedIDs) || (batch.Dropped > 0 && batch.LossID == "") || !validLossEntries(batch) {
+	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || len(batch.DroppedDigests) != len(batch.DroppedIDs) || (batch.Dropped > 0 && batch.LossID == "") || len(batch.LossID) > 128 || !validLossEntries(batch) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("a loss report needs dropped equal to the number of dropped_ids (at most %d) and a loss_id", maxDecisionBatch))
 		return
 	}

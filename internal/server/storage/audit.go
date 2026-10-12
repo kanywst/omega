@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -473,15 +474,17 @@ func (s *Store) AppendAuditOnce(ctx context.Context, key string, ev AuditEvent) 
 	if _, err := s.appendAuditTx(ctx, tx, ev); err != nil {
 		return false, err
 	}
-	s.onceCount++
-	if s.onceCount%1000 == 0 {
-		if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM audit_once WHERE created_at < ?`), now.Add(-auditOnceRetention).UnixNano()); err != nil {
-			return false, fmt.Errorf("audit: prune keys: %w", err)
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("audit: commit: %w", err)
 	}
 	s.auditCommitted()
+	// Housekeeping after the commit, at most hourly, and never at the
+	// cost of the record: a failure is only logged.
+	if now.Sub(s.oncePrunedAt) > time.Hour {
+		s.oncePrunedAt = now
+		if _, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM audit_once WHERE created_at < ?`), now.Add(-auditOnceRetention).UnixNano()); err != nil {
+			slog.Warn("audit: could not prune remembered keys", "err", err)
+		}
+	}
 	return true, nil
 }
