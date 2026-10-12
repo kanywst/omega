@@ -166,3 +166,29 @@ func TestPostgresDomainCreateDeleteRace(t *testing.T) {
 		_ = s.DeleteDomain(ctx, "race")
 	}
 }
+
+func TestPostgresGroupMemberUpsert(t *testing.T) {
+	s := openPostgresStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateDomain(ctx, storage.Domain{Name: "media"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateGroup(ctx, storage.Group{Domain: "media", Name: "oncall"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			_, err := s.PutGroupMember(ctx, "media", "oncall", storage.GroupMember{Principal: "spiffe://td/a"})
+			done <- err
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		if err := <-done; err != nil {
+			t.Fatalf("concurrent put of the same member: %v", err)
+		}
+	}
+	if g, _ := s.GetGroup(ctx, "media", "oncall"); len(g.Members) != 1 {
+		t.Fatalf("members: %+v", g.Members)
+	}
+}

@@ -72,3 +72,4 @@ index to avoid collisions.
 | [0012](0012-optional-client-certificates.md) | Optional client certificates on the TLS listener | Accepted |
 | [0013](0013-dpop-sender-constrained-tokens.md) | Verify DPoP proofs and honour sender-constrained tokens | Accepted |
 | [0014](0014-domain-hierarchy-and-delegation.md) | Domain hierarchy with delegated administration | Accepted |
+| [0015](0015-groups-with-expiring-membership.md) | Domain-owned groups with expiring membership | Accepted |

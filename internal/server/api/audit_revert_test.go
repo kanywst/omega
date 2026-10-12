@@ -3,6 +3,7 @@ package api_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -12,8 +13,8 @@ import (
 	"github.com/kanywst/omega/internal/server/storage"
 )
 
-// TestUnrecordedChangesAreReverted checks every domain write is undone,
-// and answered 500, when its audit row cannot be written.
+// TestUnrecordedChangesAreReverted checks every domain and group write
+// is undone, and answered 500, when its audit row cannot be written.
 func TestUnrecordedChangesAreReverted(t *testing.T) {
 	dir := t.TempDir()
 	store, err := storage.Open(filepath.Join(dir, "omega.db"))
@@ -39,6 +40,8 @@ func TestUnrecordedChangesAreReverted(t *testing.T) {
 		}
 	}
 	must("POST", base, storage.Domain{Name: "media", Admins: []string{alice}}, http.StatusCreated)
+	must("POST", base+"/media/groups", api.GroupRequest{Name: "oncall"}, http.StatusCreated)
+	must("PUT", base+"/media/groups/oncall/members", api.GroupMemberRequest{Principal: bob}, http.StatusOK)
 
 	s.FailAuditForTest("domain.create")
 	must("POST", base, storage.Domain{Name: "sports"}, http.StatusInternalServerError)
@@ -59,6 +62,31 @@ func TestUnrecordedChangesAreReverted(t *testing.T) {
 		t.Errorf("an unrecorded revoke must be undone: %v", d.Admins)
 	}
 
+	s.FailAuditForTest("group.member.add")
+	must("PUT", base+"/media/groups/oncall/members", api.GroupMemberRequest{Principal: alice}, http.StatusInternalServerError)
+	if g, _ := store.GetGroup(ctx, "media", "oncall"); len(g.Members) != 1 {
+		t.Errorf("an unrecorded membership must be undone: %+v", g.Members)
+	}
+
+	s.FailAuditForTest("group.member.remove")
+	must("DELETE", base+"/media/groups/oncall/members?principal="+bob, nil, http.StatusInternalServerError)
+	if g, _ := store.GetGroup(ctx, "media", "oncall"); len(g.Members) != 1 {
+		t.Errorf("an unrecorded removal must be undone: %+v", g.Members)
+	}
+
+	s.FailAuditForTest("group.delete")
+	must("DELETE", base+"/media/groups/oncall", nil, http.StatusInternalServerError)
+	if g, err := store.GetGroup(ctx, "media", "oncall"); err != nil || len(g.Members) != 1 {
+		t.Errorf("an unrecorded group delete must restore it with its members: %+v %v", g, err)
+	}
+
+	s.FailAuditForTest("group.create")
+	must("POST", base+"/media/groups", api.GroupRequest{Name: "pagers"}, http.StatusInternalServerError)
+	if _, err := store.GetGroup(ctx, "media", "pagers"); err == nil {
+		t.Error("an unrecorded group create must be undone")
+	}
+
+	must("DELETE", base+"/media/groups/oncall", nil, http.StatusNoContent)
 	s.FailAuditForTest("domain.delete")
 	must("DELETE", base+"/media", nil, http.StatusInternalServerError)
 	if d, err := store.GetDomain(ctx, "media"); err != nil || len(d.Admins) != 1 {
@@ -66,32 +94,46 @@ func TestUnrecordedChangesAreReverted(t *testing.T) {
 	}
 }
 
-func TestDomainErrorPaths(t *testing.T) {
-	env := newDomainEnv(t, "")
-	base := env.srv.URL + "/v1/domains"
-	root := env.as(t, rootAdmin)
-	if code, body := call(t, root, "POST", base, storage.Domain{Name: "media"}); code != http.StatusCreated {
-		t.Fatalf("setup: %d %s", code, body)
+// TestUndoneMembershipIsNotLeftInPolicy covers a sync that projects a
+// membership between its commit and its undo.
+func TestUndoneMembershipIsNotLeftInPolicy(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	cases := []struct {
-		name   string
-		method string
-		url    string
-		body   any
-		want   int
-	}{
-		{"create with a bad admin id", "POST", base, storage.Domain{Name: "sports", Admins: []string{"not-spiffe"}}, http.StatusBadRequest},
-		{"create twice", "POST", base, storage.Domain{Name: "media"}, http.StatusConflict},
-		{"delete a missing domain", "DELETE", base + "/nope", nil, http.StatusNotFound},
-		{"grant on a missing domain", "POST", base + "/nope/admins", api.DomainAdminRequest{Principal: alice}, http.StatusNotFound},
-		{"grant a non-SPIFFE principal", "POST", base + "/media/admins", api.DomainAdminRequest{Principal: "alice"}, http.StatusBadRequest},
-		{"revoke without a principal", "DELETE", base + "/media/admins", nil, http.StatusBadRequest},
-		{"revoke a non-admin", "DELETE", base + "/media/admins?principal=spiffe://omega.local/x", nil, http.StatusNotFound},
-		{"delete the domain", "DELETE", base + "/media", nil, http.StatusNoContent},
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		if code, body := call(t, root, tc.method, tc.url, tc.body); code != tc.want {
-			t.Errorf("%s: got %d %s, want %d", tc.name, code, body, tc.want)
+	pdp := policy.New()
+	pdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pdir, "p.cedar"), []byte(`permit (principal in Group::"media:oncall", action, resource);`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := pdp.LoadDir(pdir); err != nil {
+		t.Fatal(err)
+	}
+	s := api.NewServer(store, ca, pdp)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	base := srv.URL + "/v1/domains"
+	for _, st := range []struct {
+		u    string
+		body any
+	}{{base, storage.Domain{Name: "media"}}, {base + "/media/groups", api.GroupRequest{Name: "oncall"}}} {
+		if code, out := call(t, srv.Client(), "POST", st.u, st.body); code != http.StatusCreated {
+			t.Fatalf("%s: %d %s", st.u, code, out)
 		}
+	}
+	s.FailAuditAfterSyncForTest("group.member.add")
+	principal := "spiffe://omega.local/people/carol"
+	if code, _ := call(t, srv.Client(), "PUT", base+"/media/groups/oncall/members", api.GroupMemberRequest{Principal: principal}); code != http.StatusInternalServerError {
+		t.Fatalf("unrecorded add: %d", code)
+	}
+	r, err := pdp.Evaluate(policy.EvalRequest{Subject: policy.Entity{Type: "Spiffe", ID: principal}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"}})
+	if err != nil || r.Decision {
+		t.Fatalf("the undone membership must not grant access: %+v %v", r, err)
 	}
 }

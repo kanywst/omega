@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
@@ -103,5 +104,49 @@ permit (principal, action, resource);`), 0o644); err != nil {
 	}
 	if resp.Decision {
 		t.Fatal("the forbid on media must still cover media.news despite the static entity")
+	}
+}
+
+func TestGroupMembershipAndExpiry(t *testing.T) {
+	e := engineWith(t, `permit (principal in Group::"media:oncall", action == Action::"page", resource);
+permit (principal in Domain::"media", action == Action::"read", resource);`)
+	member := "spiffe://omega.local/people/alice"
+	expired := "spiffe://omega.local/people/bob"
+	peer := "spiffe://peer.example/people/carol"
+	e.SetDirectory(policy.Directory{
+		TrustDomain: spiffeid.RequireTrustDomainFromString("omega.local"),
+		Domains:     map[string]string{"media": ""},
+		Groups:      []string{"media:oncall"},
+		Memberships: map[string][]policy.Membership{
+			member:  {{Group: "media:oncall", ExpiresAt: time.Now().Add(time.Hour)}},
+			expired: {{Group: "media:oncall", ExpiresAt: time.Now().Add(-time.Minute)}},
+			peer:    {{Group: "media:oncall"}},
+		},
+	})
+	decide := func(id, action string) bool {
+		resp, err := e.Evaluate(policy.EvalRequest{
+			Subject:  policy.Entity{Type: "Spiffe", ID: id},
+			Action:   policy.Action{Name: action},
+			Resource: policy.Entity{Type: "Doc", ID: "d"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Decision
+	}
+	if !decide(member, "page") {
+		t.Error("an active member is in the group")
+	}
+	if decide(expired, "page") {
+		t.Error("an expired membership no longer counts")
+	}
+	if !decide(peer, "page") {
+		t.Error("an explicitly listed federated member is in the group")
+	}
+	if decide(member, "read") {
+		t.Error("being in a domain's group does not put a principal in the domain")
+	}
+	if got := e.EntitiesOfType("Group"); len(got) != 1 || got[0].ID != "media:oncall" {
+		t.Errorf("Group entities: %v", got)
 	}
 }

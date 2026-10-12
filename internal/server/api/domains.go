@@ -28,6 +28,10 @@ type domainState struct {
 	mu        sync.Mutex
 	loadedAt  time.Time
 	interval  time.Duration
+	// broken is set when the reload after a committed write fails: the
+	// loaded tree is then known to be out of date (a removed member may
+	// still be in it), whatever the sync interval.
+	broken bool
 }
 
 // directoryStaleAfter is how many sync intervals may pass without a
@@ -36,10 +40,14 @@ const directoryStaleAfter = 3
 
 // directoryStale reports whether the projected tree is too old to
 // evaluate against: a forbid on a domain created since would not apply.
-// It only applies once RunDirectorySync is running.
+// Age only counts once RunDirectorySync is running; a failed reload
+// after a write counts at once.
 func (s *Server) directoryStale() bool {
 	s.domains.mu.Lock()
 	defer s.domains.mu.Unlock()
+	if s.domains.broken {
+		return true
+	}
 	return s.domains.interval > 0 && time.Since(s.domains.loadedAt) > directoryStaleAfter*s.domains.interval
 }
 
@@ -87,9 +95,24 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 		// tree goes stale and evaluation fails closed.
 		return errors.New("domains exist but the identity source reports no trust domain")
 	}
-	s.policy.SetDirectory(policy.Directory{TrustDomain: td, Domains: tree})
+	groups, err := s.store.ListGroups(ctx, "")
+	if err != nil {
+		return err
+	}
+	dir := policy.Directory{TrustDomain: td, Domains: tree, Memberships: map[string][]policy.Membership{}}
+	// Every group is projected, whether or not its domain made it into
+	// the tree: a group entity has no parents, and dropping one would
+	// silently disarm a forbid on it.
+	for _, g := range groups {
+		dir.Groups = append(dir.Groups, g.ID())
+		for _, m := range g.Members {
+			dir.Memberships[m.Principal] = append(dir.Memberships[m.Principal], policy.Membership{Group: g.ID(), ExpiresAt: m.ExpiresAt})
+		}
+	}
+	s.policy.SetDirectory(dir)
 	s.domains.mu.Lock()
 	s.domains.loadedAt = time.Now()
+	s.domains.broken = false
 	s.domains.mu.Unlock()
 	return nil
 }
@@ -119,9 +142,9 @@ func (s *Server) RunDirectorySync(ctx context.Context, interval time.Duration) {
 // stale at once and evaluation fails closed until a sync succeeds.
 func (s *Server) refreshAfterWrite(ctx context.Context) {
 	if err := s.RefreshDirectory(ctx); err != nil {
-		slog.Warn("domain directory refresh failed after a write; failing closed until the next sync", "err", err)
+		slog.Warn("domain directory refresh failed after a write; failing closed until a reload succeeds", "err", err)
 		s.domains.mu.Lock()
-		s.domains.loadedAt = time.Time{}
+		s.domains.broken = true
 		s.domains.mu.Unlock()
 	}
 }
@@ -258,7 +281,7 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
-	case errors.Is(err, storage.ErrHasChildren):
+	case errors.Is(err, storage.ErrHasChildren), errors.Is(err, storage.ErrHasGroups):
 		writeErr(w, http.StatusConflict, err)
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
@@ -353,6 +376,10 @@ func (s *Server) removeDomainAdmin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) recordOrUndo(w http.ResponseWriter, r *http.Request, ev storage.AuditEvent, undo func(context.Context) error) bool {
 	if err := s.appendAudit(r.Context(), ev); err != nil {
 		ctx := context.WithoutCancel(r.Context())
+		// A sync may have projected the change before it was undone, so
+		// reload once the undo is done (or has failed); a failed reload
+		// fails closed.
+		defer s.refreshAfterWrite(ctx)
 		if uerr := undo(ctx); uerr != nil {
 			slog.Error("audit append failed and the change could not be reverted", "kind", ev.Kind, "subject", ev.Subject, "err", uerr)
 			writeErr(w, http.StatusInternalServerError, fmt.Errorf("could not record %s, and reverting the change failed (%v); check the current state before retrying", ev.Kind, uerr))

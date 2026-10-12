@@ -167,6 +167,20 @@ func (s *Store) schemaDDL() []string {
 			   created_at  BIGINT  NOT NULL
 			 )`,
 			`CREATE INDEX IF NOT EXISTS idx_domains_parent ON domains(parent)`,
+			`CREATE TABLE IF NOT EXISTS groups (
+			   domain      TEXT   NOT NULL,
+			   name        TEXT   NOT NULL,
+			   description TEXT   NOT NULL DEFAULT '',
+			   created_at  BIGINT NOT NULL,
+			   PRIMARY KEY (domain, name)
+			 )`,
+			`CREATE TABLE IF NOT EXISTS group_members (
+			   domain     TEXT   NOT NULL,
+			   grp        TEXT   NOT NULL,
+			   principal  TEXT   NOT NULL,
+			   expires_at BIGINT NOT NULL DEFAULT 0,
+			   PRIMARY KEY (domain, grp, principal)
+			 )`,
 			`CREATE TABLE IF NOT EXISTS domain_admins (
 			   domain     TEXT NOT NULL,
 			   principal  TEXT NOT NULL,
@@ -205,6 +219,20 @@ func (s *Store) schemaDDL() []string {
 		   created_at  INTEGER NOT NULL
 		 )`,
 		`CREATE INDEX IF NOT EXISTS idx_domains_parent ON domains(parent)`,
+		`CREATE TABLE IF NOT EXISTS groups (
+		   domain      TEXT   NOT NULL,
+		   name        TEXT   NOT NULL,
+		   description TEXT   NOT NULL DEFAULT '',
+		   created_at  BIGINT NOT NULL,
+		   PRIMARY KEY (domain, name)
+		 )`,
+		`CREATE TABLE IF NOT EXISTS group_members (
+		   domain     TEXT   NOT NULL,
+		   grp        TEXT   NOT NULL,
+		   principal  TEXT   NOT NULL,
+		   expires_at BIGINT NOT NULL DEFAULT 0,
+		   PRIMARY KEY (domain, grp, principal)
+		 )`,
 		`CREATE TABLE IF NOT EXISTS domain_admins (
 		   domain     TEXT NOT NULL,
 		   principal  TEXT NOT NULL,
