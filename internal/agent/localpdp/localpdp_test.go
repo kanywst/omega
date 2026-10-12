@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+
 	"github.com/kanywst/omega/internal/agent/localpdp"
 	"github.com/kanywst/omega/internal/server/api"
 	"github.com/kanywst/omega/internal/server/identity"
@@ -93,7 +95,7 @@ func TestLocalPDPDecidesLikeTheControlPlaneAndAuditsCentrally(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client})
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.client})
 	if _, err := p.Evaluate(evalReq("spiffe://omega.local/media/web", "read")); err == nil {
 		t.Fatal("before the first sync the local PDP must refuse to decide")
 	}
@@ -158,7 +160,7 @@ func TestLocalPDPFailsClosed(t *testing.T) {
 	cp := newControlPlane(t, `permit (principal, action, resource);`)
 	ctx := context.Background()
 
-	stale := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client, SyncInterval: 10 * time.Millisecond, MaxAge: 50 * time.Millisecond})
+	stale := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.client, SyncInterval: 10 * time.Millisecond, MaxAge: 50 * time.Millisecond})
 	if err := stale.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +169,7 @@ func TestLocalPDPFailsClosed(t *testing.T) {
 		t.Fatal("a bundle older than max-age must not be used")
 	}
 
-	full := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client, BufferSize: 2})
+	full := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.client, BufferSize: 2})
 	if err := full.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +205,7 @@ func TestLocalPDPFailsClosed(t *testing.T) {
 func TestLocalPDPKeepsDecisionsWhenTheControlPlaneIsDown(t *testing.T) {
 	cp := newControlPlane(t, `permit (principal, action, resource);`)
 	ctx := context.Background()
-	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client})
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.client})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +223,7 @@ func TestLocalPDPKeepsDecisionsWhenTheControlPlaneIsDown(t *testing.T) {
 
 func TestLocalPDPRefusesOversizedRequests(t *testing.T) {
 	cp := newControlPlane(t, `permit (principal, action, resource);`)
-	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client})
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.client})
 	if err := p.Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +246,7 @@ func TestLocalPDPRefusesOversizedRequests(t *testing.T) {
 func TestLocalPDPSplitsLargeBacklogs(t *testing.T) {
 	cp := newControlPlane(t, `permit (principal, action, resource);`)
 	ctx := context.Background()
-	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.client})
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.client})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +271,7 @@ func TestLocalPDPSplitsLargeBacklogs(t *testing.T) {
 
 func TestLocalPDPOfAnUnlistedAgentNeverDecides(t *testing.T) {
 	cp := newControlPlane(t, `permit (principal, action, resource);`)
-	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, HTTPClient: cp.clientFor("spiffe://omega.local/media/web")})
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.clientFor("spiffe://omega.local/media/web")})
 	if err := p.Sync(context.Background()); err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("a workload that is not a decision recorder must not get the bundle: %v", err)
 	}
@@ -294,7 +296,7 @@ func TestLocalPDPRefusesABundleForAnotherTrustDomain(t *testing.T) {
 // the scripted responses, recording how many decisions each batch held.
 func fakeRecorder(t *testing.T, replies ...func(w http.ResponseWriter, n int)) (*httptest.Server, *[]int) {
 	t.Helper()
-	b, err := policy.New().Bundle()
+	b, err := testBundle()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +329,7 @@ func TestLocalPDPDropsWhatWasRecordedBeforeRetrying(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"disk full","recorded":2}`))
 	})
 	ctx := context.Background()
-	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local"})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +358,7 @@ func TestLocalPDPIsolatesARejectedDecisionAndReportsTheLoss(t *testing.T) {
 		recorded []string
 		dropped  int
 	)
-	b, err := policy.New().Bundle()
+	b, err := testBundle()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +384,7 @@ func TestLocalPDPIsolatesARejectedDecisionAndReportsTheLoss(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
-	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local"})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +406,7 @@ func TestLocalPDPIsolatesARejectedDecisionAndReportsTheLoss(t *testing.T) {
 
 func TestLocalPDPBufferIsAHardCap(t *testing.T) {
 	srv, _ := fakeRecorder(t)
-	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, BufferSize: 5})
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BufferSize: 5})
 	if err := p.Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +433,7 @@ func TestLocalPDPStopsDroppingWhenEverythingIsRejected(t *testing.T) {
 		return out
 	}()...)
 	ctx := context.Background()
-	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local"})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +459,7 @@ func TestLocalPDPLossReportKeepsItsIDAcrossRetries(t *testing.T) {
 		mu      sync.Mutex
 		reports []api.DecisionBatch
 	)
-	b, err := policy.New().Bundle()
+	b, err := testBundle()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +486,7 @@ func TestLocalPDPLossReportKeepsItsIDAcrossRetries(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
-	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local"})
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -499,5 +501,20 @@ func TestLocalPDPLossReportKeepsItsIDAcrossRetries(t *testing.T) {
 	}
 	if len(reports) != 2 || reports[0].LossID == "" || reports[0].LossID != reports[1].LossID || len(reports[1].DroppedIDs) != 1 || len(reports[1].DroppedDigests) != 1 {
 		t.Fatalf("a retried loss report must keep its id and name the dropped decision: %+v", reports)
+	}
+}
+
+// testBundle is an empty policy bundle for omega.local.
+func testBundle() (policy.Bundle, error) {
+	e := policy.New()
+	e.SetDirectory(policy.Directory{TrustDomain: spiffeid.RequireTrustDomainFromString("omega.local")})
+	return e.Bundle()
+}
+
+func TestLocalPDPNeedsATrustDomain(t *testing.T) {
+	srv, _ := fakeRecorder(t)
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL})
+	if err := p.Sync(context.Background()); err == nil {
+		t.Fatal("without a trust domain no bundle may be loaded")
 	}
 }

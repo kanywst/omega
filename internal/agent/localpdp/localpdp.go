@@ -40,8 +40,9 @@ type Config struct {
 	// BufferSize caps decisions waiting to be shipped. When it is full the
 	// local PDP refuses to decide rather than make an unrecorded decision.
 	BufferSize int
-	// TrustDomain, when set, is the only trust domain a bundle may be
-	// for; a bundle for another one, or for none, is refused.
+	// TrustDomain is the only trust domain a bundle may be for; a
+	// bundle for another one, or for none, is refused, and without it
+	// no bundle is loaded at all.
 	TrustDomain string
 }
 
@@ -193,7 +194,10 @@ func (p *PDP) Sync(ctx context.Context) error {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&b); err != nil {
 		return fmt.Errorf("decode bundle: %w", err)
 	}
-	if p.cfg.TrustDomain != "" && b.Directory.TrustDomain != p.cfg.TrustDomain {
+	if p.cfg.TrustDomain == "" {
+		return errors.New("no trust domain configured: refusing to load a bundle that cannot be checked")
+	}
+	if b.Directory.TrustDomain != p.cfg.TrustDomain {
 		return fmt.Errorf("bundle is for trust domain %q, not %q", b.Directory.TrustDomain, p.cfg.TrustDomain)
 	}
 	if err := p.engine.LoadBundle(b); err != nil {

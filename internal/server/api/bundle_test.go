@@ -153,15 +153,18 @@ func TestRecordDecisionsReportsHowManyWereRecorded(t *testing.T) {
 func TestRecordDecisionsRecordsALoss(t *testing.T) {
 	env := newDomainEnv(t, "", "spiffe://omega.local/nodes/")
 	agent := env.as(t, "spiffe://omega.local/nodes/n1")
-	if code, body := call(t, agent, "POST", env.srv.URL+"/v1/audit/decisions", api.DecisionBatch{BundleRevision: "r1", Dropped: 2, DroppedIDs: []string{"a", "b"}, LossID: "l1"}); code != http.StatusOK {
+	if code, body := call(t, agent, "POST", env.srv.URL+"/v1/audit/decisions", api.DecisionBatch{BundleRevision: "r1", Dropped: 2, DroppedIDs: []string{"a", "b"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l1"}); code != http.StatusOK {
 		t.Fatalf("loss report: %d %s", code, body)
 	}
 	for name, b := range map[string]api.DecisionBatch{
 		"negative":           {Dropped: -1},
 		"count without ids":  {Dropped: 1000000, LossID: "l"},
 		"ids disagree":       {Dropped: 2, DroppedIDs: []string{"a"}, LossID: "l"},
-		"no loss id":         {Dropped: 1, DroppedIDs: []string{"a"}},
-		"bad decision after": {Dropped: 1, DroppedIDs: []string{"a"}, LossID: "l2", Decisions: []api.LocalDecision{{ID: "x"}}},
+		"no loss id":         {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		"digests disagree":   {Dropped: 1, DroppedIDs: []string{"a"}, LossID: "l"},
+		"bad digest":         {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"zz"}, LossID: "l"},
+		"empty id":           {Dropped: 1, DroppedIDs: []string{""}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l"},
+		"bad decision after": {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l2", Decisions: []api.LocalDecision{{ID: "x"}}},
 	} {
 		if code, _ := call(t, agent, "POST", env.srv.URL+"/v1/audit/decisions", b); code != http.StatusBadRequest {
 			t.Errorf("%s: %d", name, code)

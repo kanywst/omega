@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,7 +107,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &batch) {
 		return
 	}
-	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || len(batch.DroppedDigests) > maxDecisionBatch || (batch.Dropped > 0 && batch.LossID == "") {
+	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || len(batch.DroppedDigests) != len(batch.DroppedIDs) || (batch.Dropped > 0 && batch.LossID == "") || !validLossEntries(batch) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("a loss report needs dropped equal to the number of dropped_ids (at most %d) and a loss_id", maxDecisionBatch))
 		return
 	}
@@ -173,4 +175,18 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 		metrics.Decisions.WithLabelValues(decision).Inc()
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"recorded": len(batch.Decisions)})
+}
+
+// validLossEntries checks each dropped id is set and each digest is a
+// hex SHA-256.
+func validLossEntries(b DecisionBatch) bool {
+	for i, id := range b.DroppedIDs {
+		if id == "" || len(id) > 128 {
+			return false
+		}
+		if d, err := hex.DecodeString(b.DroppedDigests[i]); err != nil || len(d) != sha256.Size {
+			return false
+		}
+	}
+	return true
 }

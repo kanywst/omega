@@ -80,7 +80,7 @@ omega agent --server https://omega:8443 --server-ca ca.pem \
 
 ## Changing policy
 
-Edit the files in `--policy-dir` and send the server `SIGHUP`. The new revision reaches every node within one sync interval. A file that fails to parse leaves the previous policy in force, on the server and therefore on every node.
+Edit the files in `--policy-dir` and send `SIGHUP` to every server replica: each one reloads its own copy, and followers serve the bundle too, so until all have reloaded an agent behind a load balancer can see the old and the new revision in turn. In Kubernetes, a rolling restart after the ConfigMap changes does the same. The new revision reaches every node within one sync interval. A file that fails to parse leaves the previous policy in force, on the server and therefore on every node.
 
 ## What to know
 
