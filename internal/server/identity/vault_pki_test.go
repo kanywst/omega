@@ -37,6 +37,9 @@ type vaultFixture struct {
 	caCert    *x509.Certificate
 	signHits  atomic.Int64
 	chainHits atomic.Int64
+	// chain, when set, replaces the CA chain the mock publishes, as a
+	// Vault issuer rotation would.
+	chain atomic.Pointer[[]byte]
 }
 
 func newVaultFixture(t *testing.T, mount, role, token string) *vaultFixture {
@@ -69,6 +72,10 @@ func newVaultFixture(t *testing.T, mount, role, token string) *vaultFixture {
 			return
 		}
 		v.chainHits.Add(1)
+		if c := v.chain.Load(); c != nil {
+			_, _ = w.Write(*c)
+			return
+		}
 		_, _ = w.Write(caPEM)
 	})
 	mux.HandleFunc("/v1/"+mount+"/sign/"+role, func(w http.ResponseWriter, r *http.Request) {
@@ -262,5 +269,36 @@ func TestVaultPKIMissingConfigRejected(t *testing.T) {
 				t.Fatal("expected error for missing required config")
 			}
 		})
+	}
+}
+
+func TestVaultPKIKeepsTheRotatedOutCATrusted(t *testing.T) {
+	v := newVaultFixture(t, "pki", "omega", "tok")
+	a, err := identity.New(identity.Config{
+		Kind: identity.KindVaultPKI, TrustDomain: "omega.local", Dir: filepath.Join(t.TempDir(), "ca"),
+		VaultPKIAddr: v.server.URL, VaultPKIToken: v.token, VaultPKIMount: v.mount, VaultPKIRole: v.role,
+		VaultPKIBundleTTL: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq := func() int64 { return a.(identity.BundleSequencer).BundleSequence() }
+	if n := strings.Count(string(a.BundlePEM()), "BEGIN CERTIFICATE"); n != 1 || seq() != 1 {
+		t.Fatalf("before: %d certs, seq %d", n, seq())
+	}
+	// Vault's issuer rotates to a new CA.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "Vault Mock CA 2"}, NotBefore: time.Now().Add(-time.Minute),
+		NotAfter: time.Now().Add(48 * time.Hour), IsCA: true, KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true}
+	der, _ := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	next := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	v.chain.Store(&next)
+	time.Sleep(5 * time.Millisecond)
+	bundle := a.BundlePEM()
+	if n := strings.Count(string(bundle), "BEGIN CERTIFICATE"); n != 2 || !strings.HasPrefix(string(bundle), string(next)) {
+		t.Fatalf("after rotation the new CA comes first and the old stays trusted: %d certs", n)
+	}
+	if seq() != 2 {
+		t.Fatalf("spiffe_sequence after rotation: %d", seq())
 	}
 }

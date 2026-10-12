@@ -18,9 +18,6 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
 
 - SPIFFE CSI driver integration so workloads can mount SVIDs as a
   volume instead of dialing the agent's Unix socket.
-- step-ca and Vault PKI rotation handling (today they serve a
-  stale bundle on transient errors). The disk CA rotates at runtime
-  since [ADR 0019](docs/adr/0019-runtime-ca-rotation.md).
 
 ## Later (6-12 months)
 

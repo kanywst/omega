@@ -11,6 +11,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Added
 
 - **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
+- **Overlap across Vault PKI and step-ca rotations.** A CA the external issuer stops publishing stays in Omega's served bundle for 24 hours (never past its expiry), so SVIDs it signed keep verifying for peers, and `spiffe_sequence` advances when the issuer's bundle changes.
 
 ## [0.8.0] - 2026-10-13
 

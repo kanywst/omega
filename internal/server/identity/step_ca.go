@@ -65,6 +65,7 @@ type stepCAAuthority struct {
 	bundle    []byte
 	bundleExp time.Time
 	bundleTTL time.Duration
+	overlap   *caOverlap
 	// refreshMu serialises concurrent refreshBundle callers so a TTL
 	// expiry under load triggers one HTTP round-trip to step-ca, not
 	// N. The full lock-and-recheck dance happens in BundlePEM.
@@ -111,6 +112,7 @@ func newStepCAAuthority(local *localAuthority, cfg Config) (*stepCAAuthority, er
 		signer:           signer,
 		httpClient:       &http.Client{Timeout: defaultStepCATimeout, Transport: transport},
 		bundleTTL:        bundleTTL,
+		overlap:          newCAOverlap(),
 	}
 
 	// Boot-time probe so a bad URL / TLS config / unreachable step-ca
@@ -227,8 +229,12 @@ func (a *stepCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	sum := sha256.Sum256(block.Bytes)
 	rootSHA := hex.EncodeToString(sum[:])
 
+	served, err := a.overlap.update(body, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", "step-ca", err)
+	}
 	a.bundleMu.Lock()
-	a.bundle = body
+	a.bundle = served
 	a.bundleExp = time.Now().Add(a.bundleTTL)
 	a.rootSHA256 = rootSHA
 	a.bundleMu.Unlock()
@@ -370,4 +376,10 @@ func (a *stepCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 		NotBefore: cert.NotBefore,
 		NotAfter:  cert.NotAfter,
 	}, nil
+}
+
+// BundleSequence advances when the issuer's CA bundle or the local JWT
+// signing CAs change.
+func (a *stepCAAuthority) BundleSequence() int64 {
+	return a.overlap.sequence() + a.localAuthority.BundleSequence() - 1
 }

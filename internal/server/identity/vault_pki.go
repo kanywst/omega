@@ -46,6 +46,7 @@ type vaultPKIAuthority struct {
 	bundle    []byte
 	bundleExp time.Time
 	bundleTTL time.Duration
+	overlap   *caOverlap
 	// refreshMu serialises concurrent refreshBundle callers so a TTL
 	// expiry under load triggers one HTTP round-trip to Vault, not
 	// N. The full lock-and-recheck dance happens in BundlePEM.
@@ -100,6 +101,7 @@ func newVaultPKIAuthority(local *localAuthority, cfg Config) (*vaultPKIAuthority
 		role:           cfg.VaultPKIRole,
 		httpClient:     &http.Client{Timeout: defaultVaultPKITimeout, Transport: transport},
 		bundleTTL:      bundleTTL,
+		overlap:        newCAOverlap(),
 	}
 	// Boot-time probe so a bad addr / token / mount fails fast.
 	if _, err := a.refreshBundle(context.Background()); err != nil {
@@ -294,9 +296,19 @@ func (a *vaultPKIAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	if len(body) == 0 || !bytes.Contains(body, []byte("-----BEGIN CERTIFICATE-----")) {
 		return nil, fmt.Errorf("vault-pki: ca_chain response is not PEM (got %d bytes)", len(body))
 	}
+	served, err := a.overlap.update(body, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", "vault-pki", err)
+	}
 	a.bundleMu.Lock()
-	a.bundle = body
+	a.bundle = served
 	a.bundleExp = time.Now().Add(a.bundleTTL)
 	a.bundleMu.Unlock()
 	return body, nil
+}
+
+// BundleSequence advances when the issuer's CA bundle or the local JWT
+// signing CAs change.
+func (a *vaultPKIAuthority) BundleSequence() int64 {
+	return a.overlap.sequence() + a.localAuthority.BundleSequence() - 1
 }
