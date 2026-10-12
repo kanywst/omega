@@ -103,24 +103,11 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &batch) {
 		return
 	}
-	if batch.Dropped < 0 || len(batch.DroppedIDs) > maxDecisionBatch {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("dropped must not be negative, and at most %d dropped ids", maxDecisionBatch))
+	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || (batch.Dropped > 0 && batch.LossID == "") {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("a loss report needs dropped equal to the number of dropped_ids (at most %d) and a loss_id", maxDecisionBatch))
 		return
 	}
-	if batch.Dropped > 0 {
-		if err := s.appendAudit(r.Context(), storage.AuditEvent{
-			Kind: localDecisionKind + ".dropped", Actor: agent, Decision: "error",
-			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "dropped_ids": batch.DroppedIDs, "loss_id": batch.LossID, "bundle_revision": batch.BundleRevision}),
-		}); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "recorded": 0})
-			return
-		}
-		if len(batch.Decisions) == 0 {
-			writeJSON(w, http.StatusOK, map[string]int{"recorded": 0})
-			return
-		}
-	}
-	if len(batch.Decisions) == 0 {
+	if batch.Dropped == 0 && len(batch.Decisions) == 0 {
 		writeErr(w, http.StatusBadRequest, errors.New("decisions is empty"))
 		return
 	}
@@ -128,6 +115,8 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("at most %d decisions per batch", maxDecisionBatch))
 		return
 	}
+	// Validate everything before appending anything, so a rejected batch
+	// leaves nothing in the chain to be written again on a retry.
 	for i, d := range batch.Decisions {
 		if d.ID == "" || d.DecidedAt.IsZero() {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d needs id and decided_at", i))
@@ -135,6 +124,15 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := policy.Validate(d.Request); err != nil {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d: %w", i, err))
+			return
+		}
+	}
+	if batch.Dropped > 0 {
+		if err := s.appendAudit(r.Context(), storage.AuditEvent{
+			Kind: localDecisionKind + ".dropped", Actor: agent, Decision: "error",
+			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "dropped_ids": batch.DroppedIDs, "loss_id": batch.LossID, "bundle_revision": batch.BundleRevision}),
+		}); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "recorded": 0})
 			return
 		}
 	}
