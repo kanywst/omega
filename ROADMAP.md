@@ -48,9 +48,6 @@ Nothing is committed beyond what is on `main`: signed policy bundles and the dec
   and attestation side. It stays on the list for the self-issued
   dev / eval path, not as a production substitute for SPIRE.
 
-- Native-arm64 image build matrix (today the multi-arch image is
-  cross-compiled on amd64 runners; `ubuntu-24.04-arm` runners would
-  give a faster + more honest arm64 binary).
 - Cloud HSM / KMS-backed CA upstream plugins (AWS Private CA, GCP CAS,
   Azure Key Vault). The interface seam is in place
   ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and two

@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-FROM golang:1.27.1-alpine AS builder
+# The builder runs on the build machine's own platform and cross-compiles
+# (CGO is off), so an arm64 image needs no emulation: the target stage only
+# copies the binary.
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

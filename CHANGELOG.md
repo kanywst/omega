@@ -17,6 +17,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Changed
 
 - **`omega agent` runs without `--map` when `--local-pdp-addr` is set**, serving only the local PDP. That is how it runs beside a SPIRE agent, which issues the identities.
+- **The container image cross-compiles instead of emulating arm64.** The Dockerfile's builder stage runs on the build platform (`--platform=$BUILDPLATFORM`), so the linux/arm64 image builds in about the time of the amd64 one, and CI now builds both architectures on every pull request instead of only at release.
 
 ## [0.7.0] - 2026-10-12
 
