@@ -85,7 +85,9 @@ type DecisionBatch struct {
 	// DroppedIDs names the dropped decisions, and LossID identifies the
 	// report across retries so a reader can count each loss once.
 	DroppedIDs []string `json:"dropped_ids,omitempty"`
-	LossID     string   `json:"loss_id,omitempty"`
+	// DroppedDigests are SHA-256 digests of the dropped decisions.
+	DroppedDigests []string `json:"dropped_digests,omitempty"`
+	LossID         string   `json:"loss_id,omitempty"`
 }
 
 // recordDecisions appends decisions made by a local evaluator to the
@@ -103,7 +105,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &batch) {
 		return
 	}
-	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || (batch.Dropped > 0 && batch.LossID == "") {
+	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || len(batch.DroppedDigests) > maxDecisionBatch || (batch.Dropped > 0 && batch.LossID == "") {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("a loss report needs dropped equal to the number of dropped_ids (at most %d) and a loss_id", maxDecisionBatch))
 		return
 	}
@@ -130,7 +132,7 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 	if batch.Dropped > 0 {
 		if err := s.appendAudit(r.Context(), storage.AuditEvent{
 			Kind: localDecisionKind + ".dropped", Actor: agent, Decision: "error",
-			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "dropped_ids": batch.DroppedIDs, "loss_id": batch.LossID, "bundle_revision": batch.BundleRevision}),
+			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "dropped_ids": batch.DroppedIDs, "dropped_digests": batch.DroppedDigests, "loss_id": batch.LossID, "bundle_revision": batch.BundleRevision}),
 		}); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "recorded": 0})
 			return

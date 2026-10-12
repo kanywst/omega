@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -62,8 +63,13 @@ type PDP struct {
 	// stays the same across retries so a reader can dedupe the report.
 	droppedIDs []string
 	lossID     string
-	// dropStreak counts drops since a decision was last recorded.
+	// dropStreak counts drops since a decision was last recorded, and
+	// dropTimes when each recent drop happened.
 	dropStreak int
+	dropTimes  []time.Time
+	// droppedDigests holds a SHA-256 of each dropped decision, request
+	// and response included, so the loss stays attributable.
+	droppedDigests []string
 	// batchCap shrinks while the control plane rejects batches, to
 	// isolate the decision it will not accept.
 	batchCap int
@@ -89,6 +95,11 @@ type queued struct {
 // decision is isolated, a control plane rejecting everything is not
 // allowed to empty the queue unrecorded.
 const maxDropStreak = 3
+
+// maxDropsPerHour bounds drops over time too, so a control plane that
+// rejects every other batch cannot have decisions discarded without
+// limit.
+const maxDropsPerHour = 10
 
 const (
 	// MaxRequestBytes caps one evaluation request, so a single decision
@@ -254,7 +265,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 		if p.batchCap > 0 {
 			limit = p.batchCap
 		}
-		droppedIDs, lossID := slices.Clone(p.droppedIDs), p.lossID
+		droppedIDs, droppedDigests, lossID := slices.Clone(p.droppedIDs), slices.Clone(p.droppedDigests), p.lossID
 		// A batch carries one bundle revision and stays under the
 		// control plane's body and count limits.
 		rev := ""
@@ -279,7 +290,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 
 		payload := map[string]any{"bundle_revision": rev, "decisions": batch}
 		if len(droppedIDs) > 0 {
-			payload["dropped"], payload["dropped_ids"], payload["loss_id"] = len(droppedIDs), droppedIDs, lossID
+			payload["dropped"], payload["dropped_ids"], payload["dropped_digests"], payload["loss_id"] = len(droppedIDs), droppedIDs, droppedDigests, lossID
 		}
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -324,7 +335,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 				switch {
 				case left > 1:
 					p.batchCap = (left + 1) / 2
-				case p.dropStreak >= maxDropStreak:
+				case p.dropStreak >= maxDropStreak || p.recentDrops() >= maxDropsPerHour:
 					// Too many rejections in a row: this is the control
 					// plane, not one decision. Keep the queue; fail closed.
 					p.mu.Unlock()
@@ -335,6 +346,9 @@ func (p *PDP) Flush(ctx context.Context) error {
 						p.lossID = newID()
 					}
 					p.droppedIDs = append(p.droppedIDs, p.pending[0].id)
+					sum := sha256.Sum256(p.pending[0].raw)
+					p.droppedDigests = append(p.droppedDigests, hex.EncodeToString(sum[:]))
+					p.dropTimes = append(p.dropTimes, time.Now())
 					p.pending = p.pending[1:]
 					p.dropStreak++
 					p.batchCap = 0
@@ -348,6 +362,7 @@ func (p *PDP) Flush(ctx context.Context) error {
 		p.pending = p.pending[n:]
 		if len(droppedIDs) > 0 {
 			p.droppedIDs = p.droppedIDs[len(droppedIDs):]
+			p.droppedDigests = p.droppedDigests[len(droppedDigests):]
 			if len(p.droppedIDs) == 0 {
 				p.lossID = ""
 			}
@@ -409,4 +424,17 @@ func newID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// recentDrops counts drops in the last hour. Callers hold p.mu.
+func (p *PDP) recentDrops() int {
+	cut := time.Now().Add(-time.Hour)
+	keep := p.dropTimes[:0]
+	for _, t := range p.dropTimes {
+		if t.After(cut) {
+			keep = append(keep, t)
+		}
+	}
+	p.dropTimes = keep
+	return len(keep)
 }

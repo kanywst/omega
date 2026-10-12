@@ -497,7 +497,7 @@ func TestLocalPDPLossReportKeepsItsIDAcrossRetries(t *testing.T) {
 	if err := p.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 2 || reports[0].LossID == "" || reports[0].LossID != reports[1].LossID || len(reports[1].DroppedIDs) != 1 {
+	if len(reports) != 2 || reports[0].LossID == "" || reports[0].LossID != reports[1].LossID || len(reports[1].DroppedIDs) != 1 || len(reports[1].DroppedDigests) != 1 {
 		t.Fatalf("a retried loss report must keep its id and name the dropped decision: %+v", reports)
 	}
 }
