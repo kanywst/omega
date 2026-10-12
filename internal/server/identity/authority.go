@@ -14,7 +14,6 @@
 package identity
 
 import (
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -28,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -246,14 +246,15 @@ func LoadOrCreate(dir, trustDomain string) (Authority, error) {
 }
 
 // localAuthority is the disk-backed implementation: ECDSA P-256
-// self-signed CA, key + cert in two PEM files. Unexported because new
-// Kinds will add their own structs and callers should not type-assert.
+// self-signed CAs, key + cert in PEM files, rotatable at runtime (see
+// rotation.go). Unexported because new Kinds will add their own structs
+// and callers should not type-assert.
 type localAuthority struct {
 	trustDomain spiffeid.TrustDomain
-	cert        *x509.Certificate
-	key         crypto.Signer
-	bundlePEM   []byte
+	dir         string
 	issuerURL   string
+	state       atomic.Pointer[caState]
+	seq         atomic.Int64
 }
 
 var _ Authority = (*localAuthority)(nil)
@@ -266,15 +267,23 @@ func loadOrCreateDisk(dir, trustDomain string) (*localAuthority, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("ca dir: %w", err)
 	}
-	keyPath := filepath.Join(dir, "ca.key")
-	crtPath := filepath.Join(dir, "ca.crt")
-	if _, err := os.Stat(keyPath); err == nil {
-		return loadAuthority(td, keyPath, crtPath)
+	if _, err := os.Stat(filepath.Join(dir, caKeyFile)); err != nil {
+		if _, err := generateCA(filepath.Join(dir, caKeyFile), filepath.Join(dir, caCertFile)); err != nil {
+			return nil, err
+		}
 	}
-	return createAuthority(td, keyPath, crtPath)
+	st, err := readDiskState(dir)
+	if err != nil {
+		return nil, err
+	}
+	a := &localAuthority{trustDomain: td, dir: dir}
+	a.state.Store(st)
+	a.seq.Store(1)
+	return a, nil
 }
 
-func createAuthority(td spiffeid.TrustDomain, keyPath, crtPath string) (*localAuthority, error) {
+// generateCA creates a self-signed CA and writes its key and certificate.
+func generateCA(keyPath, crtPath string) (*x509.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("gen ca key: %w", err)
@@ -305,56 +314,20 @@ func createAuthority(td spiffeid.TrustDomain, keyPath, crtPath string) (*localAu
 	if err != nil {
 		return nil, err
 	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	crtPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+	if err := writeFileSync(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
 		return nil, err
 	}
-	// #nosec G306 -- ca.crt is the public root that workloads need to read.
-	if err := os.WriteFile(crtPath, crtPEM, 0o644); err != nil {
+	// ca.crt is the public root that workloads need to read.
+	if err := writeFileSync(crtPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
 		return nil, err
 	}
-	return &localAuthority{trustDomain: td, cert: cert, key: key, bundlePEM: crtPEM}, nil
-}
-
-func loadAuthority(td spiffeid.TrustDomain, keyPath, crtPath string) (*localAuthority, error) {
-	// #nosec G304 -- keyPath comes from operator-supplied --data-dir, not user input.
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("read ca key: %w", err)
-	}
-	// #nosec G304 -- crtPath comes from operator-supplied --data-dir, not user input.
-	crtPEM, err := os.ReadFile(crtPath)
-	if err != nil {
-		return nil, fmt.Errorf("read ca cert: %w", err)
-	}
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
-		return nil, errors.New("invalid CA key PEM")
-	}
-	keyAny, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse ca key: %w", err)
-	}
-	signer, ok := keyAny.(crypto.Signer)
-	if !ok {
-		return nil, errors.New("ca key is not a crypto.Signer")
-	}
-	crtBlock, _ := pem.Decode(crtPEM)
-	if crtBlock == nil {
-		return nil, errors.New("invalid CA cert PEM")
-	}
-	cert, err := x509.ParseCertificate(crtBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse ca cert: %w", err)
-	}
-	return &localAuthority{trustDomain: td, cert: cert, key: signer, bundlePEM: crtPEM}, nil
+	return cert, nil
 }
 
 func (a *localAuthority) TrustDomain() spiffeid.TrustDomain { return a.trustDomain }
 
 func (a *localAuthority) IssuerURL() string { return a.issuerURL }
-func (a *localAuthority) BundlePEM() []byte { return a.bundlePEM }
+func (a *localAuthority) BundlePEM() []byte { return a.state.Load().bundlePEM }
 
 type SVID struct {
 	SPIFFEID  spiffeid.ID
@@ -394,14 +367,15 @@ func (a *localAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest)
 		IsCA:                  false,
 		URIs:                  []*url.URL{idAsURL(id)},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, a.cert, csr.PublicKey, a.key)
+	st := a.state.Load()
+	der, err := x509.CreateCertificate(rand.Reader, tpl, st.cert, csr.PublicKey, st.key)
 	if err != nil {
 		return nil, fmt.Errorf("sign svid: %w", err)
 	}
 	return &SVID{
 		SPIFFEID:  id,
 		CertPEM:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-		BundlePEM: a.bundlePEM,
+		BundlePEM: st.bundlePEM,
 		NotBefore: tpl.NotBefore,
 		NotAfter:  tpl.NotAfter,
 	}, nil

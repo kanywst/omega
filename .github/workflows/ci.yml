@@ -89,7 +89,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [federation, postgres, postgres-ha, mcp-a2a-delegation, id-jag, local-pdp, scim, audit-siem, oidc-federation, audit-otlp, ca-vault-pki, ca-step-ca, spiffe-bundle-tdf, spire-upstream, spire-upstream-live, spire-interop, spire-authz]
+        example: [federation, postgres, postgres-ha, mcp-a2a-delegation, id-jag, local-pdp, scim, audit-siem, oidc-federation, audit-otlp, ca-vault-pki, ca-step-ca, spiffe-bundle-tdf, spire-upstream, spire-upstream-live, spire-interop, spire-authz, ca-rotation]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

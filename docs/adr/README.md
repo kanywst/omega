@@ -76,3 +76,4 @@ index to avoid collisions.
 | [0016](0016-local-policy-decisions.md) | Local policy decisions on the node, audited centrally | Accepted |
 | [0017](0017-scim-provisioning.md) | Provisioning users and groups over SCIM 2.0 | Accepted |
 | [0018](0018-signed-bundles-and-decision-spool.md) | Signed policy bundles and a decision spool | Accepted |
+| [0019](0019-runtime-ca-rotation.md) | Rotating the built-in CA at runtime | Accepted |

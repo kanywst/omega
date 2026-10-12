@@ -259,7 +259,7 @@ the JWT signing key.
 - Residual risk: anyone who can read the data directory holds the
   trust domain. Mitigation is at the filesystem / pod-security
   layer (host filesystem ACLs, Kubernetes `securityContext`,
-  encrypted volumes).
+  encrypted volumes). After a suspected disclosure, `omega ca prepare`, `activate` and `retire --force` replace the disk CA without a restart ([ADR 0019](adr/0019-runtime-ca-rotation.md)); credentials the old key signed stop verifying once it is retired.
 - Out-of-tree mitigation: HSM / KMS upstream plugins (Vault PKI,
   step-ca, AWS Private CA, GCP CAS, Azure Key Vault) are tracked in
   `ROADMAP.md`. With those, the CA root never leaves the KMS.

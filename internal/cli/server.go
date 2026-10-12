@@ -335,7 +335,8 @@ func newServerCommand() *cobra.Command {
 			// Both reloads are atomic and fail-closed — a bad file leaves
 			// the previous material installed.
 			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
-			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "") && len(sighupSignals) > 0 {
+			caReloader, _ := ca.(identity.CAReloader)
+			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "" || caReloader != nil) && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)
 				signal.Notify(hup, sighupSignals...)
 				go func() {
@@ -354,6 +355,18 @@ func newServerCommand() *cobra.Command {
 							}
 							if reloadUpstream != nil {
 								reloadUpstream()
+							}
+							// The built-in CA's directory, after an
+							// `omega ca prepare|activate|retire`.
+							if caReloader != nil {
+								changed, err := caReloader.ReloadCA()
+								switch {
+								case err != nil:
+									fmt.Fprintf(os.Stderr, "omega server: CA reload failed, keeping the previous CAs: %v\n", err)
+								case changed:
+									fed.SetOwnBundle(ca.BundlePEM())
+									fmt.Fprintf(os.Stderr, "omega server: CAs reloaded\n")
+								}
 							}
 							// Reload the Cedar policies too, so local
 							// evaluators pick up a new bundle revision

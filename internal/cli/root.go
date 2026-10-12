@@ -25,6 +25,7 @@ AuthZEN-compliant authorization, OIDC federation, and AI agent identity.`,
 		newPolicyCommand(),
 		newSVIDCommand(),
 		newOperatorCommand(),
+		newCACommand(),
 	)
 
 	return root
