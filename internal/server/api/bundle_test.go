@@ -157,13 +157,13 @@ func TestRecordDecisionsRecordsALoss(t *testing.T) {
 		t.Fatalf("loss report: %d %s", code, body)
 	}
 	for name, b := range map[string]api.DecisionBatch{
-		"negative":           {Dropped: -1},
-		"count without ids":  {Dropped: 1000000, LossID: "l"},
-		"ids disagree":       {Dropped: 2, DroppedIDs: []string{"a"}, LossID: "l"},
-		"no loss id":         {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
-		"digests disagree":   {Dropped: 1, DroppedIDs: []string{"a"}, LossID: "l"},
-		"bad digest":         {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"zz"}, LossID: "l"},
-		"empty id":           {Dropped: 1, DroppedIDs: []string{""}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l"},
+		"negative":            {Dropped: -1},
+		"count without ids":   {Dropped: 1000000, LossID: "l"},
+		"ids disagree":        {Dropped: 2, DroppedIDs: []string{"a"}, LossID: "l"},
+		"no loss id":          {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		"digests disagree":    {Dropped: 1, DroppedIDs: []string{"a"}, LossID: "l"},
+		"bad digest":          {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"zz"}, LossID: "l"},
+		"empty id":            {Dropped: 1, DroppedIDs: []string{""}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l"},
 		"loss with decisions": {Dropped: 1, DroppedIDs: []string{"a"}, DroppedDigests: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, LossID: "l2", Decisions: []api.LocalDecision{{ID: "x"}}},
 	} {
 		if code, _ := call(t, agent, "POST", env.srv.URL+"/v1/audit/decisions", b); code != http.StatusBadRequest {
