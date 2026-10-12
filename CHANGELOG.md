@@ -8,6 +8,14 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **SPIFFE CSI driver in the Helm chart.** `csi.enabled` deploys the upstream SPIFFE CSI driver against the Omega agent's socket directory, so pods mount the Workload API with a `csi.spiffe.io` ephemeral volume instead of a hostPath. `examples/kind-csi` checks it end to end in kind, in CI.
+
+### Fixed
+
+- **The chart's agent can create its socket on a fresh node.** It ran as uid 65532 while kubelet creates its hostPath directory root-owned, so it failed with `bind: permission denied`. It now runs as root with every capability dropped and a read-only root filesystem (`agent.podSecurityContext`).
+
 ## [0.8.0] - 2026-10-13
 
 Hardens local policy decisions: the control plane can sign the policy bundle, the node agent refuses unsigned, replayed or stale bundles, decisions survive an agent crash through an on-disk spool, and each local decision is recorded once however often it is resent. Adds `examples/spire-authz`, Omega as the authorization and audit layer on top of a real SPIRE deployment, and builds the arm64 image natively.

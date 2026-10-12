@@ -68,6 +68,12 @@ agent:
       memory: 32Mi
   hostSocketPath: /run/omega
   hostNetwork: false
+  # The agent creates its socket in hostSocketPath, which kubelet creates
+  # root-owned on a fresh node, so it runs as root. Every capability is
+  # still dropped and the root filesystem is read-only (securityContext).
+  podSecurityContext:
+    runAsUser: 0
+    runAsGroup: 0
   # Local policy decisions on the node (--local-pdp-addr). Needs an
   # https serverURL and a Secret holding the agent's SVID: ca.crt (the
   # control plane's CA), tls.crt and tls.key. List the agents' SPIFFE IDs
@@ -84,6 +90,16 @@ agent:
     # crash and restart (not the pod's deletion); one fsync per decision.
     spool: false
   extraArgs: []
+
+# The upstream SPIFFE CSI driver, so pods mount the agent's Workload API
+# socket with a `csi.spiffe.io` ephemeral volume instead of a hostPath.
+# It runs privileged (for mount propagation) and installs the
+# cluster-wide CSIDriver `csi.spiffe.io`; do not enable it next to
+# another SPIFFE CSI driver.
+csi:
+  enabled: false
+  image: ghcr.io/spiffe/spiffe-csi-driver:0.2.13
+  registrarImage: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.6.0
 
 policy:
   # Inline Cedar policies rendered into a ConfigMap and mounted at server.policyDir.

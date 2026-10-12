@@ -1,0 +1,107 @@
+{{- if and .Values.agent.enabled .Values.csi.enabled }}
+# The upstream SPIFFE CSI driver (github.com/spiffe/spiffe-csi), pointed at
+# the Omega agent's socket directory: a pod mounts the Workload API with a
+# `csi.spiffe.io` ephemeral volume instead of a hostPath.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "omega.fullname" . }}-csi
+  labels:
+{{ include "omega.commonLabels" . | indent 4 }}
+    app.kubernetes.io/component: csi-driver
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "omega.fullname" . }}-csi
+  labels:
+{{ include "omega.commonLabels" . | indent 4 }}
+    app.kubernetes.io/component: csi-driver
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "omega.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: csi-driver
+  template:
+    metadata:
+      labels:
+{{ include "omega.commonLabels" . | indent 8 }}
+        app.kubernetes.io/component: csi-driver
+    spec:
+      serviceAccountName: {{ include "omega.fullname" . }}-csi
+      containers:
+        - name: spiffe-csi-driver
+          image: {{ .Values.csi.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - -workload-api-socket-dir
+            - /omega-agent-socket
+            - -csi-socket-path
+            - /spiffe-csi/csi.sock
+          env:
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: agent-socket-dir
+              mountPath: /omega-agent-socket
+              readOnly: true
+            - name: csi-socket-dir
+              mountPath: /spiffe-csi
+            - name: mountpoint-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+          securityContext:
+            # Bidirectional mount propagation needs a privileged container.
+            privileged: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: node-driver-registrar
+          image: {{ .Values.csi.registrarImage | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - -csi-address
+            - /spiffe-csi/csi.sock
+            - -kubelet-registration-path
+            - /var/lib/kubelet/plugins/csi.spiffe.io/csi.sock
+          volumeMounts:
+            - name: csi-socket-dir
+              mountPath: /spiffe-csi
+            - name: kubelet-plugin-registration-dir
+              mountPath: /registration
+      volumes:
+        # The directory the Omega agent DaemonSet serves its socket in.
+        - name: agent-socket-dir
+          hostPath:
+            path: {{ .Values.agent.hostSocketPath }}
+            type: DirectoryOrCreate
+        - name: csi-socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.spiffe.io
+            type: DirectoryOrCreate
+        - name: mountpoint-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: kubelet-plugin-registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+---
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.spiffe.io
+  labels:
+{{ include "omega.commonLabels" . | indent 4 }}
+spec:
+  attachRequired: false
+  podInfoOnMount: true
+  # The Workload API socket is world-accessible; ownership is not changed.
+  fsGroupPolicy: None
+  volumeLifecycleModes:
+    - Ephemeral
+{{- end }}

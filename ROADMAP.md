@@ -28,8 +28,6 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
   issuer the bundle is still monotonic-at-one for the lifetime of a
   server process, so the disk authority cannot roll its own root
   without a restart.
-- SPIFFE CSI driver integration so workloads can mount SVIDs as a
-  volume instead of dialing the agent's Unix socket.
 - step-ca and Vault PKI rotation handling (today they serve a
   stale bundle on transient errors; rotation-aware short-circuit
   via `spiffe_sequence` comparison waits on the issuing-side
