@@ -61,8 +61,11 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 			if err != nil {
 				return err
 			}
-			if len(mapping) == 0 {
-				return fmt.Errorf("at least one --map is required (e.g. --map uid=%d,id=spiffe://omega.local/example/web)", os.Getuid())
+			// Without --map the agent serves no Workload API; that is the
+			// shape beside a SPIRE agent, which issues the identities while
+			// this one only decides locally.
+			if len(mapping) == 0 && pdpAddr == "" {
+				return fmt.Errorf("at least one --map is required, or --local-pdp-addr to run only the local PDP (e.g. --map uid=%d,id=spiffe://omega.local/example/web)", os.Getuid())
 			}
 			ctx, stop := signal.NotifyContext(c.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -127,6 +130,11 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				}()
 			}
 
+			if len(mapping) == 0 {
+				fmt.Fprintln(os.Stderr, "omega agent: no --map, so no Workload API; serving the local PDP only")
+				<-ctx.Done()
+				return nil
+			}
 			return runAgent(ctx, socket, serverURL, mapping, transport)
 		},
 	}

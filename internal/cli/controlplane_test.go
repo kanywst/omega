@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,5 +145,22 @@ func TestTrustDomainOfCert(t *testing.T) {
 	}
 	if td, err := trustDomainOfCert(svid); err != nil || td != "omega.local" {
 		t.Errorf("svid: %q %v", td, err)
+	}
+}
+
+func TestAgentNeedsAMapOrALocalPDP(t *testing.T) {
+	cmd := newAgentCommand()
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	cmd.SetArgs([]string{"--socket", filepath.Join(t.TempDir(), "a.sock")})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--local-pdp-addr") {
+		t.Fatalf("an agent with neither --map nor a local PDP has nothing to do: %v", err)
+	}
+	// With a local PDP and no --map, the flags are checked as for any
+	// local PDP rather than refused for the missing --map.
+	cmd = newAgentCommand()
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	cmd.SetArgs([]string{"--local-pdp-addr", "127.0.0.1:0", "--server", "http://cp"})
+	if err := cmd.Execute(); err == nil || strings.Contains(err.Error(), "--map") {
+		t.Fatalf("want the local PDP's own checks, got: %v", err)
 	}
 }
