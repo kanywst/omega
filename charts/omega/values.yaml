@@ -21,6 +21,10 @@ server:
   # it here: whoever may create OmegaDomain objects acts with the
   # operator's domain authority, and spec.admins can name anyone.
   domainRootAdmins: []
+  # SPIFFE IDs, or prefixes ending in "/", of the node agents running a
+  # local PDP (--decision-recorder): only they may read the policy bundle
+  # and record local decisions. Needs --require-auth.
+  decisionRecorders: []
   extraArgs: []
   resources:
     limits:
@@ -51,6 +55,15 @@ agent:
       memory: 32Mi
   hostSocketPath: /run/omega
   hostNetwork: false
+  # Local policy decisions on the node (--local-pdp-addr). Needs an
+  # https serverURL and a Secret holding the agent's SVID: ca.crt (the
+  # control plane's CA), tls.crt and tls.key. List the agents' SPIFFE IDs
+  # in server.decisionRecorders.
+  localPDP:
+    enabled: false
+    addr: "127.0.0.1:8181"
+    tlsSecret: ""
+  extraArgs: []
 
 policy:
   # Inline Cedar policies rendered into a ConfigMap and mounted at server.policyDir.

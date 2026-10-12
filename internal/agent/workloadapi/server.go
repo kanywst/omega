@@ -113,6 +113,13 @@ type jwksSnapshot struct {
 	expiry      time.Time
 }
 
+// WithTransport replaces the base transport used to reach the control
+// plane, for example one carrying the agent's mTLS client certificate.
+func (s *Server) WithTransport(rt http.RoundTripper) *Server {
+	s.httpClient = &http.Client{Transport: otelhttp.NewTransport(rt)}
+	return s
+}
+
 func NewServer(serverURL string, mapping Mapping) *Server {
 	return &Server{
 		serverURL: strings.TrimRight(serverURL, "/"),

@@ -44,6 +44,9 @@ spec:
             {{- range .Values.server.domainRootAdmins }}
             - --domain-root-admin={{ . }}
             {{- end }}
+            {{- range .Values.server.decisionRecorders }}
+            - --decision-recorder={{ . }}
+            {{- end }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}

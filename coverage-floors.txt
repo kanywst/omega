@@ -13,3 +13,4 @@ github.com/kanywst/omega/internal/server/policy 84
 github.com/kanywst/omega/internal/server/storage 68
 github.com/kanywst/omega/internal/cli 40
 github.com/kanywst/omega/internal/agent/workloadapi 23
+github.com/kanywst/omega/internal/agent/localpdp 73

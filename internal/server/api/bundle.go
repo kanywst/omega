@@ -1,0 +1,198 @@
+package api
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/kanywst/omega/internal/server/metrics"
+	"github.com/kanywst/omega/internal/server/policy"
+	"github.com/kanywst/omega/internal/server/storage"
+)
+
+// localDecisionKind is the audit kind of a decision a node made, kept
+// apart from access.evaluate so the two are never confused.
+const localDecisionKind = "access.evaluate.local"
+
+// maxDecisionBatch caps one POST /v1/audit/decisions body.
+const maxDecisionBatch = 1000
+
+// WithDecisionRecorders sets who may record local decisions: each entry
+// is a SPIFFE ID, or a prefix ending in "/" that matches every ID below
+// it. Recording also needs --require-auth, since the rows are attributed
+// to the caller's verified SPIFFE ID.
+func (s *Server) WithDecisionRecorders(ids []string) *Server {
+	s.decisionRecorders = slices.Clone(ids)
+	return s
+}
+
+func (s *Server) mayRecordDecisions(caller string) bool {
+	if !s.requireAuth || caller == "" {
+		return false
+	}
+	for _, r := range s.decisionRecorders {
+		if caller == r || (strings.HasSuffix(r, "/") && strings.HasPrefix(caller, r)) {
+			return true
+		}
+	}
+	return false
+}
+
+// getPolicyBundle serves the policy set and directory a local evaluator
+// needs. The revision is the ETag, so an unchanged bundle costs a 304.
+func (s *Server) getPolicyBundle(w http.ResponseWriter, r *http.Request) {
+	// The bundle is every policy and group membership; only the node
+	// agents that decide from it may read it.
+	if !s.mayRecordDecisions(CallerSPIFFEID(r.Context())) {
+		writeErr(w, http.StatusForbidden, errors.New("reading the policy bundle needs --require-auth and a caller listed in --decision-recorder"))
+		return
+	}
+	b, err := s.policy.Bundle()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	etag := `"` + b.Revision + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if inm := r.Header.Get("If-None-Match"); inm != "" && strings.Contains(inm, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
+}
+
+// LocalDecision is one decision a local evaluator made.
+type LocalDecision struct {
+	ID        string              `json:"id"`
+	DecidedAt time.Time           `json:"decided_at"`
+	Request   policy.EvalRequest  `json:"request"`
+	Response  policy.EvalResponse `json:"response"`
+}
+
+// DecisionBatch is the body of POST /v1/audit/decisions.
+type DecisionBatch struct {
+	BundleRevision string          `json:"bundle_revision"`
+	Decisions      []LocalDecision `json:"decisions"`
+	// Dropped counts decisions the agent made but had to discard because
+	// the control plane rejected them; it is recorded as its own event so
+	// the gap is visible in the chain.
+	Dropped int `json:"dropped,omitempty"`
+	// DroppedIDs names the dropped decisions, and LossID identifies the
+	// report across retries so a reader can count each loss once.
+	DroppedIDs []string `json:"dropped_ids,omitempty"`
+	// DroppedDigests are SHA-256 digests of the dropped decisions.
+	DroppedDigests []string `json:"dropped_digests,omitempty"`
+	LossID         string   `json:"loss_id,omitempty"`
+}
+
+// recordDecisions appends decisions made by a local evaluator to the
+// audit chain, attributed to the calling agent. A failed append answers
+// 500 so the agent keeps the batch and retries; the decision id lets a
+// reader spot a row written twice by such a retry.
+func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
+	agent := CallerSPIFFEID(r.Context())
+	if !s.mayRecordDecisions(agent) {
+		s.audit(r.Context(), storage.AuditEvent{Kind: localDecisionKind, Actor: agent, Decision: "deny"})
+		writeErr(w, http.StatusForbidden, errors.New("recording local decisions needs --require-auth and a caller listed in --decision-recorder"))
+		return
+	}
+	var batch DecisionBatch
+	if !decodeJSONBody(w, r, &batch) {
+		return
+	}
+	if batch.Dropped < 0 || batch.Dropped != len(batch.DroppedIDs) || len(batch.DroppedIDs) > maxDecisionBatch || len(batch.DroppedDigests) != len(batch.DroppedIDs) || (batch.Dropped > 0 && batch.LossID == "") || !validLossEntries(batch) {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("a loss report needs dropped equal to the number of dropped_ids (at most %d) and a loss_id", maxDecisionBatch))
+		return
+	}
+	if batch.Dropped > 0 && len(batch.Decisions) > 0 {
+		// A loss report travels alone, so a retry of a batch whose
+		// decisions failed cannot record the loss twice.
+		writeErr(w, http.StatusBadRequest, errors.New("send a loss report without decisions"))
+		return
+	}
+	if batch.Dropped == 0 && len(batch.Decisions) == 0 {
+		writeErr(w, http.StatusBadRequest, errors.New("decisions is empty"))
+		return
+	}
+	if len(batch.Decisions) > maxDecisionBatch {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("at most %d decisions per batch", maxDecisionBatch))
+		return
+	}
+	// Validate everything before appending anything, so a rejected batch
+	// leaves nothing in the chain to be written again on a retry.
+	for i, d := range batch.Decisions {
+		if d.ID == "" || d.DecidedAt.IsZero() {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d needs id and decided_at", i))
+			return
+		}
+		if err := policy.Validate(d.Request); err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d: %w", i, err))
+			return
+		}
+	}
+	if batch.Dropped > 0 {
+		if err := s.appendAudit(r.Context(), storage.AuditEvent{
+			Kind: localDecisionKind + ".dropped", Actor: agent, Decision: "error",
+			Payload: mustJSON(map[string]any{"dropped": batch.Dropped, "dropped_ids": batch.DroppedIDs, "dropped_digests": batch.DroppedDigests, "loss_id": batch.LossID, "bundle_revision": batch.BundleRevision}),
+		}); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "recorded": 0})
+			return
+		}
+	}
+	for i, d := range batch.Decisions {
+		decision := "deny"
+		if d.Response.Decision {
+			decision = "allow"
+		}
+		payload, err := json.Marshal(map[string]any{
+			"request":         d.Request,
+			"response":        d.Response,
+			"source":          "local",
+			"decision_id":     d.ID,
+			"decided_at":      d.DecidedAt.UTC(),
+			"bundle_revision": batch.BundleRevision,
+		})
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := s.appendAudit(r.Context(), storage.AuditEvent{
+			Kind:     localDecisionKind,
+			Actor:    agent,
+			Subject:  d.Request.Subject.ID,
+			Decision: decision,
+			Payload:  payload,
+		}); err != nil {
+			// Say how many were recorded, so the agent drops those and a
+			// retry does not record them twice.
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error":    fmt.Sprintf("recorded %d of %d decisions: %v", i, len(batch.Decisions), err),
+				"recorded": i,
+			})
+			return
+		}
+		metrics.Decisions.WithLabelValues(decision).Inc()
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"recorded": len(batch.Decisions)})
+}
+
+// validLossEntries checks each dropped id is set and each digest is a
+// hex SHA-256.
+func validLossEntries(b DecisionBatch) bool {
+	for i, id := range b.DroppedIDs {
+		if id == "" || len(id) > 128 {
+			return false
+		}
+		if d, err := hex.DecodeString(b.DroppedDigests[i]); err != nil || len(d) != sha256.Size {
+			return false
+		}
+	}
+	return true
+}

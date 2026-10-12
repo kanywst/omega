@@ -33,9 +33,10 @@ type domainEnv struct {
 	srv   *httptest.Server
 	tca   *testCA
 	store *storage.Store
+	api   *api.Server
 }
 
-func newDomainEnv(t *testing.T, cedarSrc string) *domainEnv {
+func newDomainEnv(t *testing.T, cedarSrc string, recorders ...string) *domainEnv {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := storage.Open(filepath.Join(dir, "omega.db"))
@@ -58,10 +59,11 @@ func newDomainEnv(t *testing.T, cedarSrc string) *domainEnv {
 		}
 	}
 	tca := newTestCA(t)
-	srv := httptest.NewUnstartedServer(api.NewServer(store, ca, pdp).
+	apiSrv := api.NewServer(store, ca, pdp).
 		WithRequireAuth(true).
 		WithDomainRootAdmins([]string{rootAdmin}).
-		Handler())
+		WithDecisionRecorders(recorders)
+	srv := httptest.NewUnstartedServer(apiSrv.Handler())
 	srv.TLS = &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{tca.issue(t, "omega-server", "", []net.IP{net.ParseIP("127.0.0.1")})},
@@ -70,7 +72,7 @@ func newDomainEnv(t *testing.T, cedarSrc string) *domainEnv {
 	}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
-	return &domainEnv{srv: srv, tca: tca, store: store}
+	return &domainEnv{srv: srv, tca: tca, store: store, api: apiSrv}
 }
 
 func (e *domainEnv) as(t *testing.T, id string) *http.Client {

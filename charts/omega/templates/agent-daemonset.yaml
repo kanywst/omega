@@ -35,14 +35,33 @@ spec:
             {{- range .Values.agent.uidMap }}
             - {{ printf "--map=%s" . | quote }}
             {{- end }}
+            {{- if .Values.agent.localPDP.enabled }}
+            - --local-pdp-addr={{ .Values.agent.localPDP.addr }}
+            - --server-ca=/etc/omega/agent-tls/ca.crt
+            - --client-cert=/etc/omega/agent-tls/tls.crt
+            - --client-key=/etc/omega/agent-tls/tls.key
+            {{- end }}
+            {{- range .Values.agent.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
           volumeMounts:
             - name: agent-sock
               mountPath: {{ dir .Values.agent.socketPath }}
+            {{- if .Values.agent.localPDP.enabled }}
+            - name: agent-tls
+              mountPath: /etc/omega/agent-tls
+              readOnly: true
+            {{- end }}
       volumes:
         - name: agent-sock
           hostPath:
             path: {{ .Values.agent.hostSocketPath }}
             type: DirectoryOrCreate
+        {{- if .Values.agent.localPDP.enabled }}
+        - name: agent-tls
+          secret:
+            secretName: {{ required "agent.localPDP.tlsSecret is required when agent.localPDP.enabled" .Values.agent.localPDP.tlsSecret }}
+        {{- end }}
 {{- end }}
