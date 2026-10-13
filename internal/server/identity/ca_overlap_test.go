@@ -117,3 +117,14 @@ func TestCAOverlapOffAndOrderAndServeTimePruning(t *testing.T) {
 		t.Fatal("nothing to serve before the first fetch")
 	}
 }
+
+func TestCAOverlapDoesNotKeepAnAlreadyExpiredCA(t *testing.T) {
+	now := time.Now()
+	expired := testCAPEM(t, "old", now.Add(-time.Minute))
+	b := testCAPEM(t, "B", now.Add(365*24*time.Hour))
+	o := newCAOverlap(UpstreamCAGrace)
+	_, _ = o.update(expired, now)
+	if served, _ := o.update(b, now); string(served) != string(b) {
+		t.Fatal("an expired CA the issuer dropped must not be kept")
+	}
+}

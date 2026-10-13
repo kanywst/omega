@@ -61,7 +61,8 @@ func (o *caOverlap) update(fetched []byte, now time.Time) ([]byte, error) {
 	}
 	if o.grace > 0 {
 		for fp, c := range o.current {
-			if _, still := next[fp]; !still {
+			// A CA that has already expired is not worth keeping.
+			if _, still := next[fp]; !still && c.NotAfter.After(now) {
 				until := now.Add(o.grace)
 				if c.NotAfter.Before(until) {
 					until = c.NotAfter
