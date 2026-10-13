@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
@@ -125,8 +126,14 @@ func (o *caOverlap) serveLocked(now time.Time) []byte {
 
 func (o *caOverlap) sequence() int64 { return o.seq.Load() }
 
+// parsePEMCerts returns the certificates in an issuer's bundle. A block
+// Go cannot parse is skipped with a warning, as long as one parses: it is
+// still served, as it was before the overlap, but cannot be kept.
 func parsePEMCerts(raw []byte) ([]*x509.Certificate, error) {
-	var out []*x509.Certificate
+	var (
+		out     []*x509.Certificate
+		lastErr error
+	)
 	for {
 		var block *pem.Block
 		block, raw = pem.Decode(raw)
@@ -138,11 +145,16 @@ func parsePEMCerts(raw []byte) ([]*x509.Certificate, error) {
 		}
 		c, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, err
+			slog.Warn("identity: skipping a certificate in the issuer's bundle that does not parse", "err", err)
+			lastErr = err
+			continue
 		}
 		out = append(out, c)
 	}
 	if len(out) == 0 {
+		if lastErr != nil {
+			return nil, fmt.Errorf("no parseable certificates in the issuer's bundle: %w", lastErr)
+		}
 		return nil, errors.New("no certificates in the issuer's bundle")
 	}
 	return out, nil

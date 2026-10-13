@@ -128,3 +128,17 @@ func TestCAOverlapDoesNotKeepAnAlreadyExpiredCA(t *testing.T) {
 		t.Fatal("an expired CA the issuer dropped must not be kept")
 	}
 }
+
+func TestCAOverlapSkipsABlockThatDoesNotParse(t *testing.T) {
+	now := time.Now()
+	a := testCAPEM(t, "A", now.Add(365*24*time.Hour))
+	bad := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not DER")})
+	o := newCAOverlap(UpstreamCAGrace)
+	served, err := o.update(append(append([]byte(nil), bad...), a...), now)
+	if err != nil || strings.Count(string(served), "BEGIN CERTIFICATE") != 2 {
+		t.Fatalf("one bad block must not fail the refresh: %v", err)
+	}
+	if _, err := o.update(bad, now); err == nil {
+		t.Fatal("a bundle with no parseable certificate must be refused")
+	}
+}
