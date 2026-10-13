@@ -51,3 +51,7 @@ Then issue an AuthZEN evaluation as shown in the post-install notes.
 - Single-replica server out of the box (SQLite). Postgres-backed HA is available behind `--db postgres://...` plus the leader-election flags; the chart ships the SQLite default.
 - Agent uses UID-based attestation. K8s SAT projection is a planned follow-up.
 - No CRDs / Operator wiring in this chart. CSI driver is a planned follow-up.
+
+## SPIFFE CSI driver
+
+With `csi.enabled`, any pod that may use a `csi.spiffe.io` ephemeral volume can reach the Workload API, and the agent attests a caller by the UID it connects with alone. A pod in any namespace that runs as a UID in `agent.uidMap` therefore receives that identity. Keep each mapped UID unique to one workload (not 65532, the default of most distroless images), and restrict `csi.spiffe.io` volumes with admission policy. The driver container runs privileged with bidirectional mount propagation on `/var/lib/kubelet/pods`; its images are pinned by digest.

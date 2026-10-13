@@ -39,8 +39,8 @@ spec:
             - agent
             - prepare-socket-dir
             - --dir={{ dir .Values.agent.socketPath }}
-            - --uid={{ .Values.podSecurityContext.runAsUser }}
-            - --gid={{ .Values.podSecurityContext.runAsGroup }}
+            - --uid={{ required "podSecurityContext.runAsUser is required: the agent's socket directory is handed to that user" .Values.podSecurityContext.runAsUser }}
+            - --gid={{ required "podSecurityContext.runAsGroup is required: the agent's socket directory is handed to that group" .Values.podSecurityContext.runAsGroup }}
           securityContext:
             runAsUser: 0
             runAsNonRoot: false

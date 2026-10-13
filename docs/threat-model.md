@@ -117,6 +117,13 @@ and asks for an SVID belonging to a different workload.
   ServiceAccount projected token, EC2 IMDSv2 hash, etc., tracked in
   `ROADMAP.md`).
 
+### S4: Obtaining another workload's identity through the SPIFFE CSI driver
+
+With the chart's `csi.enabled`, any pod that can mount a `csi.spiffe.io` volume reaches the agent's Workload API socket, including pods in other namespaces.
+
+- Mitigation today: the agent attests by the caller's UID (`SO_PEERCRED`) against `agent.uidMap`, as in S1; the CSI images are pinned by digest.
+- Residual risk: attestation has no pod, namespace or service-account selector, so a pod running as a mapped UID receives that identity. Keep mapped UIDs unique per workload and restrict `csi.spiffe.io` volumes with admission policy. The driver runs privileged with bidirectional mount propagation on `/var/lib/kubelet/pods`, so a compromise of its image or node is a node-level compromise.
+
 ### S2: Spoofing the control plane to a workload or peer
 
 An attacker on the network impersonates `omega server` (or a
