@@ -16,24 +16,11 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
 
 ## Next (3-6 months)
 
-- Runtime key rotation for the **issuing** authorities. The consuming
-  side is done as of 0.4.0: `--identity-source=spire-upstream` follows
-  an upstream CA / JWKS rotation either on `SIGHUP` when the material
-  comes from files
-  ([ADR 0009](docs/adr/0009-upstream-trust-material-reload.md)) or
-  unprompted over the upstream's SPIFFE Workload API with
-  `--identity-source-workload-api`
-  ([ADR 0010](docs/adr/0010-live-upstream-trust-material.md)), both
-  incrementing the `spiffe_sequence` envelope field. When omega is the
-  issuer the bundle is still monotonic-at-one for the lifetime of a
-  server process, so the disk authority cannot roll its own root
-  without a restart.
 - SPIFFE CSI driver integration so workloads can mount SVIDs as a
   volume instead of dialing the agent's Unix socket.
 - step-ca and Vault PKI rotation handling (today they serve a
-  stale bundle on transient errors; rotation-aware short-circuit
-  via `spiffe_sequence` comparison waits on the issuing-side
-  rotation work above).
+  stale bundle on transient errors). The disk CA rotates at runtime
+  since [ADR 0019](docs/adr/0019-runtime-ca-rotation.md).
 
 ## Later (6-12 months)
 
