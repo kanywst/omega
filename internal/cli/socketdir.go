@@ -24,6 +24,7 @@ func newPrepareSocketDirCommand() *cobra.Command {
 			if dir == "" {
 				return fmt.Errorf("--dir is required")
 			}
+			// #nosec G301 -- workloads in other users must reach the socket inside.
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
