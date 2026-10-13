@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -32,16 +34,25 @@ func newPrepareSocketDirCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Already handed over on an earlier start: nothing to do. With
-			// only CAP_CHOWN, root could not chmod it any more anyway.
-			if owner, ok := fileOwner(fi); ok && owner == uid {
+			// Already handed over on an earlier start: nothing to do.
+			if owner, group, ok := fileOwner(fi); ok && owner == uid && group == gid && fi.Mode().Perm() == 0o755 {
 				return nil
 			}
-			// Mode first, while root still owns it.
 			// #nosec G302 -- the Workload API directory must be traversable by
 			// every workload; the socket inside carries its own permissions.
 			if err := os.Chmod(dir, 0o755); err != nil {
-				return err
+				if !errors.Is(err, fs.ErrPermission) {
+					return err
+				}
+				// Owned by another user and no CAP_FOWNER: with CAP_CHOWN,
+				// take it back first so the mode can be fixed.
+				if err := os.Chown(dir, 0, 0); err != nil {
+					return fmt.Errorf("chown %s: %w", dir, err)
+				}
+				// #nosec G302 -- as above.
+				if err := os.Chmod(dir, 0o755); err != nil {
+					return err
+				}
 			}
 			if err := os.Chown(dir, uid, gid); err != nil {
 				return fmt.Errorf("chown %s: %w", dir, err)

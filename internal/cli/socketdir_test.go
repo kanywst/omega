@@ -19,8 +19,8 @@ func TestPrepareSocketDir(t *testing.T) {
 	if err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o755 {
 		t.Fatalf("dir: %v %v", fi, err)
 	}
-	// A later start finds the directory already owned by the target
-	// user and leaves it alone (root with only CAP_CHOWN could not chmod it).
+	// A later start finds the directory owned by the target user but with
+	// a different mode, and puts the mode back.
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -30,8 +30,8 @@ func TestPrepareSocketDir(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("second start: %v", err)
 	}
-	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
-		t.Fatal("an already handed-over directory must not be touched")
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("mode not restored: %v", fi.Mode())
 	}
 	cmd = newPrepareSocketDirCommand()
 	cmd.SilenceErrors, cmd.SilenceUsage = true, true

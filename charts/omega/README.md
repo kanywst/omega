@@ -50,7 +50,7 @@ Then issue an AuthZEN evaluation as shown in the post-install notes.
 
 - Single-replica server out of the box (SQLite). Postgres-backed HA is available behind `--db postgres://...` plus the leader-election flags; the chart ships the SQLite default.
 - Agent uses UID-based attestation. K8s SAT projection is a planned follow-up.
-- No CRDs / Operator wiring in this chart. CSI driver is a planned follow-up.
+- No CRDs / Operator wiring in this chart.
 
 ## SPIFFE CSI driver
 
