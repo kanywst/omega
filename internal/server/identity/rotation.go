@@ -203,7 +203,7 @@ func ReadCAStatus(dir string) (CAStatus, error) {
 	if c, err := readCert(filepath.Join(dir, caPrevCrtFile)); err == nil {
 		i := caInfo(c)
 		s.Prev = &i
-		s.PrevSince = prevSince(dir)
+		s.PrevSince, _ = prevSince(dir)
 	}
 	return s, nil
 }
@@ -317,7 +317,10 @@ func RetireCA(dir string, force bool) error {
 	if _, err := os.Stat(path); err != nil {
 		return errors.New("no previous CA to retire")
 	}
-	since := prevSince(dir)
+	since, err := prevSince(dir)
+	if err != nil {
+		return err
+	}
 	if wait := RetireAfter - time.Since(since); wait > 0 && !force {
 		return fmt.Errorf("the previous CA was replaced %s ago; tokens it signed may live %s longer (use --force to retire now)", time.Since(since).Round(time.Minute), wait.Round(time.Minute))
 	}
@@ -330,17 +333,26 @@ func RetireCA(dir string, force bool) error {
 
 // prevSince is when the previous CA was replaced: the recorded time, or
 // the certificate file's modification time for a directory that has none.
-func prevSince(dir string) time.Time {
+// A recorded time that does not parse is an error, not a silent fallback
+// to a file time a copy may have reset.
+func prevSince(dir string) (time.Time, error) {
 	// #nosec G304 -- the operator-supplied CA directory.
-	if raw, err := os.ReadFile(filepath.Join(dir, caPrevSince)); err == nil {
-		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(raw))); err == nil {
-			return t
+	raw, err := os.ReadFile(filepath.Join(dir, caPrevSince))
+	if err == nil {
+		t, perr := time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
+		if perr != nil {
+			return time.Time{}, fmt.Errorf("%s is unreadable (%v); fix or remove it", caPrevSince, perr)
 		}
+		return t, nil
 	}
-	if fi, err := os.Stat(filepath.Join(dir, caPrevCrtFile)); err == nil {
-		return fi.ModTime()
+	if !errors.Is(err, os.ErrNotExist) {
+		return time.Time{}, err
 	}
-	return time.Time{}
+	fi, err := os.Stat(filepath.Join(dir, caPrevCrtFile))
+	if err != nil {
+		return time.Time{}, err
+	}
+	return fi.ModTime(), nil
 }
 
 func keyIDOf(c *x509.Certificate) (string, error) {

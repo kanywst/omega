@@ -291,3 +291,20 @@ func TestCARetireGuardUsesTheRecordedActivationTime(t *testing.T) {
 		t.Fatal("retire must remove the recorded time")
 	}
 }
+
+func TestCARetireRefusesAnUnreadableActivationTime(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadOrCreateDisk(dir, "omega.local"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareCA(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ActivateCA(dir); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, caPrevSince), []byte("garbage"), 0o644)
+	if err := RetireCA(dir, false); err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Fatalf("a corrupt activation time must stop retire: %v", err)
+	}
+}

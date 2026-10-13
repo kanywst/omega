@@ -364,6 +364,7 @@ func newServerCommand() *cobra.Command {
 								switch {
 								case err != nil:
 									fmt.Fprintf(os.Stderr, "omega server: CA reload failed, keeping the previous CAs: %v\n", err)
+									recordCAReloadFailure(ctx, store, err)
 								case changed:
 									fed.SetOwnBundle(ca.BundlePEM())
 									fmt.Fprintf(os.Stderr, "omega server: CAs reloaded\n")
@@ -1252,5 +1253,15 @@ func recordCAReload(ctx context.Context, store *storage.Store, ca identity.Autho
 	payload, _ := json.Marshal(map[string]any{"active_kid": active, "trusted_cas": strings.Count(string(ca.BundlePEM()), "BEGIN CERTIFICATE"), "spiffe_sequence": seq})
 	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.reload", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
 		fmt.Fprintf(os.Stderr, "omega server: could not record the CA reload in the audit chain: %v\n", err)
+	}
+}
+
+// recordCAReloadFailure records a rejected CA reload: a bad key swap is
+// the case most worth a trace. On a replica that is not the leader the
+// append is refused and only the log keeps it.
+func recordCAReloadFailure(ctx context.Context, store *storage.Store, cause error) {
+	payload, _ := json.Marshal(map[string]any{"error": cause.Error()})
+	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.reload", Actor: "omega-server", Decision: "error", Payload: payload}); err != nil {
+		fmt.Fprintf(os.Stderr, "omega server: could not record the failed CA reload in the audit chain: %v\n", err)
 	}
 }
