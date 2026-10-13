@@ -30,6 +30,14 @@ spec:
         app.kubernetes.io/component: csi-driver
     spec:
       serviceAccountName: {{ include "omega.fullname" . }}-csi
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: spiffe-csi-driver
           image: {{ .Values.csi.image | quote }}
@@ -59,6 +67,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.csi.resources | nindent 12 }}
         - name: node-driver-registrar
           image: {{ .Values.csi.registrarImage | quote }}
           imagePullPolicy: IfNotPresent
@@ -67,6 +77,13 @@ spec:
             - /spiffe-csi/csi.sock
             - -kubelet-registration-path
             - /var/lib/kubelet/plugins/csi.spiffe.io/csi.sock
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.csi.resources | nindent 12 }}
           volumeMounts:
             - name: csi-socket-dir
               mountPath: /spiffe-csi

@@ -22,6 +22,14 @@ spec:
       hostNetwork: {{ .Values.agent.hostNetwork }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       initContainers:
         # Hand the root-owned hostPath directory to the agent's user.
         - name: prepare-socket-dir
