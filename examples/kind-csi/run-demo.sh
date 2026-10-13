@@ -71,5 +71,12 @@ if [[ "$phase" != Succeeded ]] || ! grep -q "$ID" <<<"$logs"; then
 	exit 1
 fi
 echo "  ok: the pod fetched $ID over the CSI-mounted socket"
+
+# The agent's init container must also succeed on a restart, when the
+# socket directory is already owned by the agent's user.
+echo "[demo] restarting the agent"
+kubectl rollout restart daemonset/omega-agent >/dev/null
+kubectl rollout status daemonset/omega-agent --timeout=180s >/dev/null
+echo "  ok: the agent restarted"
 echo
 echo "[demo] success - Workload API delivered by the SPIFFE CSI driver, no hostPath in the pod"

@@ -28,8 +28,16 @@ func newPrepareSocketDirCommand() *cobra.Command {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
-			// Mode first, while root still owns it: with only CAP_CHOWN,
-			// root cannot chmod a directory it no longer owns.
+			fi, err := os.Stat(dir)
+			if err != nil {
+				return err
+			}
+			// Already handed over on an earlier start: nothing to do. With
+			// only CAP_CHOWN, root could not chmod it any more anyway.
+			if owner, ok := fileOwner(fi); ok && owner == uid {
+				return nil
+			}
+			// Mode first, while root still owns it.
 			// #nosec G302 -- the Workload API directory must be traversable by
 			// every workload; the socket inside carries its own permissions.
 			if err := os.Chmod(dir, 0o755); err != nil {
