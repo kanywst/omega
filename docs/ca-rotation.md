@@ -40,4 +40,4 @@ The prepared CA is trusted before it signs, and the previous CA stays trusted af
 
 ## What to know
 
-Every replica reads its own CA directory, so apply each step on all replicas, then signal them all, before the next step. If a reload fails (a corrupt or mismatched file), the server logs it and keeps the CAs it had. A crash during `activate` is finished the next time the directory is loaded. Only the disk backend rotates this way; Vault PKI and step-ca rotate in their own systems.
+Every replica reads its own CA directory, so apply each step on all replicas, then signal them all, before the next step. Each reload that changed the CAs is recorded in the audit chain as `ca.reload`, with the active key id, the number of trusted CAs and `spiffe_sequence`. If a reload fails (a corrupt or mismatched file), the server logs it and keeps the CAs it had. The activation time is recorded in `ca.prev.since`, so the retire guard survives a copy or restore of the directory. A crash during `activate` is finished the next time the directory is loaded. Only the disk backend rotates this way; Vault PKI and step-ca rotate in their own systems.

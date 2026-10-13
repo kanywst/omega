@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,10 @@ const (
 	caNextKeyFile = "ca.next.key"
 	caNextCrtFile = "ca.next.crt"
 	caPrevCrtFile = "ca.prev.crt"
+	// caPrevSince records when the previous CA was replaced, so the
+	// retire guard does not depend on file times that a copy or restore
+	// resets.
+	caPrevSince = "ca.prev.since"
 )
 
 // RetireAfter is how long the previous CA must stay trusted after an
@@ -198,9 +203,7 @@ func ReadCAStatus(dir string) (CAStatus, error) {
 	if c, err := readCert(filepath.Join(dir, caPrevCrtFile)); err == nil {
 		i := caInfo(c)
 		s.Prev = &i
-		if fi, err := os.Stat(filepath.Join(dir, caPrevCrtFile)); err == nil {
-			s.PrevSince = fi.ModTime()
-		}
+		s.PrevSince = prevSince(dir)
 	}
 	return s, nil
 }
@@ -283,11 +286,16 @@ func ActivateCA(dir string) (CAInfo, error) {
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return CAInfo{}, err
-	} else if err := writeFileSync(prevPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: active.Raw}), 0o644); err != nil {
+	} else {
 		// The old certificate is kept first, so a crash at any later
 		// point leaves it trusted. The key moves before the certificate;
 		// a crash between the two is finished by repairActivation.
-		return CAInfo{}, err
+		if err := writeFileSync(filepath.Join(dir, caPrevSince), []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
+			return CAInfo{}, err
+		}
+		if err := writeFileSync(prevPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: active.Raw}), 0o644); err != nil {
+			return CAInfo{}, err
+		}
 	}
 	if err := os.Rename(filepath.Join(dir, caNextKeyFile), filepath.Join(dir, caKeyFile)); err != nil {
 		return CAInfo{}, err
@@ -306,14 +314,33 @@ func RetireCA(dir string, force bool) error {
 		return err
 	}
 	path := filepath.Join(dir, caPrevCrtFile)
-	fi, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return errors.New("no previous CA to retire")
 	}
-	if wait := RetireAfter - time.Since(fi.ModTime()); wait > 0 && !force {
-		return fmt.Errorf("the previous CA was replaced %s ago; tokens it signed may live %s longer (use --force to retire now)", time.Since(fi.ModTime()).Round(time.Minute), wait.Round(time.Minute))
+	since := prevSince(dir)
+	if wait := RetireAfter - time.Since(since); wait > 0 && !force {
+		return fmt.Errorf("the previous CA was replaced %s ago; tokens it signed may live %s longer (use --force to retire now)", time.Since(since).Round(time.Minute), wait.Round(time.Minute))
 	}
-	return os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	_ = os.Remove(filepath.Join(dir, caPrevSince))
+	return nil
+}
+
+// prevSince is when the previous CA was replaced: the recorded time, or
+// the certificate file's modification time for a directory that has none.
+func prevSince(dir string) time.Time {
+	// #nosec G304 -- the operator-supplied CA directory.
+	if raw, err := os.ReadFile(filepath.Join(dir, caPrevSince)); err == nil {
+		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(raw))); err == nil {
+			return t
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(dir, caPrevCrtFile)); err == nil {
+		return fi.ModTime()
+	}
+	return time.Time{}
 }
 
 func keyIDOf(c *x509.Certificate) (string, error) {

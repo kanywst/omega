@@ -72,5 +72,8 @@ code="$(valid "$OLD_TOKEN")"
 [[ "$code" != 200 ]] || { echo "FAIL: a token from the retired CA was accepted" >&2; exit 1; }
 echo "  a token from the retired CA is refused ($code)"
 
+n="$(curl -fsS "$CP/v1/audit?since=0" | grep -o '"kind":"ca.reload"' | wc -l | tr -d ' ')"
+expect "ca.reload rows in the audit chain" "$n" 3
+
 echo
 echo "[demo] success - rotated the CA with no restart and no window without trust"

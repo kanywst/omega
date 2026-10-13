@@ -262,3 +262,32 @@ func TestCAActivationRefusesAMismatchedNextPair(t *testing.T) {
 		t.Fatal("a refused activation must not write the previous CA")
 	}
 }
+
+func TestCARetireGuardUsesTheRecordedActivationTime(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadOrCreateDisk(dir, "omega.local"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareCA(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ActivateCA(dir); err != nil {
+		t.Fatal(err)
+	}
+	// A copy or restore resets file times; the recorded time still holds.
+	old := time.Now().Add(-48 * time.Hour)
+	_ = os.Chtimes(filepath.Join(dir, caPrevCrtFile), old, old)
+	if err := RetireCA(dir, false); err == nil {
+		t.Fatal("the guard must use the recorded activation time, not the file's mtime")
+	}
+	st, _ := ReadCAStatus(dir)
+	if time.Since(st.PrevSince) > time.Minute {
+		t.Fatalf("status must report the recorded time: %s", st.PrevSince)
+	}
+	if err := RetireCA(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, caPrevSince)); !os.IsNotExist(err) {
+		t.Fatal("retire must remove the recorded time")
+	}
+}

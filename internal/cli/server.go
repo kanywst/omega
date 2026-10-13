@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -366,6 +367,7 @@ func newServerCommand() *cobra.Command {
 								case changed:
 									fed.SetOwnBundle(ca.BundlePEM())
 									fmt.Fprintf(os.Stderr, "omega server: CAs reloaded\n")
+									recordCAReload(ctx, store, ca)
 								}
 							}
 							// Reload the Cedar policies too, so local
@@ -1237,4 +1239,18 @@ func checkSCIMTemplate(tmpl, trustDomain string) error {
 		}
 	}
 	return nil
+}
+
+// recordCAReload appends the CA set the server now trusts to the audit
+// chain, so a rotation step is on record with the active key and time.
+func recordCAReload(ctx context.Context, store *storage.Store, ca identity.Authority) {
+	active, _ := ca.JWTKeyID()
+	var seq int64
+	if s, ok := ca.(identity.BundleSequencer); ok {
+		seq = s.BundleSequence()
+	}
+	payload, _ := json.Marshal(map[string]any{"active_kid": active, "trusted_cas": strings.Count(string(ca.BundlePEM()), "BEGIN CERTIFICATE"), "spiffe_sequence": seq})
+	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.reload", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
+		fmt.Fprintf(os.Stderr, "omega server: could not record the CA reload in the audit chain: %v\n", err)
+	}
 }
