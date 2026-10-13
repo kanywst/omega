@@ -101,7 +101,7 @@ func newVaultPKIAuthority(local *localAuthority, cfg Config) (*vaultPKIAuthority
 		role:           cfg.VaultPKIRole,
 		httpClient:     &http.Client{Timeout: defaultVaultPKITimeout, Transport: transport},
 		bundleTTL:      bundleTTL,
-		overlap:        newCAOverlap(),
+		overlap:        newCAOverlap(upstreamGrace(cfg.UpstreamCAGrace)),
 	}
 	// Boot-time probe so a bad addr / token / mount fails fast.
 	if _, err := a.refreshBundle(context.Background()); err != nil {
@@ -144,6 +144,12 @@ func (a *vaultPKIAuthority) BundlePEM() []byte {
 	// anchor consumers were chaining to before the blip. Returning
 	// nil would suddenly break every workload's mTLS handshake.
 	if _, err := a.refreshBundle(context.Background()); err != nil {
+		// Re-serve from the last fetch rather than the cached bytes, so a
+		// rotated-out CA whose grace has ended is dropped even while the
+		// issuer cannot be reached.
+		if served := a.overlap.serve(time.Now()); served != nil {
+			return served
+		}
 		return stale
 	}
 	a.bundleMu.RLock()
@@ -304,7 +310,7 @@ func (a *vaultPKIAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	a.bundle = served
 	a.bundleExp = time.Now().Add(a.bundleTTL)
 	a.bundleMu.Unlock()
-	return body, nil
+	return served, nil
 }
 
 // BundleSequence advances when the issuer's CA bundle or the local JWT

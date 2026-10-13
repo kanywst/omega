@@ -112,7 +112,7 @@ func newStepCAAuthority(local *localAuthority, cfg Config) (*stepCAAuthority, er
 		signer:           signer,
 		httpClient:       &http.Client{Timeout: defaultStepCATimeout, Transport: transport},
 		bundleTTL:        bundleTTL,
-		overlap:          newCAOverlap(),
+		overlap:          newCAOverlap(upstreamGrace(cfg.UpstreamCAGrace)),
 	}
 
 	// Boot-time probe so a bad URL / TLS config / unreachable step-ca
@@ -185,6 +185,12 @@ func (a *stepCAAuthority) BundlePEM() []byte {
 	// returning nil would break every workload's mTLS handshake the
 	// moment step-ca burps.
 	if _, err := a.refreshBundle(context.Background()); err != nil {
+		// Re-serve from the last fetch rather than the cached bytes, so a
+		// rotated-out CA whose grace has ended is dropped even while the
+		// issuer cannot be reached.
+		if served := a.overlap.serve(time.Now()); served != nil {
+			return served
+		}
 		return stale
 	}
 	a.bundleMu.RLock()
@@ -238,7 +244,7 @@ func (a *stepCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	a.bundleExp = time.Now().Add(a.bundleTTL)
 	a.rootSHA256 = rootSHA
 	a.bundleMu.Unlock()
-	return body, nil
+	return served, nil
 }
 
 // mintOTT builds and signs a one-time-token whose claims bind the

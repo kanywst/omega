@@ -104,6 +104,7 @@ func newServerCommand() *cobra.Command {
 		domainRootAdmins           []string
 		decisionRecorders          []string
 		bundleSigningKeyFile       string
+		upstreamCAGrace            time.Duration
 		scimIDPs                   []string
 		identitySource             string
 		identitySourceBundle       string
@@ -199,6 +200,12 @@ func newServerCommand() *cobra.Command {
 					TrustDomain: trustDomain,
 					Issuer:      strings.TrimSpace(issuerURL),
 					Dir:         filepath.Join(dataDir, "ca"),
+				}
+				// The flag's zero turns the overlap off; Config's zero
+				// is the default.
+				caCfg.UpstreamCAGrace = upstreamCAGrace
+				if upstreamCAGrace == 0 {
+					caCfg.UpstreamCAGrace = -1
 				}
 				if caCfg.Kind == identity.KindVaultPKI {
 					token, err := resolveVaultToken(caVaultPKIToken, caVaultPKITokenFile)
@@ -747,6 +754,8 @@ func newServerCommand() *cobra.Command {
 		"let an identity provider provision users and groups over SCIM 2.0 at /scim/v2/<name>/ (repeatable), as 'name=<name>,domain=<domain>,token-file=<path>[,template=<spiffe-id-template>]'. The provider authenticates with the bearer token in token-file, its groups are created in domain, and each user's memberships go to the SPIFFE ID the template gives ({idp}, {externalId}, {userName}; default spiffe://<trust-domain>/humans/{idp}/{externalId}).")
 	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
+	cmd.Flags().DurationVar(&upstreamCAGrace, "upstream-ca-grace", identity.UpstreamCAGrace,
+		"with --ca-backend=vault-pki or step-ca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers (never past the CA's expiry). 0 drops it at the next refresh, which is what you want after a compromise.")
 	cmd.Flags().StringVar(&bundleSigningKeyFile, "policy-bundle-signing-key", "",
 		"ECDSA P-256 private key (PEM) that signs every policy bundle served to node agents, so they can verify it with --policy-bundle-key independently of TLS. Every replica must use the same key.")
 	cmd.Flags().StringArrayVar(&decisionRecorders, "decision-recorder", nil,

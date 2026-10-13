@@ -29,7 +29,7 @@ func TestCAOverlapKeepsADroppedCAForTheGracePeriod(t *testing.T) {
 	now := time.Now()
 	a := testCAPEM(t, "A", now.Add(365*24*time.Hour))
 	b := testCAPEM(t, "B", now.Add(365*24*time.Hour))
-	o := newCAOverlap()
+	o := newCAOverlap(UpstreamCAGrace)
 
 	served, err := o.update(a, now)
 	if err != nil || o.sequence() != 1 || string(served) != string(a) {
@@ -59,7 +59,7 @@ func TestCAOverlapNeverKeepsACAPastItsExpiry(t *testing.T) {
 	now := time.Now()
 	short := testCAPEM(t, "short", now.Add(time.Hour))
 	b := testCAPEM(t, "B", now.Add(365*24*time.Hour))
-	o := newCAOverlap()
+	o := newCAOverlap(UpstreamCAGrace)
 	_, _ = o.update(short, now)
 	_, _ = o.update(b, now)
 	served, _ := o.update(b, now.Add(2*time.Hour))
@@ -72,7 +72,7 @@ func TestCAOverlapForgetsACAThatComesBack(t *testing.T) {
 	now := time.Now()
 	a := testCAPEM(t, "A", now.Add(365*24*time.Hour))
 	b := testCAPEM(t, "B", now.Add(365*24*time.Hour))
-	o := newCAOverlap()
+	o := newCAOverlap(UpstreamCAGrace)
 	_, _ = o.update(a, now)
 	_, _ = o.update(b, now)
 	served, _ := o.update(append(append([]byte(nil), a...), b...), now)
@@ -81,5 +81,39 @@ func TestCAOverlapForgetsACAThatComesBack(t *testing.T) {
 	}
 	if _, err := o.update([]byte("not pem"), now); err == nil {
 		t.Fatal("a bundle without certificates must be refused")
+	}
+}
+
+func TestCAOverlapOffAndOrderAndServeTimePruning(t *testing.T) {
+	now := time.Now()
+	a := testCAPEM(t, "A", now.Add(365*24*time.Hour))
+	b := testCAPEM(t, "B", now.Add(365*24*time.Hour))
+	c := testCAPEM(t, "C", now.Add(365*24*time.Hour))
+
+	off := newCAOverlap(upstreamGrace(-1))
+	_, _ = off.update(a, now)
+	if served, _ := off.update(b, now); string(served) != string(b) {
+		t.Fatal("with the overlap off a dropped CA must go at once")
+	}
+
+	o := newCAOverlap(upstreamGrace(0))
+	_, _ = o.update(append(append([]byte(nil), a...), b...), now)
+	_, _ = o.update(c, now)
+	first := o.serve(now)
+	seq := o.sequence()
+	for range 20 {
+		if got := o.serve(now); string(got) != string(first) {
+			t.Fatal("two kept CAs must be served in a stable order")
+		}
+	}
+	if o.sequence() != seq {
+		t.Fatal("re-serving an unchanged set must not move spiffe_sequence")
+	}
+	// Without any refresh, the kept CAs go once the grace ends.
+	if got := o.serve(now.Add(UpstreamCAGrace + time.Minute)); string(got) != string(c) {
+		t.Fatal("kept CAs must be dropped at serve time once their grace ends")
+	}
+	if newCAOverlap(time.Hour).serve(now) != nil {
+		t.Fatal("nothing to serve before the first fetch")
 	}
 }

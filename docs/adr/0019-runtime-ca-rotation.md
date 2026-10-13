@@ -26,7 +26,7 @@ Harder:
 
 - Each replica reads its own CA directory: an operator has to apply every step on all replicas, then signal them all, before moving to the next step.
 - The steps are manual and depend on waiting long enough between them; Omega does not schedule rotations.
-- Only `--ca-backend=disk` rotates this way. Vault PKI and step-ca rotate in their own systems; Omega keeps a CA they stop publishing in its served bundle for 24 hours (never past the CA's expiry) and advances `spiffe_sequence`, so their rotations get the same overlap.
+- Only `--ca-backend=disk` rotates this way. Vault PKI and step-ca rotate in their own systems; Omega keeps a CA they stop publishing in its served bundle for `--upstream-ca-grace`, 24 hours by default and 0 to turn it off after a compromise (never past the CA's expiry), and advances `spiffe_sequence`, so their rotations get the same overlap.
 
 ## Scope fit
 
