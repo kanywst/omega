@@ -59,6 +59,21 @@ type builtinSource struct {
 
 func (builtinSource) SourceKind() SourceKind { return SourceBuiltIn }
 
+// BundleSequence forwards to an authority that rotates (the disk CA), so
+// spiffe_sequence advances across a CA rotation; others stay at 1.
+func (b builtinSource) BundleSequence() int64 {
+	if s, ok := b.Authority.(BundleSequencer); ok {
+		return s.BundleSequence()
+	}
+	return 1
+}
+
+// CAReloader is an issuing authority whose CAs can be rotated at runtime
+// by re-reading its directory (see rotation.go).
+type CAReloader interface {
+	ReloadCA() (bool, error)
+}
+
 // NewBuiltInSource wraps an issuing Authority as the built-in identity
 // source.
 func NewBuiltInSource(a Authority) Source {
