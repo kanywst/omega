@@ -145,10 +145,15 @@ func bundleSigningInput(revision string, issuedAt time.Time) []byte {
 // SignBundle stamps b with the current time and signs it with key, an
 // ECDSA P-256 private key.
 func SignBundle(b *Bundle, key *ecdsa.PrivateKey) error {
+	return SignBundleAt(b, key, time.Now())
+}
+
+// SignBundleAt is SignBundle with an explicit issue time.
+func SignBundleAt(b *Bundle, key *ecdsa.PrivateKey, issuedAt time.Time) error {
 	if key.Curve != elliptic.P256() {
 		return errors.New("bundle signing key must be ECDSA P-256")
 	}
-	b.IssuedAt = time.Now().UTC()
+	b.IssuedAt = issuedAt.UTC()
 	sig, err := ecdsa.SignASN1(rand.Reader, key, bundleSigningInput(b.Revision, b.IssuedAt))
 	if err != nil {
 		return fmt.Errorf("sign bundle: %w", err)

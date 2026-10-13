@@ -705,9 +705,21 @@ func TestLocalPDPRefusesReplayedSignedBundles(t *testing.T) {
 		}
 		return b
 	}
-	older := sign()
-	time.Sleep(10 * time.Millisecond)
+	signAt := func(at time.Time) policy.Bundle {
+		b, err := testBundle()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := policy.SignBundleAt(&b, key, at); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
 	newer := sign()
+	// A replica whose clock is a little behind is not a replay...
+	slightlyBehind := signAt(time.Now().Add(-30 * time.Second))
+	// ...but a bundle more than the allowed skew older is.
+	older := signAt(time.Now().Add(-2 * time.Minute))
 	var serve atomic.Pointer[policy.Bundle]
 	serve.Store(&newer)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -715,7 +727,15 @@ func TestLocalPDPRefusesReplayedSignedBundles(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
-	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BundleKey: &key.PublicKey})
+	p := localpdp.New(localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BundleKey: &key.PublicKey, MaxAge: 10 * time.Minute})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	serve.Store(&slightlyBehind)
+	if err := p.Sync(ctx); err != nil {
+		t.Fatalf("a bundle from a replica within the clock allowance must load: %v", err)
+	}
+	serve.Store(&newer)
 	if err := p.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -765,23 +785,22 @@ func TestLocalPDPWithASigningKeyNeverTrustsA304(t *testing.T) {
 
 func TestLocalPDPRemembersTheNewestBundleAcrossRestarts(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	sign := func() policy.Bundle {
+	signAt := func(at time.Time) policy.Bundle {
 		b, _ := testBundle()
-		if err := policy.SignBundle(&b, key); err != nil {
+		if err := policy.SignBundleAt(&b, key, at); err != nil {
 			t.Fatal(err)
 		}
 		return b
 	}
-	older := sign()
-	time.Sleep(10 * time.Millisecond)
-	newer := sign()
+	older := signAt(time.Now().Add(-2 * time.Minute))
+	newer := signAt(time.Now())
 	var serve atomic.Pointer[policy.Bundle]
 	serve.Store(&newer)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(serve.Load())
 	}))
 	t.Cleanup(srv.Close)
-	cfg := localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BundleKey: &key.PublicKey, SpoolPath: filepath.Join(t.TempDir(), "s")}
+	cfg := localpdp.Config{ServerURL: srv.URL, TrustDomain: "omega.local", BundleKey: &key.PublicKey, MaxAge: 10 * time.Minute, SpoolPath: filepath.Join(t.TempDir(), "s")}
 	first := localpdp.New(cfg)
 	if err := first.RestoreSpool(); err != nil {
 		t.Fatal(err)
