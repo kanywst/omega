@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"log/slog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -66,6 +67,9 @@ func (o *caOverlap) update(fetched []byte, now time.Time) ([]byte, error) {
 					until = c.NotAfter
 				}
 				o.retired[fp] = retiredCA{cert: c, until: until}
+				// Omega cannot tell a routine rotation from a revocation.
+				slog.Warn("identity: the issuer stopped publishing a CA; Omega keeps trusting it until the grace ends (--upstream-ca-grace 0 drops it at once)",
+					"subject", c.Subject.String(), "until", until)
 			}
 		}
 	}
@@ -92,6 +96,7 @@ func (o *caOverlap) serve(now time.Time) []byte {
 func (o *caOverlap) serveLocked(now time.Time) []byte {
 	for fp, r := range o.retired {
 		if !now.Before(r.until) {
+			slog.Info("identity: stopped trusting a CA the issuer rotated out", "subject", r.cert.Subject.String())
 			delete(o.retired, fp)
 		}
 	}
