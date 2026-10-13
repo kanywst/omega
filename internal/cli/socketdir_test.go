@@ -1,0 +1,28 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+)
+
+func TestPrepareSocketDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run", "omega")
+	cmd := newPrepareSocketDirCommand()
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	cmd.SetArgs([]string{"--dir", dir, "--uid", strconv.Itoa(os.Getuid()), "--gid", strconv.Itoa(os.Getgid())})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("dir: %v %v", fi, err)
+	}
+	cmd = newPrepareSocketDirCommand()
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("--dir is required")
+	}
+}

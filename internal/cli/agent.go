@@ -178,6 +178,7 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 			}
 		},
 	}
+	cmd.AddCommand(newPrepareSocketDirCommand())
 	cmd.Flags().StringVar(&socket, "socket", "/tmp/omega-agent.sock", "Workload API unix socket path")
 	cmd.Flags().StringVar(&serverURL, "server", "http://127.0.0.1:8080", "control plane HTTP base URL")
 	cmd.Flags().StringArrayVar(&mappings, "map", nil, "uid->spiffe-id mapping (repeatable), e.g. --map 'uid=1000,id=spiffe://omega.local/example/web'")

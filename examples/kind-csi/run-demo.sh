@@ -9,6 +9,9 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-omega-csi}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ID="spiffe://omega.local/csi/demo"
+# A UID only this workload uses: attestation is by UID, and 65532 is the
+# default user of most distroless images.
+WORKLOAD_UID=10001
 
 cleanup() { [[ "${KEEP:-}" == 1 ]] || kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -26,7 +29,7 @@ helm install omega "$REPO_ROOT/charts/omega" --wait --timeout 5m \
 	--set image.repository=omega --set image.tag=csi-demo --set image.pullPolicy=Never \
 	--set server.persistence.enabled=false \
 	--set agent.serverURL=http://omega-server:8080 \
-	--set "agent.uidMap[0]=uid=65532\\,id=$ID" \
+	--set "agent.uidMap[0]=uid=$WORKLOAD_UID\\,id=$ID" \
 	--set csi.enabled=true >/dev/null
 kubectl rollout status daemonset/omega-csi --timeout=180s >/dev/null
 
@@ -39,7 +42,7 @@ metadata:
 spec:
   restartPolicy: Never
   securityContext:
-    runAsUser: 65532
+    runAsUser: $WORKLOAD_UID
   containers:
     - name: workload
       image: omega:csi-demo

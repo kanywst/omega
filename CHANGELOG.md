@@ -14,7 +14,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ### Fixed
 
-- **The chart's agent can create its socket on a fresh node.** It ran as uid 65532 while kubelet creates its hostPath directory root-owned, so it failed with `bind: permission denied`. It now runs as root with every capability dropped and a read-only root filesystem (`agent.podSecurityContext`).
+- **The chart's agent can create its socket on a fresh node.** It runs as uid 65532 while kubelet creates its hostPath directory root-owned, so it failed with `bind: permission denied`. An init container with only `CAP_CHOWN` (`omega agent prepare-socket-dir`) now hands the directory to the agent's user; the agent stays non-root.
 
 ## [0.8.0] - 2026-10-13
 

@@ -21,7 +21,29 @@ spec:
       serviceAccountName: {{ include "omega.serviceAccountName" . }}
       hostNetwork: {{ .Values.agent.hostNetwork }}
       securityContext:
-        {{- toYaml .Values.agent.podSecurityContext | nindent 8 }}
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Hand the root-owned hostPath directory to the agent's user.
+        - name: prepare-socket-dir
+          image: {{ include "omega.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - agent
+            - prepare-socket-dir
+            - --dir={{ dir .Values.agent.socketPath }}
+            - --uid={{ .Values.podSecurityContext.runAsUser }}
+            - --gid={{ .Values.podSecurityContext.runAsGroup }}
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          volumeMounts:
+            - name: agent-sock
+              mountPath: {{ dir .Values.agent.socketPath }}
       containers:
         - name: agent
           image: {{ include "omega.image" . | quote }}
