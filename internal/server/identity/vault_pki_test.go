@@ -294,6 +294,10 @@ func TestVaultPKIKeepsTheRotatedOutCATrusted(t *testing.T) {
 	next := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	v.chain.Store(&next)
 	time.Sleep(5 * time.Millisecond)
+	// The sequence read first already reflects the new bundle.
+	if seq() != 2 {
+		t.Fatalf("sequence read before the bundle: %d", seq())
+	}
 	bundle := a.BundlePEM()
 	if n := strings.Count(string(bundle), "BEGIN CERTIFICATE"); n != 2 || !strings.HasPrefix(string(bundle), string(next)) {
 		t.Fatalf("after rotation the new CA comes first and the old stays trusted: %d certs", n)

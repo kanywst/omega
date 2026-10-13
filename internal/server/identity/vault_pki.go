@@ -316,5 +316,8 @@ func (a *vaultPKIAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 // BundleSequence advances when the issuer's CA bundle or the local JWT
 // signing CAs change.
 func (a *vaultPKIAuthority) BundleSequence() int64 {
+	// Refresh first, so the sequence a caller reads matches the bundle
+	// it reads next (the SPIFFE bundle endpoint reads the sequence first).
+	_ = a.BundlePEM()
 	return a.overlap.sequence() + a.localAuthority.BundleSequence() - 1
 }
