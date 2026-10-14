@@ -759,3 +759,19 @@ func TestAWSPCAKeepsTheRotatedOutCATrusted(t *testing.T) {
 		t.Fatalf("kept-CA events: %d kept, %d dropped; want 2 and 1", kept, dropped)
 	}
 }
+
+func TestAWSPCAIssueSVID_FollowsACAChangeBeforeTheCacheExpires(t *testing.T) {
+	f := newPCAFixture(t, nil)
+	a := newPCAAuthority(t, f) // default 5m bundle cache
+	// AWS now signs with, and returns, a different CA certificate.
+	f.leafMode.Store("foreign-ca")
+	f.caOverride.Store([2]string{string(certPEM(f.foreignCACert)), ""})
+	csr, _ := vaultIssueCSR(t)
+	svid, err := a.IssueSVID(spiffeid.RequireFromString("spiffe://omega.local/x"), csr)
+	if err != nil {
+		t.Fatalf("issue after a CA change: %v", err)
+	}
+	if !strings.HasPrefix(string(svid.BundlePEM), string(certPEM(f.foreignCACert))) {
+		t.Error("bundle was not refreshed to the new CA")
+	}
+}

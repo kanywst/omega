@@ -449,7 +449,7 @@ func (a *awsPCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 	if err != nil {
 		return nil, fmt.Errorf("aws-pca: parse certificate: %w", err)
 	}
-	if err := a.checkIssued(cert, id, csr, notAfter); err != nil {
+	if err := a.checkIssued(ctx, cert, id, csr, notAfter); err != nil {
 		return nil, err
 	}
 	return &SVID{
@@ -497,7 +497,7 @@ func (a *awsPCAAuthority) waitForCertificate(ctx context.Context, certARN string
 // requested SPIFFE ID, carry the CSR's key, be usable for mTLS in both
 // directions, be valid now and not outlive the requested notAfter, and
 // be signed by the CA the bundle publishes.
-func (a *awsPCAAuthority) checkIssued(cert *x509.Certificate, id spiffeid.ID, csr *x509.CertificateRequest, notAfter time.Time) error {
+func (a *awsPCAAuthority) checkIssued(ctx context.Context, cert *x509.Certificate, id spiffeid.ID, csr *x509.CertificateRequest, notAfter time.Time) error {
 	if cert.IsCA {
 		return errors.New("aws-pca: issued certificate is a CA certificate; check the template ARN")
 	}
@@ -531,13 +531,27 @@ func (a *awsPCAAuthority) checkIssued(cert *x509.Certificate, id spiffeid.ID, cs
 	if len(cert.DNSNames)+len(cert.EmailAddresses)+len(cert.IPAddresses) > 0 {
 		return errors.New("aws-pca: issued certificate carries DNS, email or IP SANs besides the SPIFFE ID; check the template ARN")
 	}
-	a.bundleMu.RLock()
-	issuer := a.issuingCA
-	a.bundleMu.RUnlock()
-	if err := cert.CheckSignatureFrom(issuer); err != nil {
+	err := cert.CheckSignatureFrom(a.currentIssuingCA())
+	if err != nil {
+		// The CA certificate may have changed in AWS since the bundle
+		// was cached; refresh once before refusing the leaf.
+		a.refreshMu.Lock()
+		_, rerr := a.refreshBundle(ctx)
+		a.refreshMu.Unlock()
+		if rerr == nil {
+			err = cert.CheckSignatureFrom(a.currentIssuingCA())
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("aws-pca: issued certificate is not signed by the configured CA: %w", err)
 	}
 	return nil
+}
+
+func (a *awsPCAAuthority) currentIssuingCA() *x509.Certificate {
+	a.bundleMu.RLock()
+	defer a.bundleMu.RUnlock()
+	return a.issuingCA
 }
 
 func awsPCAIdempotencyToken() (string, error) {
