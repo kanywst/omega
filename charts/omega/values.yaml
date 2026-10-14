@@ -43,7 +43,9 @@ server:
   # "true" for Azure workload identity.
   podLabels: {}
   # The CA that signs X.509-SVIDs and JWT-SVIDs (--ca-backend). "disk"
-  # keeps a self-signed CA under dataDir, for evaluation.
+  # keeps a self-signed CA under dataDir, for evaluation. The chart
+  # configures disk and azure-keyvault; pass other backends' flags
+  # through extraArgs and leave this at disk.
   ca:
     backend: disk
     # backend: azure-keyvault keeps the CA private key in Azure Key Vault

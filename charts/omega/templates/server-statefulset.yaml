@@ -57,7 +57,10 @@ spec:
             - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
             {{- end }}
             {{- $ca := .Values.server.ca }}
-            {{- if and $ca.backend (ne $ca.backend "disk") }}
+            {{- if not (has $ca.backend (list "disk" "azure-keyvault")) }}
+            {{- fail (printf "server.ca.backend %q is not configurable through the chart (supported: disk, azure-keyvault); use server.extraArgs for other backends" $ca.backend) }}
+            {{- end }}
+            {{- if ne $ca.backend "disk" }}
             - --ca-backend={{ $ca.backend }}
             {{- end }}
             {{- if eq $ca.backend "azure-keyvault" }}
