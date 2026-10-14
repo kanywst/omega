@@ -38,6 +38,23 @@ spec:
             - --http-addr={{ .Values.server.httpAddr }}
             - --trust-domain={{ .Values.server.trustDomain }}
             - --data-dir={{ .Values.server.dataDir }}
+            {{- if ne .Values.server.ca.backend "disk" }}
+            - --ca-backend={{ .Values.server.ca.backend }}
+            {{- end }}
+            {{- if eq .Values.server.ca.backend "gcp-cas" }}
+            {{- with .Values.server.ca.gcpCas }}
+            - --ca-gcp-cas-pool={{ required "server.ca.gcpCas.pool is required when server.ca.backend is gcp-cas" .pool }}
+            {{- if .endpoint }}
+            - --ca-gcp-cas-endpoint={{ .endpoint }}
+            {{- end }}
+            {{- if .issuingCA }}
+            - --ca-gcp-cas-issuing-ca={{ .issuingCA }}
+            {{- end }}
+            {{- if .certificateTemplate }}
+            - --ca-gcp-cas-certificate-template={{ .certificateTemplate }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.server.policyDir }}
             - --policy-dir={{ .Values.server.policyDir }}
             {{- end }}
@@ -56,6 +73,11 @@ spec:
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}
+          {{- if and (eq .Values.server.ca.backend "gcp-cas") .Values.server.ca.gcpCas.credentialsSecret }}
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /etc/omega/gcp-cas/credentials.json
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.server.service.port }}
@@ -87,6 +109,11 @@ spec:
               mountPath: /etc/omega/bundle-signing
               readOnly: true
             {{- end }}
+            {{- if and (eq .Values.server.ca.backend "gcp-cas") .Values.server.ca.gcpCas.credentialsSecret }}
+            - name: gcp-cas-credentials
+              mountPath: /etc/omega/gcp-cas
+              readOnly: true
+            {{- end }}
             {{- range $i, $p := .Values.server.scimProviders }}
             - name: scim-{{ $i }}
               mountPath: /etc/omega/scim/{{ $p.name }}
@@ -96,7 +123,8 @@ spec:
       {{- $hasEmpty := not .Values.server.persistence.enabled -}}
       {{- $hasSCIM := gt (len .Values.server.scimProviders) 0 -}}
       {{- $hasSigning := .Values.server.policyBundleSigningKeySecret -}}
-      {{- if or $hasPolicy $hasEmpty $hasSCIM $hasSigning }}
+      {{- $hasGCPCAS := and (eq .Values.server.ca.backend "gcp-cas") .Values.server.ca.gcpCas.credentialsSecret -}}
+      {{- if or $hasPolicy $hasEmpty $hasSCIM $hasSigning $hasGCPCAS }}
       volumes:
         {{- if $hasPolicy }}
         - name: policy
@@ -114,6 +142,14 @@ spec:
             items:
               - key: bundle.key
                 path: bundle.key
+        {{- end }}
+        {{- if $hasGCPCAS }}
+        - name: gcp-cas-credentials
+          secret:
+            secretName: {{ .Values.server.ca.gcpCas.credentialsSecret }}
+            items:
+              - key: credentials.json
+                path: credentials.json
         {{- end }}
         {{- range $i, $p := .Values.server.scimProviders }}
         - name: scim-{{ $i }}

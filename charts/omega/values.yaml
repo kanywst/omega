@@ -15,6 +15,23 @@ server:
   trustDomain: omega.local
   dataDir: /var/lib/omega
   policyDir: ""      # set to a path inside the container to load *.cedar at boot
+  # CA backend that signs X.509-SVIDs (--ca-backend). "disk" is a
+  # self-signed root under dataDir, for dev/eval.
+  ca:
+    backend: disk
+    # backend: gcp-cas signs through a Google Cloud Certificate Authority
+    # Service CA pool. Credentials come from Application Default
+    # Credentials: on GKE, bind the chart's ServiceAccount to a Google
+    # service account with Workload Identity (serviceAccount.annotations,
+    # iam.gke.io/gcp-service-account); elsewhere, set credentialsSecret to
+    # a Secret whose "credentials.json" key holds a credentials file. The
+    # pool's issuance policy must allow SAN passthrough.
+    gcpCas:
+      pool: ""                 # projects/<project>/locations/<location>/caPools/<pool>
+      endpoint: ""             # empty: https://privateca.googleapis.com
+      issuingCA: ""            # optional CA id inside the pool
+      certificateTemplate: ""  # optional projects/<p>/locations/<l>/certificateTemplates/<t>
+      credentialsSecret: ""
   # SPIFFE IDs that may create top-level domains and administer every
   # domain (--domain-root-admin). Enforced only with --require-auth.
   # Prefer making the operator an admin of one parent domain over listing
