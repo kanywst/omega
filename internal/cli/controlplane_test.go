@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	k8sattestor "github.com/kanywst/omega/internal/agent/attestor/k8s"
 )
 
 func writePair(t *testing.T, dir, cn string, mod time.Time) (string, string) {
@@ -257,4 +259,42 @@ func shortSocketPath(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return filepath.Join(dir, "a.sock")
+}
+
+func TestAgentK8sWorkloadAttestorFlags(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, []byte(`apiVersion: v1
+kind: Config
+clusters: [{name: c, cluster: {server: "http://127.0.0.1:1"}}]
+contexts: [{name: c, context: {cluster: c, user: u}}]
+users: [{name: u, user: {}}]
+current-context: c
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NODE_NAME", "")
+	run := func(args ...string) error {
+		cmd := newAgentCommand()
+		cmd.SilenceErrors, cmd.SilenceUsage = true, true
+		cmd.SetArgs(append([]string{"--k8s-workload-attestor", "--kubeconfig", kubeconfig}, args...))
+		return cmd.Execute()
+	}
+	// The attestor alone is enough to serve the Workload API, so the
+	// error is about the attestor, not the missing --map.
+	want := "node name is required"
+	if !k8sattestor.Supported {
+		want = "only supported on Linux"
+	}
+	if err := run(); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("got %v, want %q", err, want)
+	}
+	if !k8sattestor.Supported {
+		return
+	}
+	if err := run("--k8s-node-name", "n", "--k8s-workload-svid-template", "not-a-spiffe-id"); err == nil || !strings.Contains(err.Error(), "template") {
+		t.Fatalf("bad template: %v", err)
+	}
+	if err := run("--kubeconfig", filepath.Join(t.TempDir(), "missing")); err == nil || !strings.Contains(err.Error(), "kubeconfig") {
+		t.Fatalf("missing kubeconfig: %v", err)
+	}
 }
