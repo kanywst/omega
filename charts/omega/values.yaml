@@ -59,6 +59,16 @@ agent:
   socketPath: /run/omega/agent.sock
   serverURL: "http://omega-server:8080"
   uidMap: []         # list of "uid=N,id=spiffe://..."
+  # Identify workloads in pods on the node by their pod (namespace,
+  # service account, pod name) instead of their UID, for development
+  # and evaluation. Turns on hostPID, which the attestor needs to read a
+  # peer's cgroup, and lets the chart's service account list pods.
+  # Needs a server without --require-auth (see ADR 0020).
+  k8sWorkloadAttestor:
+    enabled: false
+    # Empty renders spiffe://<server.trustDomain>/k8s/{namespace}/{serviceaccount}.
+    # Placeholders: {namespace}, {serviceaccount}, {podname}.
+    svidTemplate: ""
   resources:
     limits:
       cpu: 200m
