@@ -8,19 +8,26 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-15
+
+Rotates the built-in CA at runtime, carries trust across Vault PKI and step-ca rotations on request, adds the SPIFFE CSI driver to the Helm chart, and makes the local PDP verify policy bundle signatures by default.
+
+A minor with breaking changes: an agent with a local PDP now needs `--policy-bundle-key` (or `--insecure-unsigned-policy-bundles`), and the chart constrains `agent.hostSocketPath`. See Changed.
+
 ### Added
 
 - **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
 - **Overlap across Vault PKI and step-ca rotations (opt-in).** With `--upstream-ca-grace` (for example `24h`; never past the CA's expiry), a CA the external issuer stops publishing stays in Omega's served bundle, locally and to federated peers, so SVIDs it signed keep verifying through the rotation, and `spiffe_sequence` advances when the issuer's bundle changes. It is off by default, since Omega cannot tell a rotation from a revocation. Every change to the kept set is recorded in the audit chain as `ca.upstream`, and `--upstream-ca-distrust` (a fingerprint list re-read on `SIGHUP`) drops a kept CA at once after a compromise. The served bundle now holds only the certificates Omega can parse, re-encoded; a chain member Go cannot parse is dropped with a warning instead of passed through. Federated peers now read the Vault PKI or step-ca bundle live, so an issuer rotation reaches them without a `SIGHUP`.
 - **SPIFFE CSI driver in the Helm chart.** `csi.enabled` deploys the upstream SPIFFE CSI driver against the Omega agent's socket directory, so pods mount the Workload API with a `csi.spiffe.io` ephemeral volume instead of a hostPath. `examples/kind-csi` checks it end to end in kind, in CI.
 
-### Fixed
-
-- **The chart's agent can create its socket on a fresh node.** It runs as uid 65532 while kubelet creates its hostPath directory root-owned, so it failed with `bind: permission denied`. An init container with only `CAP_CHOWN` (`omega agent prepare-socket-dir`) now hands the directory to the agent's user; the agent stays non-root.
-
 ### Changed
 
 - **Breaking: the local PDP verifies bundle signatures by default.** `omega agent --local-pdp-addr` now refuses to start without `--policy-bundle-key`; pass `--insecure-unsigned-policy-bundles` to keep trusting bundles on TLS alone. In the Helm chart `agent.localPDP.verifyBundle` defaults to `true` and needs `server.policyBundleSigningKeySecret`; set it to `false` for the previous behaviour.
+- **Breaking (Helm): stricter agent socket directory.** `agent.hostSocketPath` must be under `/run/omega*` or `/var/run/omega*`, because an init container changes its owner and mode on every node. That init container runs as uid 0 with only `CAP_CHOWN`, so a cluster that enforces `runAsNonRoot` on every container rejects the agent pod.
+
+### Fixed
+
+- **The chart's agent can create its socket on a fresh node.** It runs as uid 65532 while kubelet creates its hostPath directory root-owned, so it failed with `bind: permission denied`. An init container with only `CAP_CHOWN` (`omega agent prepare-socket-dir`) now hands the directory to the agent's user; the agent stays non-root.
 
 ## [0.8.0] - 2026-10-13
 
@@ -917,7 +924,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/kanywst/omega/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kanywst/omega/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kanywst/omega/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kanywst/omega/compare/v0.5.0...v0.6.0

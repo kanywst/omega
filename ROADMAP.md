@@ -10,9 +10,9 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.8.0)
+## Now (next release, post-0.9.0)
 
-Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 0018](docs/adr/0018-signed-bundles-and-decision-spool.md)) shipped in 0.8.0.
+Nothing is committed yet. Runtime rotation of the built-in CA ([ADR 0019](docs/adr/0019-runtime-ca-rotation.md)), the opt-in overlap across Vault PKI and step-ca rotations, and the SPIFFE CSI driver in the Helm chart shipped in 0.9.0.
 
 ## Next (3-6 months)
 
