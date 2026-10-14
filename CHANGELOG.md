@@ -18,6 +18,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 - **The chart's agent can create its socket on a fresh node.** It runs as uid 65532 while kubelet creates its hostPath directory root-owned, so it failed with `bind: permission denied`. An init container with only `CAP_CHOWN` (`omega agent prepare-socket-dir`) now hands the directory to the agent's user; the agent stays non-root.
 
+### Changed
+
+- **Breaking: the local PDP verifies bundle signatures by default.** `omega agent --local-pdp-addr` now refuses to start without `--policy-bundle-key`; pass `--insecure-unsigned-policy-bundles` to keep trusting bundles on TLS alone. In the Helm chart `agent.localPDP.verifyBundle` defaults to `true` and needs `server.policyBundleSigningKeySecret`; set it to `false` for the previous behaviour.
+
 ## [0.8.0] - 2026-10-13
 
 Hardens local policy decisions: the control plane can sign the policy bundle, the node agent refuses unsigned, replayed or stale bundles, decisions survive an agent crash through an on-disk spool, and each local decision is recorded once however often it is resent. Adds `examples/spire-authz`, Omega as the authorization and audit layer on top of a real SPIRE deployment, and builds the arm64 image natively.
