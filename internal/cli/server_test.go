@@ -321,3 +321,29 @@ func TestServerCommandClientCertOptionalNeedsRequireAuth(t *testing.T) {
 		t.Fatalf("want a refusal without --require-auth, got %v", err)
 	}
 }
+
+// --ca-backend=gcp-cas without a pool must fail before any credential
+// lookup or network call.
+func TestServerCommandGCPCASNeedsPool(t *testing.T) {
+	cmd := newServerCommand()
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{"--ca-backend", "gcp-cas", "--data-dir", t.TempDir()})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--ca-gcp-cas-pool") {
+		t.Fatalf("expected a missing --ca-gcp-cas-pool error, got: %v", err)
+	}
+}
+
+// The gcp-cas flags reach identity.New: a malformed pool is rejected by
+// the backend's own validation, naming the offending value.
+func TestServerCommandGCPCASFlagsReachBackend(t *testing.T) {
+	cmd := newServerCommand()
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{"--ca-backend", "gcp-cas", "--ca-gcp-cas-pool", "not-a-pool", "--data-dir", t.TempDir()})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "not-a-pool") {
+		t.Fatalf("expected the backend to reject the pool name, got: %v", err)
+	}
+}
