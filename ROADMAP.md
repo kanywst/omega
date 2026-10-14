@@ -35,11 +35,11 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
   and attestation side. It stays on the list for the self-issued
   dev / eval path, not as a production substitute for SPIRE.
 
-- Cloud HSM / KMS-backed CA upstream plugins (AWS Private CA, GCP CAS,
+- Cloud HSM / KMS-backed CA upstream plugins (AWS Private CA,
   Azure Key Vault). The interface seam is in place
-  ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and two
-  non-disk backends have shipped (`--ca-backend=vault-pki` and
-  `--ca-backend=step-ca`); the remaining backends follow the same shape
+  ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and three
+  non-disk backends have shipped (`--ca-backend=vault-pki`,
+  `--ca-backend=step-ca` and `--ca-backend=gcp-cas`); the remaining backends follow the same shape
   (one `Kind` constant + one `Authority` impl + one `identity.New`
   switch case + tests against a fake HTTP backend), with
   [`docs/ca-plugin-guide.md`](docs/ca-plugin-guide.md) as the

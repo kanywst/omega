@@ -11,6 +11,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Added
 
 - **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
+- **Google Cloud CAS backend.** `--ca-backend=gcp-cas` signs X.509-SVIDs through a Certificate Authority Service CA pool (`--ca-gcp-cas-pool`, plus optional `--ca-gcp-cas-endpoint`, `--ca-gcp-cas-issuing-ca` and `--ca-gcp-cas-certificate-template`), authenticating with Application Default Credentials; the bundle comes from the pool's CA certificates and JWT-SVIDs stay locally signed. The Helm chart gains `server.ca.backend` and `server.ca.gcpCas`. See [docs/ca-gcp-cas.md](docs/ca-gcp-cas.md).
 
 ## [0.8.0] - 2026-10-13
 

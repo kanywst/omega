@@ -260,9 +260,7 @@ the JWT signing key.
   trust domain. Mitigation is at the filesystem / pod-security
   layer (host filesystem ACLs, Kubernetes `securityContext`,
   encrypted volumes). After a suspected disclosure, `omega ca prepare`, `activate` and `retire --force` replace the disk CA without a restart ([ADR 0019](adr/0019-runtime-ca-rotation.md)); credentials the old key signed stop verifying once it is retired.
-- Out-of-tree mitigation: HSM / KMS upstream plugins (Vault PKI,
-  step-ca, AWS Private CA, GCP CAS, Azure Key Vault) are tracked in
-  `ROADMAP.md`. With those, the CA root never leaves the KMS.
+- Upstream mitigation: `--ca-backend=vault-pki`, `step-ca` and `gcp-cas` keep the X.509 CA key in the upstream system, off Omega's disk; AWS Private CA and Azure Key Vault are tracked in `ROADMAP.md`. The JWT-SVID signing key still lives under `--data-dir` with every backend. The credential Omega uses to reach the upstream (Vault token, step-ca provisioner key, Google service account) can mint any certificate the upstream allows, so its theft is close to a CA compromise: scope it to the pool or role Omega uses, and with `gcp-cas` restrict the pool's issuance policy to the trust domain's URI SANs ([docs/ca-gcp-cas.md](ca-gcp-cas.md)).
 
 ### I2: Information disclosure via audit log content
 
