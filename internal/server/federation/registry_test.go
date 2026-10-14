@@ -117,6 +117,10 @@ func TestRegistryOwnBundleSourceIsReadLive(t *testing.T) {
 	if string(r.Bundles()["omega.alpha"]) != string(nextPEM) {
 		t.Fatal("Bundles() must read the own-bundle source on every call")
 	}
+	cur = nil
+	if string(r.Bundles()["omega.alpha"]) != string(ownPEM) {
+		t.Fatal("an empty live bundle must fall back to the last set one, not be served empty")
+	}
 }
 
 func TestRegistryFetchesPeerViaTDF(t *testing.T) {

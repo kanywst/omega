@@ -348,14 +348,14 @@ func newServerCommand() *cobra.Command {
 			// rotation goes into the audit chain, and the operator's
 			// distrust list drops a kept CA without a restart.
 			keeper, _ := ca.(identity.UpstreamCAKeeper)
-			var keptDone <-chan struct{}
+			var keptQueue *keptCAQueue
 			if keeper != nil {
 				// The hook runs on a bundle refresh, so it only queues the
 				// event; one goroutine appends the queue to the audit chain
 				// in order, and drains it on shutdown.
 				kept := newKeptCAQueue()
 				go kept.run(ctx, func(c context.Context, e identity.KeptCAEvent) { recordKeptCA(c, store, e) })
-				keptDone = kept.done
+				keptQueue = kept
 				keeper.SetKeptCAHook(kept.push)
 				// The kept set changes on its own, so peers read the
 				// bundle live rather than a copy refreshed on SIGHUP.
@@ -657,10 +657,12 @@ func newServerCommand() *cobra.Command {
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = srv.Shutdown(shutdownCtx)
-				// Let the kept-CA audit queue finish draining.
-				if keptDone != nil {
+				// No request can change the kept set now: let the kept-CA
+				// audit queue drain.
+				if keptQueue != nil {
+					keptQueue.close()
 					select {
-					case <-keptDone:
+					case <-keptQueue.done:
 					case <-shutdownCtx.Done():
 					}
 				}
@@ -1374,11 +1376,12 @@ type keptCAQueue struct {
 	mu     sync.Mutex
 	items  []identity.KeptCAEvent
 	signal chan struct{}
+	stop   chan struct{}
 	done   chan struct{}
 }
 
 func newKeptCAQueue() *keptCAQueue {
-	return &keptCAQueue{signal: make(chan struct{}, 1), done: make(chan struct{})}
+	return &keptCAQueue{signal: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 }
 
 func (q *keptCAQueue) push(e identity.KeptCAEvent) {
@@ -1399,25 +1402,31 @@ func (q *keptCAQueue) take() []identity.KeptCAEvent {
 	return items
 }
 
-// run records queued events until ctx ends, then drains what is left,
-// and closes done. Each append gets a context of its own that shutdown
-// does not cancel, so a batch taken just before shutdown is still
-// recorded in full.
+// close tells run to drain and return. The server calls it once the HTTP
+// server has shut down, so no request can queue an event after it.
+func (q *keptCAQueue) close() { close(q.stop) }
+
+// run records queued events until close, drains until the queue is
+// empty, and closes done. Each append gets a context of its own that
+// shutdown does not cancel, so nothing taken is cut short.
 func (q *keptCAQueue) run(ctx context.Context, record func(context.Context, identity.KeptCAEvent)) {
 	defer close(q.done)
-	write := func() {
-		for _, e := range q.take() {
+	write := func() bool {
+		items := q.take()
+		for _, e := range items {
 			c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			record(c, e)
 			cancel()
 		}
+		return len(items) > 0
 	}
 	for {
 		select {
 		case <-q.signal:
 			write()
-		case <-ctx.Done():
-			write()
+		case <-q.stop:
+			for write() {
+			}
 			return
 		}
 	}

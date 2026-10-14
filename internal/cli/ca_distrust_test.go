@@ -102,7 +102,8 @@ func TestKeptCAQueueKeepsOrderAndDrainsOnShutdown(t *testing.T) {
 	for _, fp := range []string{"1", "2", "3"} {
 		q.push(identity.KeptCAEvent{Fingerprint: fp})
 	}
-	cancel()
+	cancel() // shutdown does not cut short what is queued
+	q.close()
 	close(block)
 	<-done
 	<-q.done

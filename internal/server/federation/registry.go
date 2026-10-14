@@ -339,7 +339,9 @@ func (r *Registry) Bundles() map[string][]byte {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if src == nil {
+	// No live bundle (no cache and the issuer unreachable): serve the
+	// last one rather than an empty bundle a peer would trust nothing in.
+	if len(own) == 0 {
 		own = r.ownBundle
 	}
 	out := make(map[string][]byte, len(r.peerBundles)+1)
