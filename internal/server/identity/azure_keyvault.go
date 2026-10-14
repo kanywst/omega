@@ -109,7 +109,12 @@ func newAzureKeyVaultAuthority(td spiffeid.TrustDomain, issuer string, cfg Confi
 		return nil, errors.New("identity: azure-keyvault: key name and version must not contain '/', '?' or '#'")
 	}
 
-	httpClient := &http.Client{Timeout: defaultAzureKVTimeout}
+	// Never follow redirects: a redirect would carry the bearer token,
+	// or a client secret, to wherever the response points.
+	httpClient := &http.Client{
+		Timeout:       defaultAzureKVTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	getenv := cfg.AzureKeyVaultGetenv
 	if getenv == nil {
 		getenv = os.Getenv
@@ -143,17 +148,24 @@ func newAzureKeyVaultAuthority(td spiffeid.TrustDomain, issuer string, cfg Confi
 }
 
 // azureKeyVaultScope derives the OAuth scope from the vault host: the
-// host from its "vault" or "managedhsm" label on. That maps
-// myvault.vault.azure.net (and its privatelink name) to
-// https://vault.azure.net/.default, and covers Managed HSM and the
-// sovereign clouds (vault.usgovcloudapi.net, vault.azure.cn). Any
-// other host, such as a loopback test server, gets the public cloud
-// scope.
+// host from its "vault" or "managedhsm" label on, so
+// myvault.vault.azure.net maps to https://vault.azure.net/.default and
+// Managed HSM and the sovereign clouds (vault.usgovcloudapi.net,
+// vault.azure.cn) map to their own resource. A private endpoint name
+// (myvault.privatelink.vaultcore.azure.net) maps through its
+// "vaultcore" label to the same cloud's "vault" resource. Any other
+// host, such as a loopback test server, gets the public cloud scope.
 func azureKeyVaultScope(u *url.URL) string {
 	labels := strings.Split(u.Hostname(), ".")
 	for i, l := range labels {
-		if (l == "vault" || l == "managedhsm") && i > 0 && i < len(labels)-1 {
+		if i == 0 || i == len(labels)-1 {
+			continue
+		}
+		switch l {
+		case "vault", "managedhsm":
 			return "https://" + strings.Join(labels[i:], ".") + "/.default"
+		case "vaultcore":
+			return "https://vault." + strings.Join(labels[i+1:], ".") + "/.default"
 		}
 	}
 	return "https://vault.azure.net/.default"
@@ -189,6 +201,11 @@ func loadOrMintAzureCA(cfg Config, signer *azureKeyVaultSigner) (*x509.Certifica
 	certs, err := readCertBundle(path)
 	if err != nil {
 		return nil, nil, err
+	}
+	// The kept file holds only the CA Omega minted. Extra trust anchors
+	// come from a supplied file, never from one Omega writes itself.
+	if !supplied && len(certs) != 1 {
+		return nil, nil, fmt.Errorf("%s holds %d certificates, want only the one Omega minted; put extra CAs in --ca-azure-keyvault-ca-cert instead", path, len(certs))
 	}
 	active, extra, err := pickAzureCA(certs, signer)
 	if err != nil {
@@ -426,10 +443,11 @@ func (c *azureKeyVaultClient) resolveSigner(ctx context.Context, name, version s
 		return nil, fmt.Errorf("key %q: kid: %w", name, err)
 	}
 	parts := strings.Split(strings.Trim(kidURL.Path, "/"), "/")
-	if len(parts) != 3 || parts[0] != "keys" || parts[1] != name || parts[2] == "" {
+	if len(parts) != 3 || parts[0] != "keys" || !strings.EqualFold(parts[1], name) || parts[2] == "" {
 		return nil, fmt.Errorf("key %q: unexpected kid %q", name, k.KID)
 	}
-	if version != "" && parts[2] != version {
+	// Key Vault names and versions are case-insensitive.
+	if version != "" && !strings.EqualFold(parts[2], version) {
 		return nil, fmt.Errorf("key %q: asked for version %q, Key Vault returned %q", name, version, parts[2])
 	}
 	return &azureKeyVaultSigner{

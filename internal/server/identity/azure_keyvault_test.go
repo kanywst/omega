@@ -119,7 +119,7 @@ func (f *kvFixture) key(version string) *ecdsa.PrivateKey {
 	if version == "" {
 		version = f.current
 	}
-	return f.versions[version]
+	return f.versions[strings.ToLower(version)]
 }
 
 func kvError(w http.ResponseWriter, status int, code, msg string) {
@@ -147,7 +147,7 @@ func (f *kvFixture) getKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.getHits.Add(1)
-	version := r.PathValue("version")
+	version := strings.ToLower(r.PathValue("version"))
 	f.mu.Lock()
 	name, kty, crv, keyOps, enabled := f.name, f.kty, f.crv, f.keyOps, f.enabled
 	if version == "" {
@@ -383,6 +383,25 @@ func TestAzureKeyVaultKeyRotatedFailsClosed(t *testing.T) {
 	_, err := identity.New(f.config(dir))
 	if err == nil || !strings.Contains(err.Error(), "the key changed") {
 		t.Fatalf("want a key-changed error, got %v", err)
+	}
+	// Appending a certificate to the kept file does not make it trusted:
+	// extra CAs only come from a supplied file.
+	kept := filepath.Join(dir, identity.AzureKeyVaultCACertFile)
+	keptPEM, err := os.ReadFile(kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err := os.WriteFile(kept, append(append([]byte{}, keptPEM...), selfSigned(t, stranger, true)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pinned := f.config(dir)
+	pinned.AzureKeyVaultKeyVersion = "V1" // versions match case-insensitively
+	if _, err := identity.New(pinned); err == nil || !strings.Contains(err.Error(), "holds 2 certificates") {
+		t.Fatalf("appended cert: %v", err)
+	}
+	if err := os.WriteFile(kept, keptPEM, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	// Pinning the old version keeps the old CA working.
 	cfg := f.config(dir)
@@ -655,6 +674,24 @@ func TestAzureKeyVaultConfigErrors(t *testing.T) {
 				t.Fatalf("want %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+// A redirect is never followed, so the bearer token cannot be carried
+// to another host.
+func TestAzureKeyVaultNoRedirects(t *testing.T) {
+	f := newKVFixture(t)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, f.server.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+	cfg := f.config(t.TempDir())
+	cfg.AzureKeyVaultURL = redirector.URL
+	if _, err := identity.New(cfg); err == nil || !strings.Contains(err.Error(), "307") {
+		t.Fatalf("redirect: %v", err)
+	}
+	if f.getHits.Load() != 0 {
+		t.Fatal("the redirect was followed")
 	}
 }
 

@@ -16,15 +16,17 @@ import (
 
 func TestAzureKeyVaultScope(t *testing.T) {
 	cases := map[string]string{
-		"https://myvault.vault.azure.net":             "https://vault.azure.net/.default",
-		"https://myhsm.managedhsm.azure.net":          "https://managedhsm.azure.net/.default",
-		"https://gov.vault.usgovcloudapi.net":         "https://vault.usgovcloudapi.net/.default",
-		"https://cn.vault.azure.cn":                   "https://vault.azure.cn/.default",
-		"http://127.0.0.1:8443":                       "https://vault.azure.net/.default",
-		"https://myvault.vault.azure.net:443/":        "https://vault.azure.net/.default",
-		"https://vault":                               "https://vault.azure.net/.default",
-		"https://single-label-host":                   "https://vault.azure.net/.default",
-		"https://myvault.privatelink.vault.azure.net": "https://vault.azure.net/.default",
+		"https://myvault.vault.azure.net":                         "https://vault.azure.net/.default",
+		"https://myhsm.managedhsm.azure.net":                      "https://managedhsm.azure.net/.default",
+		"https://gov.vault.usgovcloudapi.net":                     "https://vault.usgovcloudapi.net/.default",
+		"https://cn.vault.azure.cn":                               "https://vault.azure.cn/.default",
+		"http://127.0.0.1:8443":                                   "https://vault.azure.net/.default",
+		"https://myvault.vault.azure.net:443/":                    "https://vault.azure.net/.default",
+		"https://myvault.privatelink.vaultcore.azure.net":         "https://vault.azure.net/.default",
+		"https://myvault.privatelink.vaultcore.usgovcloudapi.net": "https://vault.usgovcloudapi.net/.default",
+		"https://vault":                                           "https://vault.azure.net/.default",
+		"https://single-label-host":                               "https://vault.azure.net/.default",
+		"https://myvault.privatelink.vault.azure.net":             "https://vault.azure.net/.default",
 	}
 	for in, want := range cases {
 		u, _ := url.Parse(in)
