@@ -39,6 +39,29 @@ server:
   #       tokenSecret: omega-scim-corp
   scimProviders: []
   extraArgs: []
+  # Extra labels on the server pods, e.g. azure.workload.identity/use:
+  # "true" for Azure workload identity.
+  podLabels: {}
+  # The CA that signs X.509-SVIDs and JWT-SVIDs (--ca-backend). "disk"
+  # keeps a self-signed CA under dataDir, for evaluation.
+  ca:
+    backend: disk
+    # backend: azure-keyvault keeps the CA private key in Azure Key Vault
+    # or Managed HSM; Omega signs through it. Credentials: Azure workload
+    # identity (annotate the service account with
+    # azure.workload.identity/client-id and set the podLabels above), a
+    # managed identity, or credentialsSecret.
+    azureKeyVault:
+      url: ""            # https://<vault>.vault.azure.net
+      key: ""            # an EC P-256 key
+      keyVersion: ""     # empty: the current version at startup
+      # Secret whose "ca.crt" holds the CA certificate for the key, plus
+      # any CA certificate to trust beside it. Empty: each replica
+      # self-signs one into its data volume, so set it when replicas > 1.
+      caCertSecret: ""
+      # Secret loaded as environment variables (AZURE_TENANT_ID,
+      # AZURE_CLIENT_ID, AZURE_CLIENT_SECRET) for a service principal.
+      credentialsSecret: ""
   resources:
     limits:
       cpu: 500m
