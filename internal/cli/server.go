@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"sort"
+	"sync"
 	"syscall"
 	"time"
 
@@ -104,6 +108,8 @@ func newServerCommand() *cobra.Command {
 		domainRootAdmins           []string
 		decisionRecorders          []string
 		bundleSigningKeyFile       string
+		upstreamCAGrace            time.Duration
+		upstreamCADistrustFile     string
 		scimIDPs                   []string
 		identitySource             string
 		identitySourceBundle       string
@@ -205,6 +211,7 @@ func newServerCommand() *cobra.Command {
 					Issuer:      strings.TrimSpace(issuerURL),
 					Dir:         filepath.Join(dataDir, "ca"),
 				}
+				caCfg.UpstreamCAGrace = upstreamCAGrace
 				if caCfg.Kind == identity.KindVaultPKI {
 					token, err := resolveVaultToken(caVaultPKIToken, caVaultPKITokenFile)
 					if err != nil {
@@ -349,7 +356,33 @@ func newServerCommand() *cobra.Command {
 			// the previous material installed.
 			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
 			caReloader, _ := ca.(identity.CAReloader)
-			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "" || caReloader != nil) && len(sighupSignals) > 0 {
+			// Vault PKI and step-ca: every change to the CAs kept from a
+			// rotation goes into the audit chain, and the operator's
+			// distrust list drops a kept CA without a restart.
+			keeper, _ := ca.(identity.UpstreamCAKeeper)
+			var keptQueue *keptCAQueue
+			if keeper != nil {
+				// The hook runs on a bundle refresh, so it only queues the
+				// event; one goroutine appends the queue to the audit chain
+				// in order, and drains it on shutdown.
+				kept := newKeptCAQueue()
+				go kept.run(ctx, func(c context.Context, e identity.KeptCAEvent) { recordKeptCA(c, store, e) })
+				keptQueue = kept
+				keeper.SetKeptCAHook(kept.push)
+				// The kept set changes on its own, so peers read the
+				// bundle live rather than a copy refreshed on SIGHUP.
+				fed.SetOwnBundleSource(ca.BundlePEM)
+			}
+			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
+			if upstreamCADistrustFile != "" {
+				if keeper == nil {
+					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki or step-ca")
+				}
+				if err := distrust.apply(ctx); err != nil {
+					return fmt.Errorf("upstream-ca-distrust: %w", err)
+				}
+			}
+			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "" || caReloader != nil || upstreamCADistrustFile != "") && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)
 				signal.Notify(hup, sighupSignals...)
 				go func() {
@@ -381,6 +414,13 @@ func newServerCommand() *cobra.Command {
 									fed.SetOwnBundle(ca.BundlePEM())
 									fmt.Fprintf(os.Stderr, "omega server: CAs reloaded\n")
 									recordCAReload(ctx, store, ca)
+								}
+							}
+							if upstreamCADistrustFile != "" {
+								// Peers read the bundle live, so the drop
+								// reaches them without a SetOwnBundle.
+								if err := distrust.apply(ctx); err != nil {
+									fmt.Fprintf(os.Stderr, "omega server: upstream CA distrust list rejected, keeping the previous one: %v\n", err)
 								}
 							}
 							// Reload the Cedar policies too, so local
@@ -629,6 +669,15 @@ func newServerCommand() *cobra.Command {
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = srv.Shutdown(shutdownCtx)
+				// No request can change the kept set now: let the kept-CA
+				// audit queue drain.
+				if keptQueue != nil {
+					keptQueue.close()
+					select {
+					case <-keptQueue.done:
+					case <-shutdownCtx.Done():
+					}
+				}
 				return nil
 			case err := <-errCh:
 				return err
@@ -769,6 +818,10 @@ func newServerCommand() *cobra.Command {
 		"let an identity provider provision users and groups over SCIM 2.0 at /scim/v2/<name>/ (repeatable), as 'name=<name>,domain=<domain>,token-file=<path>[,template=<spiffe-id-template>]'. The provider authenticates with the bearer token in token-file, its groups are created in domain, and each user's memberships go to the SPIFFE ID the template gives ({idp}, {externalId}, {userName}; default spiffe://<trust-domain>/humans/{idp}/{externalId}).")
 	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
+	cmd.Flags().DurationVar(&upstreamCAGrace, "upstream-ca-grace", 0,
+		"with --ca-backend=vault-pki or step-ca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers through a rotation (never past the CA's expiry), e.g. 24h. Off by default: Omega cannot tell a rotation from a revocation, so a CA kept this way stays trusted even if the issuer withdrew it because it was compromised, until --upstream-ca-distrust drops it.")
+	cmd.Flags().StringVar(&upstreamCADistrustFile, "upstream-ca-distrust", "",
+		"with --ca-backend=vault-pki or step-ca, a file of SHA-256 fingerprints (hex, one per line, '#' comments) of CAs never to keep after the issuer stops publishing them. Re-read on SIGHUP, so a CA kept from a rotation can be dropped at once, without a restart, after a compromise.")
 	cmd.Flags().StringVar(&bundleSigningKeyFile, "policy-bundle-signing-key", "",
 		"ECDSA P-256 private key (PEM) that signs every policy bundle served to node agents, so they can verify it with --policy-bundle-key independently of TLS. Every replica must use the same key.")
 	cmd.Flags().StringArrayVar(&decisionRecorders, "decision-recorder", nil,
@@ -1275,6 +1328,139 @@ func recordCAReload(ctx context.Context, store *storage.Store, ca identity.Autho
 	payload, _ := json.Marshal(map[string]any{"active_kid": active, "trusted_cas": strings.Count(string(ca.BundlePEM()), "BEGIN CERTIFICATE"), "spiffe_sequence": seq})
 	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.reload", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
 		fmt.Fprintf(os.Stderr, "omega server: could not record the CA reload in the audit chain: %v\n", err)
+	}
+}
+
+// caDistrust applies the --upstream-ca-distrust list. Each change to the
+// list, and each list rejected, is recorded in the audit chain as
+// ca.upstream, so a compromise response is on record either way.
+type caDistrust struct {
+	keeper identity.UpstreamCAKeeper
+	path   string
+	store  *storage.Store
+	last   []string
+}
+
+func (d *caDistrust) apply(ctx context.Context) error {
+	err := d.applyFile(ctx)
+	if err != nil {
+		payload, _ := json.Marshal(map[string]any{"action": "distrust-list", "error": err.Error()})
+		if _, aerr := d.store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.upstream", Actor: "omega-server", Decision: "error", Payload: payload}); aerr != nil {
+			fmt.Fprintf(os.Stderr, "omega server: could not record the rejected distrust list in the audit chain: %v\n", aerr)
+		}
+	}
+	return err
+}
+
+func (d *caDistrust) applyFile(ctx context.Context) error {
+	raw, err := os.ReadFile(d.path) // #nosec G304 -- operator-supplied path
+	if err != nil {
+		return err
+	}
+	// An empty file is more likely a truncated write than a decision to
+	// trust every CA again; clearing the list takes a file that says so
+	// in a comment.
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return fmt.Errorf("%s is empty; to clear the list, leave only a comment in it", d.path)
+	}
+	fps, err := identity.ParseCAFingerprints(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", d.path, err)
+	}
+	list := make([]string, len(fps))
+	for i, fp := range fps {
+		list[i] = hex.EncodeToString(fp[:])
+	}
+	sort.Strings(list)
+	dropped := d.keeper.DistrustCAs(fps)
+	if dropped > 0 {
+		fmt.Fprintf(os.Stderr, "omega server: dropped %d kept CA(s) on the distrust list\n", dropped)
+	}
+	if d.last != nil && slices.Equal(list, d.last) {
+		return nil
+	}
+	if len(list) == 0 && len(d.last) > 0 {
+		fmt.Fprintf(os.Stderr, "omega server: WARN the upstream CA distrust list is now empty; %d CA(s) may be kept again\n", len(d.last))
+	}
+	payload, _ := json.Marshal(map[string]any{"action": "distrust-list", "fingerprints": list, "dropped": dropped})
+	if _, err := d.store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.upstream", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
+		// Not remembered as recorded, so the next SIGHUP tries again.
+		fmt.Fprintf(os.Stderr, "omega server: could not record the distrust list in the audit chain: %v\n", err)
+		return nil
+	}
+	d.last = list
+	return nil
+}
+
+// keptCAQueue is an unbounded, ordered queue of kept-CA changes. Kept-CA
+// changes are rare (one per issuer rotation), so nothing is ever dropped.
+type keptCAQueue struct {
+	mu     sync.Mutex
+	items  []identity.KeptCAEvent
+	signal chan struct{}
+	stop   chan struct{}
+	done   chan struct{}
+}
+
+func newKeptCAQueue() *keptCAQueue {
+	return &keptCAQueue{signal: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+}
+
+func (q *keptCAQueue) push(e identity.KeptCAEvent) {
+	q.mu.Lock()
+	q.items = append(q.items, e)
+	q.mu.Unlock()
+	select {
+	case q.signal <- struct{}{}:
+	default:
+	}
+}
+
+func (q *keptCAQueue) take() []identity.KeptCAEvent {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	items := q.items
+	q.items = nil
+	return items
+}
+
+// close tells run to drain and return. The server calls it once the HTTP
+// server has shut down, so no request can queue an event after it.
+func (q *keptCAQueue) close() { close(q.stop) }
+
+// run records queued events until close, drains until the queue is
+// empty, and closes done. Each append gets a context of its own that
+// shutdown does not cancel, so nothing taken is cut short.
+func (q *keptCAQueue) run(ctx context.Context, record func(context.Context, identity.KeptCAEvent)) {
+	defer close(q.done)
+	write := func() bool {
+		items := q.take()
+		for _, e := range items {
+			c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			record(c, e)
+			cancel()
+		}
+		return len(items) > 0
+	}
+	for {
+		select {
+		case <-q.signal:
+			write()
+		case <-q.stop:
+			for write() {
+			}
+			return
+		}
+	}
+}
+
+// recordKeptCA appends a change to the CAs kept from a Vault PKI or
+// step-ca rotation to the audit chain, as ca.upstream. On a replica that
+// is not the leader the append is refused and only the log keeps it.
+func recordKeptCA(ctx context.Context, store *storage.Store, e identity.KeptCAEvent) {
+	payload, _ := json.Marshal(map[string]any{"action": e.Action, "reason": e.Reason, "subject": e.Subject, "fingerprint": e.Fingerprint, "until": e.Until.UTC().Format(time.RFC3339)})
+	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.upstream", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
+		fmt.Fprintf(os.Stderr, "omega server: could not record a kept upstream CA change in the audit chain: %v\n", err)
 	}
 }
 

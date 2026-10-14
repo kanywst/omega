@@ -46,6 +46,7 @@ type vaultPKIAuthority struct {
 	bundle    []byte
 	bundleExp time.Time
 	bundleTTL time.Duration
+	overlap   *caOverlap
 	// refreshMu serialises concurrent refreshBundle callers so a TTL
 	// expiry under load triggers one HTTP round-trip to Vault, not
 	// N. The full lock-and-recheck dance happens in BundlePEM.
@@ -100,6 +101,7 @@ func newVaultPKIAuthority(local *localAuthority, cfg Config) (*vaultPKIAuthority
 		role:           cfg.VaultPKIRole,
 		httpClient:     &http.Client{Timeout: defaultVaultPKITimeout, Transport: transport},
 		bundleTTL:      bundleTTL,
+		overlap:        newCAOverlap(upstreamGrace(cfg.UpstreamCAGrace)),
 	}
 	// Boot-time probe so a bad addr / token / mount fails fast.
 	if _, err := a.refreshBundle(context.Background()); err != nil {
@@ -142,7 +144,23 @@ func (a *vaultPKIAuthority) BundlePEM() []byte {
 	// anchor consumers were chaining to before the blip. Returning
 	// nil would suddenly break every workload's mTLS handshake.
 	if _, err := a.refreshBundle(context.Background()); err != nil {
-		return stale
+		// Re-serve from the last fetch rather than the cached bytes, so a
+		// rotated-out CA whose grace has ended is dropped even while the
+		// issuer cannot be reached.
+		served := a.overlap.serve(time.Now())
+		if served == nil {
+			served = stale
+		}
+		// Back off before the next attempt, so callers during an issuer
+		// outage are served from the cache instead of each waiting on a
+		// refresh.
+		if len(served) > 0 {
+			a.bundleMu.Lock()
+			a.bundle = served
+			a.bundleExp = time.Now().Add(min(a.bundleTTL, upstreamRefreshBackoff))
+			a.bundleMu.Unlock()
+		}
+		return served
 	}
 	a.bundleMu.RLock()
 	defer a.bundleMu.RUnlock()
@@ -294,9 +312,43 @@ func (a *vaultPKIAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	if len(body) == 0 || !bytes.Contains(body, []byte("-----BEGIN CERTIFICATE-----")) {
 		return nil, fmt.Errorf("vault-pki: ca_chain response is not PEM (got %d bytes)", len(body))
 	}
+	served, err := a.overlap.update(body, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", "vault-pki", err)
+	}
 	a.bundleMu.Lock()
-	a.bundle = body
+	a.bundle = served
 	a.bundleExp = time.Now().Add(a.bundleTTL)
 	a.bundleMu.Unlock()
-	return body, nil
+	return served, nil
+}
+
+// BundleSequence advances when the issuer's CA bundle or the local JWT
+// signing CAs change.
+func (a *vaultPKIAuthority) BundleSequence() int64 {
+	// Refresh first, so the sequence a caller reads matches the bundle
+	// it reads next (the SPIFFE bundle endpoint reads the sequence first).
+	_ = a.BundlePEM()
+	return a.overlap.sequence() + a.localAuthority.BundleSequence() - 1
+}
+
+// SetKeptCAHook implements UpstreamCAKeeper.
+func (a *vaultPKIAuthority) SetKeptCAHook(h func(KeptCAEvent)) { a.overlap.setHook(h) }
+
+// DistrustCAs implements UpstreamCAKeeper. The cached bundle is replaced
+// at once, so the next caller does not wait for its TTL. It holds
+// refreshMu so a refresh already in flight cannot cache the bundle from
+// before the drop after it.
+func (a *vaultPKIAuthority) DistrustCAs(fps [][32]byte) int {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	n := a.overlap.distrust(fps, time.Now())
+	if n > 0 {
+		if served := a.overlap.serve(time.Now()); served != nil {
+			a.bundleMu.Lock()
+			a.bundle = served
+			a.bundleMu.Unlock()
+		}
+	}
+	return n
 }

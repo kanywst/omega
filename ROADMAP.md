@@ -16,10 +16,7 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
 
 ## Next (3-6 months)
 
-- step-ca, Vault PKI and AWS Private CA rotation handling (today they
-  serve a stale bundle on transient errors and do not overlap an old
-  and a new CA). The disk CA rotates at runtime
-  since [ADR 0019](docs/adr/0019-runtime-ca-rotation.md).
+Nothing is queued here; the items below are the next candidates.
 
 ## Later (6-12 months)
 
