@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/kanywst/omega/internal/agent/attestor"
+	k8sattestor "github.com/kanywst/omega/internal/agent/attestor/k8s"
 	"github.com/kanywst/omega/internal/agent/localpdp"
 	"github.com/kanywst/omega/internal/agent/workloadapi"
 	"github.com/kanywst/omega/internal/server/tracing"
@@ -49,6 +50,10 @@ func newAgentCommand() *cobra.Command {
 		serverCA        string
 		clientCert      string
 		clientKey       string
+		k8sAttest       bool
+		k8sTemplate     string
+		k8sNode         string
+		kubeconfig      string
 	)
 
 	cmd := &cobra.Command{
@@ -59,7 +64,13 @@ socket that issues X.509-SVIDs to local workloads attested by their UID.
 
 For each workload connection, the agent extracts the peer UID via
 SO_PEERCRED (Linux) / LOCAL_PEERCRED (Darwin/BSD), maps it to a SPIFFE
-ID via --map, and asks the control plane to sign a fresh CSR.`,
+ID via --map, and asks the control plane to sign a fresh CSR.
+
+With --k8s-workload-attestor (Linux), a peer running in a pod on this
+node is instead identified by its pod: the agent reads the peer's
+cgroup, looks the pod up in kube-apiserver and renders
+--k8s-workload-svid-template. It is meant for development and
+evaluation, not as a production workload attestor.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			mapping, err := parseMappings(mappings)
 			if err != nil {
@@ -68,8 +79,14 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 			// Without --map the agent serves no Workload API; that is the
 			// shape beside a SPIRE agent, which issues the identities while
 			// this one only decides locally.
-			if len(mapping) == 0 && pdpAddr == "" {
-				return fmt.Errorf("at least one --map is required, or --local-pdp-addr to run only the local PDP (e.g. --map uid=%d,id=spiffe://omega.local/example/web)", os.Getuid())
+			if len(mapping) == 0 && !k8sAttest && pdpAddr == "" {
+				return fmt.Errorf("at least one --map or --k8s-workload-attestor is required, or --local-pdp-addr to run only the local PDP (e.g. --map uid=%d,id=spiffe://omega.local/example/web)", os.Getuid())
+			}
+			var wa *k8sattestor.Attestor
+			if k8sAttest {
+				if wa, err = newK8sWorkloadAttestor(kubeconfig, k8sNode, k8sTemplate); err != nil {
+					return err
+				}
 			}
 			ctx, stop := signal.NotifyContext(c.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -157,7 +174,7 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				}()
 			}
 
-			if len(mapping) == 0 {
+			if len(mapping) == 0 && wa == nil {
 				// The local PDP is all this agent does, so a listener that
 				// cannot serve ends the process and the orchestrator sees it.
 				fmt.Fprintln(os.Stderr, "omega agent: no --map, so no Workload API; serving the local PDP only")
@@ -170,12 +187,12 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 				}
 			}
 			if pdpFailed == nil {
-				return runAgent(ctx, socket, serverURL, mapping, transport)
+				return runAgent(ctx, socket, serverURL, mapping, wa, transport)
 			}
 			// Workload API and local PDP together: either failing ends the
 			// process, so a PDP that cannot listen is not silently absent.
 			apiDone := make(chan error, 1)
-			go func() { apiDone <- runAgent(ctx, socket, serverURL, mapping, transport) }()
+			go func() { apiDone <- runAgent(ctx, socket, serverURL, mapping, wa, transport) }()
 			select {
 			case err := <-apiDone:
 				return err
@@ -201,6 +218,10 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 	cmd.Flags().BoolVar(&unsignedBundles, "insecure-unsigned-policy-bundles", false, "let the local PDP accept policy bundles without verifying a signature, trusting TLS pinned with --server-ca alone (for a control plane that does not sign bundles)")
 	cmd.Flags().StringVar(&spoolPath, "decision-spool", "", "file the local PDP writes and syncs every decision to before answering, and requeues from at start, so decisions survive an agent crash (costs one fsync per decision)")
 	cmd.Flags().BoolVar(&pdpRemote, "local-pdp-allow-remote", false, "let --local-pdp-addr bind a non-loopback address; the endpoint has no authentication, so anyone who reaches it can query policy and fill the decision buffer")
+	cmd.Flags().BoolVar(&k8sAttest, "k8s-workload-attestor", false, "Linux only: identify a peer that runs in a pod on this node by its pod (cgroup, then kube-apiserver), ahead of --map. Needs the host PID namespace and list on pods. For development and evaluation.")
+	cmd.Flags().StringVar(&k8sTemplate, "k8s-workload-svid-template", "spiffe://omega.local/k8s/{namespace}/{serviceaccount}", "SPIFFE ID template for pod workloads. Placeholders: {namespace}, {serviceaccount}, {podname}.")
+	cmd.Flags().StringVar(&k8sNode, "k8s-node-name", "", "the node this agent runs on; empty reads NODE_NAME (set it from spec.nodeName with the downward API)")
+	cmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig for --k8s-workload-attestor when not running in a pod. Empty uses the in-cluster config, then the default kubeconfig discovery.")
 	cmd.Flags().IntVar(&pdpBuffer, "decision-buffer", 10000, "decisions the local PDP may hold before they reach the audit chain; when full it refuses to decide (503)")
 	return cmd
 }
@@ -259,19 +280,39 @@ func checkLocalPDP(addr string, allowRemote bool, serverURL, serverCA, clientCer
 	return nil
 }
 
-func runAgent(ctx context.Context, socketPath, serverURL string, mapping workloadapi.Mapping, transport http.RoundTripper) error {
+// newK8sWorkloadAttestor builds the --k8s-workload-attestor attestor,
+// refusing platforms without procfs cgroups and a missing node name.
+func newK8sWorkloadAttestor(kubeconfig, node, template string) (*k8sattestor.Attestor, error) {
+	if !k8sattestor.Supported {
+		return nil, errors.New("--k8s-workload-attestor is only supported on Linux")
+	}
+	if node == "" {
+		node = os.Getenv("NODE_NAME")
+	}
+	client, err := buildK8sClient(kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("--k8s-workload-attestor: %w", err)
+	}
+	return k8sattestor.New(k8sattestor.Config{Client: client, NodeName: node, Template: template})
+}
+
+func runAgent(ctx context.Context, socketPath, serverURL string, mapping workloadapi.Mapping, wa *k8sattestor.Attestor, transport http.RoundTripper) error {
 	lis, err := attestor.Listen(socketPath)
 	if err != nil {
 		return err
 	}
 	defer lis.Close()
 
+	api := workloadapi.NewServer(serverURL, mapping).WithTransport(transport)
+	if wa != nil {
+		api = api.WithWorkloadAttestor(wa, k8sattestor.ErrNotAttested)
+	}
 	grpcSrv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
-	workloadpb.RegisterSpiffeWorkloadAPIServer(grpcSrv, workloadapi.NewServer(serverURL, mapping).WithTransport(transport))
+	workloadpb.RegisterSpiffeWorkloadAPIServer(grpcSrv, api)
 
 	errCh := make(chan error, 1)
 	go func() {
-		fmt.Fprintf(os.Stderr, "omega agent: socket=%s server=%s mappings=%d\n", socketPath, serverURL, len(mapping))
+		fmt.Fprintf(os.Stderr, "omega agent: socket=%s server=%s mappings=%d k8s-workload-attestor=%t\n", socketPath, serverURL, len(mapping), wa != nil)
 		errCh <- grpcSrv.Serve(lis)
 	}()
 

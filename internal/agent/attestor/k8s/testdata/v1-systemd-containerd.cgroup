@@ -1,0 +1,4 @@
+11:memory:/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod2c48913c_b29f_11e7_9350_020968147796.slice/cri-containerd-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.scope
+4:cpu,cpuacct:/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod2c48913c_b29f_11e7_9350_020968147796.slice/cri-containerd-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.scope
+1:name=systemd:/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod2c48913c_b29f_11e7_9350_020968147796.slice/cri-containerd-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.scope
+0::/

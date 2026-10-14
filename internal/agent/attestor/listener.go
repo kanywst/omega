@@ -1,8 +1,9 @@
 // Package attestor identifies workloads connecting to the local agent.
 //
-// Current implementation: UID-based attestation only, via SO_PEERCRED
-// on Linux and LOCAL_PEERCRED (Getpeereid) on Darwin/BSD. K8s SAT and
-// process attestation are planned follow-ups.
+// The listener records the peer's UID via SO_PEERCRED on Linux and
+// LOCAL_PEERCRED (Getpeereid) on Darwin/BSD, and on Linux its PID,
+// which the Kubernetes workload attestor in the k8s subpackage resolves
+// to a pod container.
 package attestor
 
 import (
@@ -16,6 +17,10 @@ import (
 type Creds struct {
 	UID uint32
 	GID uint32
+	// PID is the peer's process ID in the agent's PID namespace, as of
+	// connect(). Zero when the platform does not report it or the peer
+	// is in a PID namespace the agent cannot see.
+	PID int32
 }
 
 // CredAddr is the net.Addr surfaced for connections wrapped by Listener.
@@ -93,18 +98,18 @@ func peerCredsOf(uc *net.UnixConn) (Creds, error) {
 		return Creds{}, err
 	}
 	var (
-		uid, gid uint32
+		creds    Creds
 		innerErr error
 	)
 	if cerr := raw.Control(func(fd uintptr) {
-		uid, gid, innerErr = getPeerCreds(int(fd))
+		creds, innerErr = getPeerCreds(int(fd))
 	}); cerr != nil {
 		return Creds{}, cerr
 	}
 	if innerErr != nil {
 		return Creds{}, innerErr
 	}
-	return Creds{UID: uid, GID: gid}, nil
+	return creds, nil
 }
 
 // CredsFromAddr extracts peer credentials from a net.Addr, returning
