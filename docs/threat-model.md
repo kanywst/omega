@@ -159,6 +159,13 @@ open CA. This is the threat the startup warning names.
   network layer (NetworkPolicy, security group, mesh authorization).
 - `--client-cert-optional` ([ADR 0012](adr/0012-optional-client-certificates.md)) moves the client-certificate requirement from the handshake to the gated routes: they still require a verified SVID, while the ungated routes become reachable without one (`GET /healthz`, `GET /v1/leader`, `GET /v1/domains` and `GET /v1/domains/{name}` (domain data), `GET /v1/bundle`, `GET /v1/spiffe-bundle`, `GET /v1/jwt/bundle`, `GET /v1/federation/bundles` (federation peers), the `/.well-known/` discovery documents, `GET /metrics`, and the enrollment paths `POST /v1/attest/k8s` and `POST /v1/oidc/exchange`), including their audit deny rows and TokenReview calls. It is refused without `--require-auth`.
 
+### S4: Obtaining another workload's identity through the SPIFFE CSI driver
+
+With the chart's `csi.enabled`, any pod that can mount a `csi.spiffe.io` volume reaches the agent's Workload API socket, including pods in other namespaces.
+
+- Mitigation today: the agent attests by the caller's UID (`SO_PEERCRED`) against `agent.uidMap`, as in S1; the CSI images are pinned by digest.
+- Residual risk: attestation has no pod, namespace or service-account selector, so a pod running as a mapped UID receives that identity. Keep mapped UIDs unique per workload and restrict `csi.spiffe.io` volumes with admission policy. The driver runs privileged with bidirectional mount propagation on `/var/lib/kubelet/pods`, so a compromise of its image or node is a node-level compromise.
+
 ### T1: Tampering with the audit log
 
 An attacker with database access edits or deletes audit rows to
