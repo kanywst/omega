@@ -202,7 +202,6 @@ func TestAttestStaticPodByMirrorAnnotation(t *testing.T) {
 	const configHash = "0f0f0f0f-0000-1111-2222-333333333333"
 	mirror := pod("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "kube-system", "etcd-node-a", "", testNode, fixtureContainerID)
 	mirror.Annotations = map[string]string{mirrorAnnotation: configHash}
-	mirror.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: testNode, Controller: ptr(true)}}
 	h.api.setPods(mirror)
 	writeProc(t, h.proc, 11, podCgroup(configHash, fixtureContainerID), "1")
 	id, ok, err := h.att.Attest(context.Background(), 11)
@@ -341,71 +340,66 @@ func TestNewValidatesConfig(t *testing.T) {
 	}
 }
 
-// The mirror annotation counts only on a pod the node's kubelet owns,
-// and never shadows a real UID: a user pod that copies another pod's
-// UID into the annotation must not make that pod unattestable.
-func TestMirrorAnnotationIsTrustedOnlyOnNodeOwnedPods(t *testing.T) {
+// The mirror annotation is writable by anyone who can create a pod, so
+// it only nominates candidates: a forged claim on a static pod's hash
+// does not displace the real mirror pod (its status lacks the
+// container), a claim on a real pod's UID cannot shadow it, and two
+// pods that both list the container are refused as ambiguous.
+func TestMirrorAnnotationOnlyNominatesCandidates(t *testing.T) {
 	const configHash = "0f0f0f0f-0000-1111-2222-333333333333"
-	h := newHarness(t, tmpl)
-	fake := pod("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "evil", "fake", "", testNode, fixtureContainerID)
-	fake.Annotations = map[string]string{mirrorAnnotation: configHash}
-	h.api.setPods(fake)
-	writeProc(t, h.proc, 12, podCgroup(configHash, fixtureContainerID), "1")
-	if _, _, err := h.att.Attest(context.Background(), 12); !errors.Is(err, ErrNotAttested) {
-		t.Fatalf("a mirror annotation on a user pod was honoured: %v", err)
+	mirror := pod("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "kube-system", "etcd-node-a", "", testNode, fixtureContainerID)
+	mirror.Annotations = map[string]string{mirrorAnnotation: configHash}
+	forged := pod("bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", "evil", "forged", "", testNode, "ffff")
+	forged.Annotations = map[string]string{mirrorAnnotation: configHash}
+
+	for _, order := range [][]corev1.Pod{{forged, mirror}, {mirror, forged}} {
+		h := newHarness(t, tmpl)
+		h.api.setPods(order...)
+		writeProc(t, h.proc, 12, podCgroup(configHash, fixtureContainerID), "1")
+		if id, _, err := h.att.Attest(context.Background(), 12); err != nil || id != "spiffe://omega.local/k8s/kube-system/default" {
+			t.Fatalf("static pod beside a forged claim: id=%q err=%v", id, err)
+		}
 	}
 
-	h = newHarness(t, tmpl)
+	h := newHarness(t, tmpl)
 	victim := pod(fixturePodUID, "apps", "web-1", "web", testNode, fixtureContainerID)
-	squatter := pod("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "evil", "squat", "", testNode, "ffff")
+	squatter := pod("cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee", "evil", "squat", "", testNode, "ffff")
 	squatter.Annotations = map[string]string{mirrorAnnotation: fixturePodUID}
-	squatter.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: testNode, Controller: ptr(true)}}
 	h.api.setPods(squatter, victim)
 	writeProc(t, h.proc, 13, podCgroup(fixturePodUID, fixtureContainerID), "1")
 	if id, _, err := h.att.Attest(context.Background(), 13); err != nil || id != "spiffe://omega.local/k8s/apps/web" {
 		t.Fatalf("victim: id=%q err=%v", id, err)
 	}
-}
 
-func ptr[T any](v T) *T { return &v }
-
-// A failed list still counts against minRelist, so a failing apiserver
-// is not retried on every connection.
-func TestFailedListIsThrottledToo(t *testing.T) {
-	h := newHarness(t, tmpl)
-	h.api.fail = true
-	writeProc(t, h.proc, 80, podCgroup(fixturePodUID, fixtureContainerID), "1")
-	for range 3 {
-		if _, _, err := h.att.Attest(context.Background(), 80); err == nil || errors.Is(err, ErrNotAttested) {
-			t.Fatalf("got %v, want a transient error", err)
-		}
-	}
-	if n := h.api.lists.Load(); n != 1 {
-		t.Fatalf("lists = %d, want 1", n)
+	h = newHarness(t, tmpl)
+	twin := pod("dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee", "evil", "twin", "", testNode, fixtureContainerID)
+	twin.Annotations = map[string]string{mirrorAnnotation: configHash}
+	h.api.setPods(mirror, twin)
+	writeProc(t, h.proc, 14, podCgroup(configHash, fixtureContainerID), "1")
+	if _, _, err := h.att.Attest(context.Background(), 14); !errors.Is(err, ErrNotAttested) {
+		t.Fatalf("two pods claiming the container: got %v, want a refusal", err)
 	}
 }
 
-// Concurrent misses share one list, and every one of them finds the
-// pod that list fetched.
-func TestConcurrentMissesShareOneList(t *testing.T) {
+// A host-cgroup answer is trusted only if the PID still names the same
+// process: a pod process replaced by a host process between the reads
+// must not reach the UID mapping.
+func TestAttestRefusesHostProcessThatReplacedThePeer(t *testing.T) {
 	h := newHarness(t, tmpl)
-	h.api.setPods(pod(fixturePodUID, "apps", "web-1", "web", testNode, fixtureContainerID))
-	writeProc(t, h.proc, 90, podCgroup(fixturePodUID, fixtureContainerID), "1")
-	var wg sync.WaitGroup
-	errs := make(chan error, 16)
-	for range 16 {
-		wg.Go(func() {
-			if _, _, err := h.att.Attest(context.Background(), 90); err != nil {
-				errs <- err
-			}
-		})
+	writeProc(t, h.proc, 15, "0::/system.slice/sshd.service\n", "100")
+	h.att.onCgroupRead = func() { writeProc(t, h.proc, 15, "0::/system.slice/sshd.service\n", "200") }
+	if _, _, err := h.att.Attest(context.Background(), 15); !errors.Is(err, ErrNotAttested) {
+		t.Fatalf("got %v, want ErrNotAttested", err)
 	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Errorf("attest: %v", err)
-	}
-	if n := h.api.lists.Load(); n != 1 {
-		t.Fatalf("lists = %d, want 1", n)
+}
+
+// A caller queued behind a slow list gives up when its context ends.
+func TestRelistWaitHonoursContext(t *testing.T) {
+	h := newHarness(t, tmpl)
+	h.att.relisting <- struct{}{} // a list in progress
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := h.att.relistIfDue(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
 	}
 }

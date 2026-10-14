@@ -105,12 +105,15 @@ type Attestor struct {
 	procRoot string
 	now      func() time.Time
 	log      io.Writer
+	// onCgroupRead, when set, runs after the cgroup is read (tests).
+	onCgroupRead func()
 
-	relistMu sync.Mutex // serialises pod lists
+	relisting chan struct{} // a one-slot semaphore that serialises pod lists
+
 	mu       sync.Mutex
-	pods     map[string]*corev1.Pod // keyed by UID
-	mirrors  map[string]*corev1.Pod // static pods' mirror pods, keyed by config hash
-	listedAt time.Time              // when the last list was attempted
+	pods     map[string]*corev1.Pod   // keyed by UID
+	mirrors  map[string][]*corev1.Pod // pods carrying a static pod's config hash, keyed by it
+	listedAt time.Time                // when the last list was attempted
 }
 
 // New checks cfg and returns an Attestor. The template must render a
@@ -135,12 +138,13 @@ func New(cfg Config) (*Attestor, error) {
 		root = "/proc"
 	}
 	return &Attestor{
-		client:   cfg.Client,
-		node:     cfg.NodeName,
-		template: cfg.Template,
-		procRoot: root,
-		now:      time.Now,
-		log:      os.Stderr,
+		client:    cfg.Client,
+		node:      cfg.NodeName,
+		template:  cfg.Template,
+		procRoot:  root,
+		now:       time.Now,
+		log:       os.Stderr,
+		relisting: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -169,14 +173,23 @@ func (a *Attestor) Attest(ctx context.Context, pid int32) (id string, ok bool, e
 // Attest for the meaning of ok.
 func (a *Attestor) Workload(ctx context.Context, pid int32) (*Workload, bool, error) {
 	if pid <= 0 {
-		return nil, false, fmt.Errorf("%w: the kernel reported no peer PID; the agent must share the host PID namespace (hostPID)", ErrNotAttested)
+		return nil, false, fmt.Errorf("%w: the kernel reported no peer PID; the agent must share the host PID namespace (hostPID), and with this attestor on, --map workloads need it too", ErrNotAttested)
 	}
 	start, err := a.startTime(pid)
 	if err != nil {
 		return nil, false, err
 	}
 	ref, err := a.containerRef(pid)
+	if a.onCgroupRead != nil {
+		a.onCgroupRead()
+	}
 	if errors.Is(err, errNotAPod) {
+		// Same start-time check as for a pod: a pod process that exited
+		// and whose PID a host process took between the two reads must
+		// not reach the UID mapping with the pod process's UID.
+		if again, err := a.startTime(pid); err != nil || again != start {
+			return nil, false, fmt.Errorf("%w: process %d exited or was replaced during attestation", ErrNotAttested, pid)
+		}
 		return nil, false, nil
 	}
 	if err != nil {
@@ -248,8 +261,8 @@ func (a *Attestor) startTime(pid int32) (string, error) {
 // A miss that cannot re-list yet is reported as transient, not as a
 // refusal, so the workload's client retries instead of giving up.
 func (a *Attestor) lookup(ctx context.Context, ref ContainerRef) (*corev1.Pod, error) {
-	if pod := a.cached(ref.PodUID); pod != nil && hasContainer(pod, ref.ContainerID) {
-		return pod, nil
+	if pod, err := a.find(ref); pod != nil || err != nil {
+		return pod, err
 	}
 	listed, err := a.relistIfDue(ctx)
 	if err != nil {
@@ -257,20 +270,36 @@ func (a *Attestor) lookup(ctx context.Context, ref ContainerRef) (*corev1.Pod, e
 	}
 	// Re-read even without a list of our own: a concurrent miss may
 	// just have fetched the pod.
-	pod := a.cached(ref.PodUID)
-	if !listed && (pod == nil || !hasContainer(pod, ref.ContainerID)) {
+	if pod, err := a.find(ref); pod != nil || err != nil {
+		return pod, err
+	}
+	if !listed {
 		return nil, fmt.Errorf("container %s of pod %s is not in the node's pod list yet; the list is re-fetched at most every %s", ref.ContainerID, ref.PodUID, minRelist)
 	}
-	if pod == nil {
-		return nil, fmt.Errorf("%w: no pod with UID %s on node %s", ErrNotAttested, ref.PodUID, a.node)
-	}
-	return pod, nil
+	return nil, fmt.Errorf("%w: no pod on node %s has container %s of pod %s", ErrNotAttested, a.node, ref.ContainerID, ref.PodUID)
 }
 
-func (a *Attestor) cached(uid string) *corev1.Pod {
+// find returns the pod on this node whose UID, or static-pod config
+// hash, is ref.PodUID and whose status lists ref.ContainerID, or nil.
+// The mirror annotation and owner references are writable by anyone
+// who can create a pod, so a hash only nominates candidates: the
+// container in the status (written by the kubelet) decides, and two
+// candidates that both list it are refused as ambiguous rather than
+// resolved by list order.
+func (a *Attestor) find(ref ContainerRef) (*corev1.Pod, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.podLocked(uid)
+	var match *corev1.Pod
+	for _, p := range append([]*corev1.Pod{a.pods[ref.PodUID]}, a.mirrors[ref.PodUID]...) {
+		if p == nil || p == match || !hasContainer(p, ref.ContainerID) {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("%w: pods %s/%s and %s/%s both claim container %s", ErrNotAttested, match.Namespace, match.Name, p.Namespace, p.Name, ref.ContainerID)
+		}
+		match = p
+	}
+	return match, nil
 }
 
 // relistIfDue re-lists the node's pods unless a list was attempted
@@ -278,8 +307,12 @@ func (a *Attestor) cached(uid string) *corev1.Pod {
 // whether or not it succeeds, so neither concurrent misses nor a
 // failing apiserver exceed one List per minRelist.
 func (a *Attestor) relistIfDue(ctx context.Context) (bool, error) {
-	a.relistMu.Lock()
-	defer a.relistMu.Unlock()
+	select {
+	case a.relisting <- struct{}{}:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	defer func() { <-a.relisting }()
 	a.mu.Lock()
 	due := a.now().Sub(a.listedAt) >= minRelist
 	if due {
@@ -302,7 +335,7 @@ func (a *Attestor) relist(ctx context.Context) error {
 		return fmt.Errorf("list pods on node %s: %w", a.node, err)
 	}
 	pods := make(map[string]*corev1.Pod, len(list.Items))
-	mirrors := map[string]*corev1.Pod{}
+	mirrors := map[string][]*corev1.Pod{}
 	for i := range list.Items {
 		p := &list.Items[i]
 		// The field selector already filters; checking again keeps a
@@ -312,37 +345,14 @@ func (a *Attestor) relist(ctx context.Context) error {
 			continue
 		}
 		pods[string(p.UID)] = p
-		if hash := p.Annotations[mirrorAnnotation]; hash != "" && ownedByNode(p, a.node) {
-			mirrors[hash] = p
+		if hash := p.Annotations[mirrorAnnotation]; hash != "" {
+			mirrors[hash] = append(mirrors[hash], p)
 		}
 	}
 	a.mu.Lock()
 	a.pods, a.mirrors = pods, mirrors
 	a.mu.Unlock()
 	return nil
-}
-
-// podLocked returns the pod with uid, or the mirror pod of the static
-// pod whose config hash is uid. Real UIDs come first and mirror hashes
-// live apart, so a pod that copies another's UID into its annotation
-// cannot shadow it.
-func (a *Attestor) podLocked(uid string) *corev1.Pod {
-	if p := a.pods[uid]; p != nil {
-		return p
-	}
-	return a.mirrors[uid]
-}
-
-// ownedByNode reports whether the kubelet of node created p as a mirror
-// pod: the kubelet sets the Node as its controller owner, which a user
-// creating an ordinary pod with the annotation does not get.
-func ownedByNode(p *corev1.Pod, node string) bool {
-	for _, o := range p.OwnerReferences {
-		if o.Kind == "Node" && o.APIVersion == "v1" && o.Name == node && o.Controller != nil && *o.Controller {
-			return true
-		}
-	}
-	return false
 }
 
 func hasContainer(pod *corev1.Pod, id string) bool {
