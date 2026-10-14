@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **CA key in Azure Key Vault.** `--ca-backend=azure-keyvault` (`--ca-azure-keyvault-url`, `-key`, `-key-version`, `-ca-cert`) keeps the CA private key in Azure Key Vault or Managed HSM: Omega builds X.509-SVIDs and JWT-SVIDs itself and signs both through the key's `sign` operation (EC P-256), one round trip per SVID. The CA certificate is self-signed through Key Vault at first start or supplied as a file; credentials come from a service principal, workload identity or a managed identity. The Helm chart gains `server.ca` and `server.podLabels`. See [ADR 0021](docs/adr/0021-azure-key-vault-remote-signer.md) and [docs/ca-azure-keyvault.md](docs/ca-azure-keyvault.md).
+
 ## [0.9.0] - 2026-10-15
 
 Rotates the built-in CA at runtime, carries trust across Vault PKI and step-ca rotations on request, adds the SPIFFE CSI driver to the Helm chart, and makes the local PDP verify policy bundle signatures by default.

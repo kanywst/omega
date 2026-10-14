@@ -127,6 +127,10 @@ func newServerCommand() *cobra.Command {
 		caStepCAProvisioner        string
 		caStepCAKeyFile            string
 		caStepCACACertFile         string
+		caAzureKVURL               string
+		caAzureKVKey               string
+		caAzureKVKeyVersion        string
+		caAzureKVCACertFile        string
 		tlsCertFile                string
 		tlsKeyFile                 string
 		clientCAFile               string
@@ -231,6 +235,12 @@ func newServerCommand() *cobra.Command {
 					caCfg.StepCAProvisionerName = strings.TrimSpace(caStepCAProvisioner)
 					caCfg.StepCAProvisionerKeyPEM = keyPEM
 					caCfg.StepCACACertFile = strings.TrimSpace(caStepCACACertFile)
+				}
+				if caCfg.Kind == identity.KindAzureKeyVault {
+					caCfg.AzureKeyVaultURL = strings.TrimSpace(caAzureKVURL)
+					caCfg.AzureKeyVaultKeyName = strings.TrimSpace(caAzureKVKey)
+					caCfg.AzureKeyVaultKeyVersion = strings.TrimSpace(caAzureKVKeyVersion)
+					caCfg.AzureKeyVaultCACertFile = strings.TrimSpace(caAzureKVCACertFile)
 				}
 				ca, err = identity.New(caCfg)
 				if err != nil {
@@ -720,7 +730,15 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&identitySourceWLAPIJWT, "identity-source-workload-api-jwt", false,
 		"also follow the upstream JWT bundle over --identity-source-workload-api, serving those keys at /v1/jwt/bundle. Off by default because omega consumes only EC P-256 (ES256) signing keys: an upstream whose JWT key is RSA has no usable key and startup fails closed rather than serving an empty JWKS.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
-		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT. For all non-disk backends the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005).")
+		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT; for both the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005). 'azure-keyvault' keeps the CA key in Azure Key Vault or Managed HSM and signs both X.509-SVIDs and JWT-SVIDs through it (see ADR 0021).")
+	cmd.Flags().StringVar(&caAzureKVURL, "ca-azure-keyvault-url", "",
+		"Key Vault or Managed HSM URL, e.g. https://myvault.vault.azure.net. Required when --ca-backend=azure-keyvault. Credentials come from AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET or AZURE_FEDERATED_TOKEN_FILE, else a managed identity.")
+	cmd.Flags().StringVar(&caAzureKVKey, "ca-azure-keyvault-key", "",
+		"name of the EC P-256 key that signs as the CA. Required when --ca-backend=azure-keyvault.")
+	cmd.Flags().StringVar(&caAzureKVKeyVersion, "ca-azure-keyvault-key-version", "",
+		"key version to sign with. Empty uses the version that is current at startup and keeps it until restart.")
+	cmd.Flags().StringVar(&caAzureKVCACertFile, "ca-azure-keyvault-ca-cert", "",
+		"PEM file with the CA certificate for the key, plus any other CA certificates to trust beside it (a previous or next CA during a key rotation). Empty: omega self-signs one through Key Vault on first start and keeps it under --data-dir/ca. Set it when running more than one replica so they all serve the same CA.")
 	cmd.Flags().StringVar(&caVaultPKIAddr, "ca-vault-pki-addr", "",
 		"Vault address, e.g. https://vault.example:8200. Required when --ca-backend=vault-pki.")
 	cmd.Flags().StringVar(&caVaultPKIToken, "ca-vault-pki-token", "",

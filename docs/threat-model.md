@@ -274,9 +274,7 @@ the JWT signing key.
   trust domain. Mitigation is at the filesystem / pod-security
   layer (host filesystem ACLs, Kubernetes `securityContext`,
   encrypted volumes). After a suspected disclosure, `omega ca prepare`, `activate` and `retire --force` replace the disk CA without a restart ([ADR 0019](adr/0019-runtime-ca-rotation.md)); credentials the old key signed stop verifying once it is retired.
-- Out-of-tree mitigation: HSM / KMS upstream plugins (Vault PKI,
-  step-ca, AWS Private CA, GCP CAS, Azure Key Vault) are tracked in
-  `ROADMAP.md`. With those, the CA root never leaves the KMS.
+- Upstream mitigation: with `--ca-backend=vault-pki` or `step-ca` the X.509 CA key lives upstream (the JWT key stays under `--data-dir`); with `--ca-backend=azure-keyvault` the one key that signs both X.509-SVIDs and JWT-SVIDs stays in Azure Key Vault and nothing under `--data-dir` is secret (see E7). AWS Private CA and GCP CAS are tracked in `ROADMAP.md`.
 
 ### I2: Information disclosure via audit log content
 
@@ -376,6 +374,13 @@ Someone who holds or steals a provider's SCIM token adds principals to the provi
 - Mitigation today: each provider has its own bearer token (stored hashed, compared in constant time, at least 32 characters) and can only touch users and groups under its own `/scim/v2/<name>/`, in its own domain. User SPIFFE IDs come from the operator's template, which must start with a fixed segment and, with more than one provider, include `{idp}` ahead of the user's attributes; each substituted value must be a single path segment, and the result must be in the local trust domain, so one provider cannot claim another's users or a workload's ID. Requests are bounded (1000 members, 100 PATCH operations), and reads do not take the write lock. Every change is committed with its audit row in one transaction, actor `scim:<name>` ([ADR 0017](adr/0017-scim-provisioning.md)).
 - Residual risk: the token is a long-lived static secret, so its holder controls the provider's groups until it is rotated. A policy that trusts a provisioned group trusts the provider. A provider can claim any free group name in its domain, including one a policy already names, so give each provider its own domain. Failed token checks are logged, not audited, and are not rate limited.
 
+### E7: Elevation of privilege through the Key Vault signing identity
+
+With `--ca-backend=azure-keyvault`, someone who obtains the server's Azure credential (a client secret, a federated token file, or code running with its managed identity) uses Key Vault's `sign` operation directly to sign certificates or JWT-SVIDs for any SPIFFE ID in the trust domain, without ever holding the key.
+
+- Mitigation today: the key never leaves Key Vault, so a compromise lasts only as long as the attacker keeps the credential, and revoking the role assignment ends it. Omega needs only `get` and `sign` on one key, so the role can be scoped to that key. Workload identity and managed identities avoid a long-lived secret; tokens are cached in memory only, sent only over https, and never logged. Every signature Key Vault returns is verified against the pinned public key, so a vault that answers with another key's signature cannot slip a foreign CA into issuance ([ADR 0021](adr/0021-azure-key-vault-remote-signer.md)).
+- Residual risk: Key Vault's own logs record each `sign` call but not what was signed, so signatures made outside Omega are not visible in Omega's audit log; enable Key Vault diagnostic logging and alert on sign calls from any identity other than the server's. The CA certificate file (supplied, or kept under `--data-dir/ca`) decides what the bundle trusts, so it must be writable only by the operator and the server: anyone who can add a certificate to a supplied file adds a trust anchor. Key Vault being unreachable or throttling stops issuance (already issued SVIDs and validation are unaffected), which an attacker able to exhaust the vault's request quota can turn into denial of service.
+
 ## Out of scope
 
 These are threats the project deliberately does not address. Each
@@ -387,7 +392,7 @@ has a recommended out-of-tree answer.
 | Caller authentication on `omega server` | OIDC IdP federation hub (tracked in `ROADMAP.md`); until that lands, terminate auth at the ingress |
 | Application secrets leak | Vault / OpenBao / cloud secrets manager - Omega's DB holds policy and audit, not application secrets |
 | Endpoint hardening of agent UDS | Pod / VM security context (own UID, no shared mount namespace) |
-| At-rest encryption of CA keys | HSM / KMS plugins (tracked in `ROADMAP.md`); until then, encrypted volumes |
+| At-rest encryption of CA keys | `--ca-backend=azure-keyvault` (the key stays in Key Vault or Managed HSM); other KMS plugins tracked in `ROADMAP.md`; otherwise encrypted volumes |
 | Long-lived credential revocation (CRL / OCSP) | Short-lived rotation is the design, see [`docs/non-goals.md`](non-goals.md#omega-is-not-a-crl--ocsp-responder) |
 | Compromised host kernel | Out of any application-layer control plane's reach |
 
