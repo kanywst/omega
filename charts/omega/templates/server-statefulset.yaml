@@ -59,20 +59,19 @@ spec:
             - --ca-backend={{ $backend }}
             {{- end }}
             {{- if eq $backend "aws-pca" }}
-            {{- with .awsPCA }}
-            - --ca-aws-pca-arn={{ required "server.ca.awsPCA.arn is required when server.ca.backend=aws-pca" .arn }}
-            {{- if .region }}
-            - --ca-aws-pca-region={{ .region }}
+            {{- $pca := .awsPCA | default dict }}
+            - --ca-aws-pca-arn={{ required "server.ca.awsPCA.arn is required when server.ca.backend=aws-pca" $pca.arn }}
+            {{- if $pca.region }}
+            - --ca-aws-pca-region={{ $pca.region }}
             {{- end }}
-            {{- if .endpoint }}
-            - --ca-aws-pca-endpoint={{ .endpoint }}
+            {{- if $pca.endpoint }}
+            - --ca-aws-pca-endpoint={{ $pca.endpoint }}
             {{- end }}
-            {{- if .templateArn }}
-            - --ca-aws-pca-template-arn={{ .templateArn }}
+            {{- if $pca.templateArn }}
+            - --ca-aws-pca-template-arn={{ $pca.templateArn }}
             {{- end }}
-            {{- if .signingAlgorithm }}
-            - --ca-aws-pca-signing-algorithm={{ .signingAlgorithm }}
-            {{- end }}
+            {{- if $pca.signingAlgorithm }}
+            - --ca-aws-pca-signing-algorithm={{ $pca.signingAlgorithm }}
             {{- end }}
             {{- end }}
             {{- end }}

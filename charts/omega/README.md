@@ -36,6 +36,10 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `server.persistence.size`                 | `1Gi`                   | PVC for SQLite data dir                                                                                               |
 | `server.ca.backend`                       | `disk`                  | `--ca-backend`; `aws-pca` is configured below, other backends through `server.extraArgs`                              |
 | `server.ca.awsPCA.arn`                    | `""`                    | AWS Private CA ARN (required for `aws-pca`); see [AWS Private CA](#aws-private-ca)                                    |
+| `server.ca.awsPCA.region`                 | `""`                    | Region of the API endpoint; empty takes it from the ARN                                                               |
+| `server.ca.awsPCA.endpoint`               | `""`                    | Endpoint override, e.g. a VPC interface endpoint (https)                                                              |
+| `server.ca.awsPCA.templateArn`            | `""`                    | Certificate template; empty uses `EndEntityCertificate_APIPassthrough/V1`                                             |
+| `server.ca.awsPCA.signingAlgorithm`       | `""`                    | Signing algorithm; empty infers it from the CA key                                                                    |
 | `csi.enabled`                             | `false`                 | Deploy the SPIFFE CSI driver so pods mount the Workload API with `csi.spiffe.io` (privileged, cluster-wide CSIDriver) |
 | `agent.nodeSelector`, `agent.tolerations` | `{}`, `[]`              | Where the agent runs; the CSI driver follows                                                                          |
 
