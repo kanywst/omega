@@ -57,6 +57,7 @@ Boundaries enforced today:
 3. Agent → server: HTTP/JSON, same listener as the operator API.
 4. Server → peer server: SPIFFE federation. Bundle exchange is a
    one-way `GET /v1/bundle` against the peer.
+5. Server → upstream CA, with a non-disk `--ca-backend`: Vault PKI and step-ca over HTTPS, AWS Private CA over the AWS API with SigV4 credentials from the standard AWS chain. The upstream signs every X.509-SVID, so anyone who can call it with omega's credentials, or any other principal the upstream lets issue from the same CA, can mint an SVID for any ID in the trust domain without passing omega's attestation, `--require-auth` or audit log. For AWS Private CA, scope `acm-pca:IssueCertificate` on the CA to omega's role alone (see [docs/ca-aws-pca.md](ca-aws-pca.md)); omega checks each returned leaf against the requested SPIFFE ID, the CSR's key and the configured CA, which catches a misconfigured template but not a principal issuing around omega.
 
 What lives outside the trust boundary:
 
@@ -260,9 +261,7 @@ the JWT signing key.
   trust domain. Mitigation is at the filesystem / pod-security
   layer (host filesystem ACLs, Kubernetes `securityContext`,
   encrypted volumes). After a suspected disclosure, `omega ca prepare`, `activate` and `retire --force` replace the disk CA without a restart ([ADR 0019](adr/0019-runtime-ca-rotation.md)); credentials the old key signed stop verifying once it is retired.
-- Out-of-tree mitigation: HSM / KMS upstream plugins (Vault PKI,
-  step-ca, AWS Private CA, GCP CAS, Azure Key Vault) are tracked in
-  `ROADMAP.md`. With those, the CA root never leaves the KMS.
+- Mitigation by configuration: `--ca-backend=vault-pki`, `step-ca` or `aws-pca` keeps the X.509 CA key in the upstream (boundary 5), so `--data-dir` then holds only the JWT signing key. GCP CAS and Azure Key Vault backends are tracked in `ROADMAP.md`.
 
 ### I2: Information disclosure via audit log content
 
@@ -373,7 +372,7 @@ has a recommended out-of-tree answer.
 | Caller authentication on `omega server` | OIDC IdP federation hub (tracked in `ROADMAP.md`); until that lands, terminate auth at the ingress |
 | Application secrets leak | Vault / OpenBao / cloud secrets manager - Omega's DB holds policy and audit, not application secrets |
 | Endpoint hardening of agent UDS | Pod / VM security context (own UID, no shared mount namespace) |
-| At-rest encryption of CA keys | HSM / KMS plugins (tracked in `ROADMAP.md`); until then, encrypted volumes |
+| At-rest encryption of CA keys | A non-disk `--ca-backend` (Vault PKI, step-ca, AWS Private CA) for the X.509 CA key; encrypted volumes for the JWT key and the disk CA |
 | Long-lived credential revocation (CRL / OCSP) | Short-lived rotation is the design, see [`docs/non-goals.md`](non-goals.md#omega-is-not-a-crl--ocsp-responder) |
 | Compromised host kernel | Out of any application-layer control plane's reach |
 
