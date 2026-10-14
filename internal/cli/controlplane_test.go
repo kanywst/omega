@@ -219,7 +219,9 @@ func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 		go func() { done <- cmd.Execute() }()
 		select {
 		case err := <-done:
-			if err == nil || !strings.Contains(err.Error(), "local PDP") {
+			// --insecure-unsigned-policy-bundles gets it past the key
+			// check to the listener.
+			if err == nil || !strings.Contains(err.Error(), "local PDP") || strings.Contains(err.Error(), "policy-bundle-key") {
 				t.Fatalf("%s: want the listener error, got %v", name, err)
 			}
 		case <-time.After(10 * time.Second):
