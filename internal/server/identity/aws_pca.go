@@ -484,6 +484,12 @@ func (a *awsPCAAuthority) checkIssued(cert *x509.Certificate, id spiffeid.ID, cs
 	if len(cert.URIs) != 1 || cert.URIs[0].String() != wantURI {
 		return fmt.Errorf("aws-pca: issued certificate URI SANs %v are not exactly the requested SPIFFE ID %q", cert.URIs, wantURI)
 	}
+	// Any other name would be one omega never authorized; a template
+	// that copies SANs from the CSR could otherwise let a workload add
+	// DNS names a hostname-matching verifier would accept.
+	if len(cert.DNSNames)+len(cert.EmailAddresses)+len(cert.IPAddresses) > 0 {
+		return errors.New("aws-pca: issued certificate carries DNS, email or IP SANs besides the SPIFFE ID; check the template ARN")
+	}
 	a.bundleMu.RLock()
 	issuer := a.issuingCA
 	a.bundleMu.RUnlock()

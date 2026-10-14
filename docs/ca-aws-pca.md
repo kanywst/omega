@@ -48,7 +48,7 @@ omega calls `IssueCertificate` with the workload's CSR, the configured template,
 
 AWS issues asynchronously: `IssueCertificate` returns a certificate ARN, and `GetCertificate` answers `RequestInProgressException` until the certificate is ready. omega polls with a backoff from 100 ms to 2 s, bounded by a 30-second deadline per issuance.
 
-Before returning the SVID, omega checks that the leaf is not a CA certificate, asserts `digitalSignature` but not `keyCertSign` or `cRLSign`, carries both the server and client authentication EKUs when it carries any, is valid now and does not outlive the requested 30 minutes (with five minutes of skew allowed), carries exactly the requested SPIFFE ID as its URI SAN, holds the CSR's public key, and is signed by the configured CA. A leaf that fails any check is refused, which catches a template override that changes the leaf's shape or a misdirected CA.
+Before returning the SVID, omega checks that the leaf is not a CA certificate, asserts `digitalSignature` but not `keyCertSign` or `cRLSign`, carries both the server and client authentication EKUs when it carries any, is valid now and does not outlive the requested 30 minutes (with five minutes of skew allowed), carries the requested SPIFFE ID as its only SAN (no other URI, DNS, email or IP names), holds the CSR's public key, and is signed by the configured CA. A leaf that fails any check is refused, which catches a template override that changes the leaf's shape or a misdirected CA.
 
 ## Trust bundle
 

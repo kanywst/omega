@@ -247,6 +247,8 @@ func (f *pcaFixture) sign(body map[string]any) ([]byte, error) {
 		tpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	case "long-lived":
 		tpl.NotAfter = time.Now().Add(24 * time.Hour)
+	case "dns-san":
+		tpl.DNSNames = []string{"admin.internal"}
 	case "expired":
 		tpl.NotBefore = time.Now().Add(-2 * time.Hour)
 		tpl.NotAfter = time.Now().Add(-time.Hour)
@@ -411,7 +413,7 @@ func TestAWSPCAIssueSVID_IssueError(t *testing.T) {
 }
 
 func TestAWSPCAIssueSVID_RejectsBadLeaf(t *testing.T) {
-	for _, mode := range []string{"extra-uri", "wrong-key", "foreign-ca", "ca-leaf", "cert-sign-ku", "client-only-eku", "long-lived", "expired"} {
+	for _, mode := range []string{"extra-uri", "wrong-key", "foreign-ca", "ca-leaf", "cert-sign-ku", "client-only-eku", "long-lived", "expired", "dns-san"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newPCAFixture(t, nil)
 			a := newPCAAuthority(t, f)
