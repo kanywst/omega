@@ -81,9 +81,11 @@ spec:
             {{- end }}
             {{- if .Values.agent.localPDP.verifyBundle }}
             {{- if not .Values.server.policyBundleSigningKeySecret }}
-            {{- fail "agent.localPDP.verifyBundle needs server.policyBundleSigningKeySecret: an agent that verifies signatures refuses every unsigned bundle" }}
+            {{- fail "agent.localPDP.verifyBundle (the default) needs server.policyBundleSigningKeySecret: an agent that verifies signatures refuses every unsigned bundle. Set the secret, or agent.localPDP.verifyBundle=false to trust bundles on TLS alone" }}
             {{- end }}
             - --policy-bundle-key=/etc/omega/agent-tls/bundle.pub
+            {{- else }}
+            - --insecure-unsigned-policy-bundles
             {{- end }}
             {{- if .Values.agent.localPDP.spool }}
             - --decision-spool=/var/lib/omega-agent/decisions.spool

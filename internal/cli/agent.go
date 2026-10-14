@@ -33,21 +33,22 @@ import (
 
 func newAgentCommand() *cobra.Command {
 	var (
-		socket       string
-		serverURL    string
-		mappings     []string
-		otlpEndpoint string
-		otlpInsecure bool
-		pdpAddr      string
-		pdpSync      time.Duration
-		pdpMaxAge    time.Duration
-		pdpBuffer    int
-		pdpRemote    bool
-		bundleKey    string
-		spoolPath    string
-		serverCA     string
-		clientCert   string
-		clientKey    string
+		socket          string
+		serverURL       string
+		mappings        []string
+		otlpEndpoint    string
+		otlpInsecure    bool
+		pdpAddr         string
+		pdpSync         time.Duration
+		pdpMaxAge       time.Duration
+		pdpBuffer       int
+		pdpRemote       bool
+		bundleKey       string
+		unsignedBundles bool
+		spoolPath       string
+		serverCA        string
+		clientCert      string
+		clientKey       string
 	)
 
 	cmd := &cobra.Command{
@@ -97,8 +98,14 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 			if bundleKey != "" && pdpAddr == "" {
 				return errors.New("--policy-bundle-key verifies the local PDP's bundles; it needs --local-pdp-addr")
 			}
+			if bundleKey != "" && unsignedBundles {
+				return errors.New("--policy-bundle-key and --insecure-unsigned-policy-bundles contradict each other")
+			}
 			if pdpAddr != "" && bundleKey == "" {
-				fmt.Fprintln(os.Stderr, "omega agent: WARN local PDP without --policy-bundle-key: bundles are trusted on TLS alone, even if the control plane signs them (ADR 0018)")
+				if !unsignedBundles {
+					return errors.New("the local PDP needs --policy-bundle-key, the public half of the control plane's --policy-bundle-signing-key; --insecure-unsigned-policy-bundles trusts bundles on TLS alone (ADR 0018)")
+				}
+				fmt.Fprintln(os.Stderr, "omega agent: WARN --insecure-unsigned-policy-bundles: bundles are trusted on TLS alone, even if the control plane signs them (ADR 0018)")
 			}
 			if pdpAddr != "" {
 				if err := checkLocalPDP(pdpAddr, pdpRemote, serverURL, serverCA, clientCert); err != nil {
@@ -190,7 +197,8 @@ ID via --map, and asks the control plane to sign a fresh CSR.`,
 	cmd.Flags().StringVar(&pdpAddr, "local-pdp-addr", "", "serve an AuthZEN evaluation endpoint on this address (e.g. 127.0.0.1:8181), deciding locally from the control plane's policy bundle and shipping every decision to its audit chain. Empty disables it.")
 	cmd.Flags().DurationVar(&pdpSync, "policy-sync-interval", 10*time.Second, "how often the local PDP re-fetches the policy bundle")
 	cmd.Flags().DurationVar(&pdpMaxAge, "policy-max-age", time.Minute, "the local PDP refuses to decide (503) when its last successful bundle sync is older than this")
-	cmd.Flags().StringVar(&bundleKey, "policy-bundle-key", "", "the control plane's bundle signing public key (PEM public key or certificate); when set, the local PDP refuses any bundle without a valid signature from it")
+	cmd.Flags().StringVar(&bundleKey, "policy-bundle-key", "", "the control plane's bundle signing public key (PEM public key or certificate); the local PDP refuses any bundle without a valid signature from it. Required with --local-pdp-addr unless --insecure-unsigned-policy-bundles")
+	cmd.Flags().BoolVar(&unsignedBundles, "insecure-unsigned-policy-bundles", false, "let the local PDP accept policy bundles without verifying a signature, trusting TLS pinned with --server-ca alone (for a control plane that does not sign bundles)")
 	cmd.Flags().StringVar(&spoolPath, "decision-spool", "", "file the local PDP writes and syncs every decision to before answering, and requeues from at start, so decisions survive an agent crash (costs one fsync per decision)")
 	cmd.Flags().BoolVar(&pdpRemote, "local-pdp-allow-remote", false, "let --local-pdp-addr bind a non-loopback address; the endpoint has no authentication, so anyone who reaches it can query policy and fill the decision buffer")
 	cmd.Flags().IntVar(&pdpBuffer, "decision-buffer", 10000, "decisions the local PDP may hold before they reach the audit chain; when full it refuses to decide (503)")
