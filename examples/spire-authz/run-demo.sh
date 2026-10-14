@@ -146,7 +146,10 @@ printf 'subjectAltName=DNS:omega,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' >"
 openssl x509 -req -in "$DEMO/omega.csr" -CA "$DEMO/demo-ca.pem" -CAkey "$DEMO/demo-ca.key" \
 	-CAcreateserial -days 1 -extfile "$DEMO/omega.ext" -out "$DEMO/omega.pem" 2>/dev/null
 openssl rand -hex 32 >"$DEMO/scim-token"
-chmod 644 "$DEMO"/*
+# Certificates are public; keys and the SCIM token stay owner-only (the
+# containers read them as root).
+chmod 644 "$DEMO"/*.pem
+chmod 600 "$DEMO"/*.key "$DEMO/scim-token"
 
 echo "[demo] starting Omega on SPIRE's trust domain (mTLS, --require-auth)"
 dc up -d --build omega >/dev/null 2>&1

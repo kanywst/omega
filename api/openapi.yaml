@@ -1897,7 +1897,7 @@ components:
         loss_id:
           type: string
           maxLength: 128
-          description: Identifies a loss report across retries, so a reader counts each loss once.
+          description: Identifies a loss report across retries, so a reader counts each loss once. At most 128 bytes (UTF-8).
         decisions:
           type: array
           maxItems: 1000
@@ -1908,6 +1908,7 @@ components:
               id:
                 type: string
                 maxLength: 128
+                description: At most 128 bytes (UTF-8).
               decided_at:
                 type: string
                 format: date-time
