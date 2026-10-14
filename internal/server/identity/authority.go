@@ -101,6 +101,12 @@ type Config struct {
 	// more trust anchors used to verify step-ca's TLS certificate.
 	// Empty falls back to the system trust store.
 	StepCACACertFile string
+
+	// UpstreamCAGrace is how long a CA that Vault PKI or step-ca stops
+	// publishing stays in the bundle Omega serves. Zero (the default) or
+	// negative turns the overlap off, so a dropped CA is untrusted at the
+	// next refresh.
+	UpstreamCAGrace time.Duration
 }
 
 // Authority is the signing + bundle interface every Omega CA backend

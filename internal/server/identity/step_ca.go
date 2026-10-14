@@ -65,6 +65,7 @@ type stepCAAuthority struct {
 	bundle    []byte
 	bundleExp time.Time
 	bundleTTL time.Duration
+	overlap   *caOverlap
 	// refreshMu serialises concurrent refreshBundle callers so a TTL
 	// expiry under load triggers one HTTP round-trip to step-ca, not
 	// N. The full lock-and-recheck dance happens in BundlePEM.
@@ -111,6 +112,7 @@ func newStepCAAuthority(local *localAuthority, cfg Config) (*stepCAAuthority, er
 		signer:           signer,
 		httpClient:       &http.Client{Timeout: defaultStepCATimeout, Transport: transport},
 		bundleTTL:        bundleTTL,
+		overlap:          newCAOverlap(upstreamGrace(cfg.UpstreamCAGrace)),
 	}
 
 	// Boot-time probe so a bad URL / TLS config / unreachable step-ca
@@ -183,7 +185,23 @@ func (a *stepCAAuthority) BundlePEM() []byte {
 	// returning nil would break every workload's mTLS handshake the
 	// moment step-ca burps.
 	if _, err := a.refreshBundle(context.Background()); err != nil {
-		return stale
+		// Re-serve from the last fetch rather than the cached bytes, so a
+		// rotated-out CA whose grace has ended is dropped even while the
+		// issuer cannot be reached.
+		served := a.overlap.serve(time.Now())
+		if served == nil {
+			served = stale
+		}
+		// Back off before the next attempt, so callers during an issuer
+		// outage are served from the cache instead of each waiting on a
+		// refresh.
+		if len(served) > 0 {
+			a.bundleMu.Lock()
+			a.bundle = served
+			a.bundleExp = time.Now().Add(min(a.bundleTTL, upstreamRefreshBackoff))
+			a.bundleMu.Unlock()
+		}
+		return served
 	}
 	a.bundleMu.RLock()
 	defer a.bundleMu.RUnlock()
@@ -224,15 +242,24 @@ func (a *stepCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	if block == nil || block.Type != "CERTIFICATE" {
 		return nil, errors.New("step-ca: /roots.pem does not begin with a CERTIFICATE block")
 	}
+	// The pinned root must be one Omega serves, and only certificates
+	// that parse are served.
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return nil, fmt.Errorf("step-ca: the first root in /roots.pem does not parse: %w", err)
+	}
 	sum := sha256.Sum256(block.Bytes)
 	rootSHA := hex.EncodeToString(sum[:])
 
+	served, err := a.overlap.update(body, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", "step-ca", err)
+	}
 	a.bundleMu.Lock()
-	a.bundle = body
+	a.bundle = served
 	a.bundleExp = time.Now().Add(a.bundleTTL)
 	a.rootSHA256 = rootSHA
 	a.bundleMu.Unlock()
-	return body, nil
+	return served, nil
 }
 
 // mintOTT builds and signs a one-time-token whose claims bind the
@@ -370,4 +397,34 @@ func (a *stepCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 		NotBefore: cert.NotBefore,
 		NotAfter:  cert.NotAfter,
 	}, nil
+}
+
+// BundleSequence advances when the issuer's CA bundle or the local JWT
+// signing CAs change.
+func (a *stepCAAuthority) BundleSequence() int64 {
+	// Refresh first, so the sequence a caller reads matches the bundle
+	// it reads next (the SPIFFE bundle endpoint reads the sequence first).
+	_ = a.BundlePEM()
+	return a.overlap.sequence() + a.localAuthority.BundleSequence() - 1
+}
+
+// SetKeptCAHook implements UpstreamCAKeeper.
+func (a *stepCAAuthority) SetKeptCAHook(h func(KeptCAEvent)) { a.overlap.setHook(h) }
+
+// DistrustCAs implements UpstreamCAKeeper. The cached bundle is replaced
+// at once, so the next caller does not wait for its TTL. It holds
+// refreshMu so a refresh already in flight cannot cache the bundle from
+// before the drop after it.
+func (a *stepCAAuthority) DistrustCAs(fps [][32]byte) int {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	n := a.overlap.distrust(fps, time.Now())
+	if n > 0 {
+		if served := a.overlap.serve(time.Now()); served != nil {
+			a.bundleMu.Lock()
+			a.bundle = served
+			a.bundleMu.Unlock()
+		}
+	}
+	return n
 }
