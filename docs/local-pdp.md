@@ -73,11 +73,14 @@ An evaluation request is capped at 64 KiB (larger ones get `413`), and queued de
 Reading the bundle and recording local decisions both need `--require-auth`, and the caller must be listed with `--decision-recorder`: a SPIFFE ID, or a prefix ending in `/` such as `spiffe://td/nodes/` for every node agent. Rows land in the audit chain as `access.evaluate.local` with the agent's SPIFFE ID as actor, apart from the server's own `access.evaluate` rows. A refused caller is audited too, and an agent that is refused keeps its decisions queued, so it fails closed once its buffer fills. If an append fails partway through a batch, the control plane reports how many it recorded and the agent resends only the rest; a batch it rejects as malformed (`400`, `413`) is halved until the rejected decision is alone, that one is dropped with an error log, and the control plane records the loss as `access.evaluate.local.dropped`, with the dropped decision ids and a loss id that stays the same across retries, so a gap is visible in the chain and counted once. After three drops in a row the agent stops dropping and fails closed instead: a control plane that rejects everything is a fault, not a bad decision. The control plane records each decision once per agent and `decision_id` (at most 128 bytes), and each loss report once per `loss_id` (at most 128 bytes), so a batch resent after a lost response, or replayed from the spool after a crash, adds nothing; it remembers ids for 30 days, so a spool replayed later than that is recorded again. A different decision resent under an id already recorded is not recorded, but leaves an `access.evaluate.local.conflict` row. A loss report also carries a SHA-256 of each dropped decision, and the agent drops at most ten per hour before it fails closed. A recorded row is the agent's claim of what it decided; the control plane checks who sent it, not that the policy would have given that answer.
 
 ```bash
+openssl ecparam -name prime256v1 -genkey -noout -out bundle.key
+openssl ec -in bundle.key -pubout -out bundle.pub
 omega server --require-auth --tls-cert ... --client-ca ... \
-  --decision-recorder spiffe://omega.local/nodes/
+  --decision-recorder spiffe://omega.local/nodes/ \
+  --policy-bundle-signing-key bundle.key
 omega agent --server https://omega:8443 --server-ca ca.pem \
   --client-cert node.pem --client-key node.key \
-  --local-pdp-addr 127.0.0.1:8181
+  --local-pdp-addr 127.0.0.1:8181 --policy-bundle-key bundle.pub
 ```
 
 The local PDP serves `POST /access/v1/evaluation` and `GET /healthz` only; batch evaluation, search and the AuthZEN metadata document stay on the control plane. When it refuses to decide it answers `503` with `Retry-After`, which AuthZEN 1.0 does not define, so treat any non-200 from it as a deny in the PEP.
