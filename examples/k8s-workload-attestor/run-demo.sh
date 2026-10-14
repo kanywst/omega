@@ -74,7 +74,7 @@ kubectl get namespace omega-system >/dev/null 2>&1 || kubectl create namespace o
 helm template omega "$REPO_ROOT/charts/omega" --namespace omega-system \
 	--set agent.k8sWorkloadAttestor.enabled=true \
 	--show-only templates/serviceaccount.yaml \
-	--show-only templates/agent-rbac.yaml | kubectl apply -f - >/dev/null
+	--show-only templates/agent-rbac.yaml | kubectl apply -n omega-system -f - >/dev/null
 AGENT_TOKEN=$(kubectl -n omega-system create token omega --duration 1h)
 docker exec -i "$NODE" sh -c 'cat > /opt/omega/kubeconfig' <<EOF
 apiVersion: v1
