@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -58,6 +59,10 @@ const (
 	// X.509 root key never sits on omega's disk; JWT-SVID signing
 	// stays local for the same reasons.
 	KindStepCA Kind = "step-ca"
+	// KindGCPCAS signs X.509-SVIDs via a Google Cloud Certificate
+	// Authority Service CA pool; the CA keys stay in Google-managed
+	// HSMs. JWT-SVID signing stays local, as for KindVaultPKI.
+	KindGCPCAS Kind = "gcp-cas"
 )
 
 // Config is the disjoint-union-style argument to New. Fields are read
@@ -101,6 +106,16 @@ type Config struct {
 	// more trust anchors used to verify step-ca's TLS certificate.
 	// Empty falls back to the system trust store.
 	StepCACACertFile string
+	// KindGCPCAS
+	GCPCASPool                string // projects/<project>/locations/<location>/caPools/<pool>
+	GCPCASEndpoint            string // API base URL, default https://privateca.googleapis.com
+	GCPCASIssuingCA           string // optional CA id pinning issuance to one CA in the pool
+	GCPCASCertificateTemplate string // optional projects/<p>/locations/<l>/certificateTemplates/<t>
+	GCPCASBundleTTL           time.Duration
+	// GCPCASTokenSource overrides Application Default Credentials as the
+	// source of the OAuth 2.0 bearer token. Nil (the default) uses ADC;
+	// tests set it to talk to a fake CAS.
+	GCPCASTokenSource oauth2.TokenSource
 }
 
 // Authority is the signing + bundle interface every Omega CA backend
@@ -198,8 +213,21 @@ func New(cfg Config) (Authority, error) {
 		}
 		local.issuerURL = issuer
 		return newStepCAAuthority(local, cfg)
+	case KindGCPCAS:
+		if cfg.Dir == "" {
+			return nil, errors.New("identity: gcp-cas backend still needs --data-dir for the local JWT signing key")
+		}
+		if cfg.GCPCASPool == "" {
+			return nil, errors.New("identity: gcp-cas backend requires GCPCASPool")
+		}
+		local, err := loadOrCreateDisk(cfg.Dir, cfg.TrustDomain)
+		if err != nil {
+			return nil, err
+		}
+		local.issuerURL = issuer
+		return newGCPCASAuthority(local, cfg)
 	default:
-		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA)
+		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA, KindGCPCAS)
 	}
 }
 
