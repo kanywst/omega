@@ -55,13 +55,14 @@ func (a *localAuthority) IssueJWTSVID(id spiffeid.ID, audience []string, ttl tim
 		ttl = maxJWTTTL
 	}
 
-	kid, err := a.JWTKeyID()
+	st := a.state.Load()
+	kid, err := keyIDOf(st.cert)
 	if err != nil {
 		return nil, err
 	}
 
 	signer, err := jose.NewSigner(
-		jose.SigningKey{Algorithm: jose.ES256, Key: a.key},
+		jose.SigningKey{Algorithm: jose.ES256, Key: st.key},
 		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", kid),
 	)
 	if err != nil {
@@ -105,42 +106,31 @@ func (a *localAuthority) IssueJWTSVID(id spiffeid.ID, audience []string, ttl tim
 	}, nil
 }
 
-// JWTKeyID returns a deterministic key ID derived from the CA public key
-// (first 16 hex chars of SHA-256 over the SPKI DER). Stable as long as
-// the CA key is stable.
+// JWTKeyID returns the active CA's key ID: the first 8 bytes of SHA-256
+// over the SPKI DER, base64url. Stable as long as the CA key is stable.
 func (a *localAuthority) JWTKeyID() (string, error) {
-	pub, ok := a.cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return "", errors.New("ca key is not ECDSA (only ES256 is supported)")
-	}
-	der, err := marshalECPublicKey(pub)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.Sum256(der)
-	return base64.RawURLEncoding.EncodeToString(h[:8]), nil
+	return keyIDOf(a.state.Load().cert)
 }
 
-// JWTBundle returns a JWKS containing the CA public key, suitable for
-// verifying JWT-SVIDs issued by this authority. Format follows SPIFFE
-// JWT bundle conventions (RFC 7517 JWKS).
+// JWTBundle returns a JWKS with every trusted CA's public key (active,
+// prepared and previous), so JWT-SVIDs verify across a rotation. Format
+// follows SPIFFE JWT bundle conventions (RFC 7517 JWKS).
 func (a *localAuthority) JWTBundle() ([]byte, error) {
-	pub, ok := a.cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, errors.New("ca key is not ECDSA")
-	}
-	kid, err := a.JWTKeyID()
-	if err != nil {
-		return nil, err
-	}
-	point, err := ecPointBytes(pub)
-	if err != nil {
-		return nil, err
-	}
-	jwk := struct {
-		Keys []map[string]string `json:"keys"`
-	}{
-		Keys: []map[string]string{{
+	var keys []map[string]string
+	for _, c := range a.state.Load().trusted {
+		pub, ok := c.PublicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return nil, errors.New("ca key is not ECDSA")
+		}
+		kid, err := keyIDOf(c)
+		if err != nil {
+			return nil, err
+		}
+		point, err := ecPointBytes(pub)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, map[string]string{
 			"kty": "EC",
 			"crv": "P-256",
 			"alg": "ES256",
@@ -148,9 +138,30 @@ func (a *localAuthority) JWTBundle() ([]byte, error) {
 			"kid": kid,
 			"x":   base64.RawURLEncoding.EncodeToString(point[1:33]),
 			"y":   base64.RawURLEncoding.EncodeToString(point[33:65]),
-		}},
+		})
 	}
-	return json.Marshal(jwk)
+	return json.Marshal(map[string]any{"keys": keys})
+}
+
+// verificationKey picks the trusted CA key a token names in its kid,
+// or the active one when it names none.
+func (a *localAuthority) verificationKey(parsed *jwt.JSONWebToken) (*ecdsa.PublicKey, error) {
+	st := a.state.Load()
+	kid := ""
+	if len(parsed.Headers) > 0 {
+		kid = parsed.Headers[0].KeyID
+	}
+	for _, c := range st.trusted {
+		k, err := keyIDOf(c)
+		if err != nil {
+			continue
+		}
+		if kid == "" && c == st.cert || kid == k {
+			pub, _ := c.PublicKey.(*ecdsa.PublicKey)
+			return pub, nil
+		}
+	}
+	return nil, fmt.Errorf("jwt key %q is not a trusted CA key", kid)
 }
 
 // ValidateJWTSVID checks the signature, expiry, and audience of a token.
@@ -167,8 +178,12 @@ func (a *localAuthority) ValidateJWTSVID(token string, audience string) (spiffei
 	if err != nil {
 		return spiffeid.ID{}, fmt.Errorf("parse jwt: %w", err)
 	}
+	pub, err := a.verificationKey(parsed)
+	if err != nil {
+		return spiffeid.ID{}, err
+	}
 	var claims jwt.Claims
-	if err := parsed.Claims(a.cert.PublicKey, &claims); err != nil {
+	if err := parsed.Claims(pub, &claims); err != nil {
 		return spiffeid.ID{}, fmt.Errorf("verify jwt: %w", err)
 	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
@@ -200,12 +215,16 @@ func (a *localAuthority) ParseJWTSVIDClaims(token string) (spiffeid.ID, map[stri
 	if err != nil {
 		return spiffeid.ID{}, nil, fmt.Errorf("parse jwt: %w", err)
 	}
+	pub, err := a.verificationKey(parsed)
+	if err != nil {
+		return spiffeid.ID{}, nil, err
+	}
 	var raw map[string]any
-	if err := parsed.Claims(a.cert.PublicKey, &raw); err != nil {
+	if err := parsed.Claims(pub, &raw); err != nil {
 		return spiffeid.ID{}, nil, fmt.Errorf("verify jwt: %w", err)
 	}
 	var std jwt.Claims
-	if err := parsed.Claims(a.cert.PublicKey, &std); err != nil {
+	if err := parsed.Claims(pub, &std); err != nil {
 		return spiffeid.ID{}, nil, fmt.Errorf("verify jwt: %w", err)
 	}
 	if err := std.ValidateWithLeeway(jwt.Expected{Time: time.Now()}, 30*time.Second); err != nil {

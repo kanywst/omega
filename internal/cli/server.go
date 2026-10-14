@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -335,7 +336,8 @@ func newServerCommand() *cobra.Command {
 			// Both reloads are atomic and fail-closed — a bad file leaves
 			// the previous material installed.
 			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
-			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "") && len(sighupSignals) > 0 {
+			caReloader, _ := ca.(identity.CAReloader)
+			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "" || caReloader != nil) && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)
 				signal.Notify(hup, sighupSignals...)
 				go func() {
@@ -354,6 +356,20 @@ func newServerCommand() *cobra.Command {
 							}
 							if reloadUpstream != nil {
 								reloadUpstream()
+							}
+							// The built-in CA's directory, after an
+							// `omega ca prepare|activate|retire`.
+							if caReloader != nil {
+								changed, err := caReloader.ReloadCA()
+								switch {
+								case err != nil:
+									fmt.Fprintf(os.Stderr, "omega server: CA reload failed, keeping the previous CAs: %v\n", err)
+									recordCAReloadFailure(ctx, store, err)
+								case changed:
+									fed.SetOwnBundle(ca.BundlePEM())
+									fmt.Fprintf(os.Stderr, "omega server: CAs reloaded\n")
+									recordCAReload(ctx, store, ca)
+								}
 							}
 							// Reload the Cedar policies too, so local
 							// evaluators pick up a new bundle revision
@@ -1224,4 +1240,28 @@ func checkSCIMTemplate(tmpl, trustDomain string) error {
 		}
 	}
 	return nil
+}
+
+// recordCAReload appends the CA set the server now trusts to the audit
+// chain, so a rotation step is on record with the active key and time.
+func recordCAReload(ctx context.Context, store *storage.Store, ca identity.Authority) {
+	active, _ := ca.JWTKeyID()
+	var seq int64
+	if s, ok := ca.(identity.BundleSequencer); ok {
+		seq = s.BundleSequence()
+	}
+	payload, _ := json.Marshal(map[string]any{"active_kid": active, "trusted_cas": strings.Count(string(ca.BundlePEM()), "BEGIN CERTIFICATE"), "spiffe_sequence": seq})
+	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.reload", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
+		fmt.Fprintf(os.Stderr, "omega server: could not record the CA reload in the audit chain: %v\n", err)
+	}
+}
+
+// recordCAReloadFailure records a rejected CA reload: a bad key swap is
+// the case most worth a trace. On a replica that is not the leader the
+// append is refused and only the log keeps it.
+func recordCAReloadFailure(ctx context.Context, store *storage.Store, cause error) {
+	payload, _ := json.Marshal(map[string]any{"error": cause.Error()})
+	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.reload", Actor: "omega-server", Decision: "error", Payload: payload}); err != nil {
+		fmt.Fprintf(os.Stderr, "omega server: could not record the failed CA reload in the audit chain: %v\n", err)
+	}
 }
