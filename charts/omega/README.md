@@ -31,14 +31,46 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `policy.inline`                           | `{}`                    | Inline `*.cedar` files via ConfigMap                                                                                  |
 | `agent.uidMap`                            | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                                      |
 | `agent.hostSocketPath`                    | `/run/omega`            | hostPath for the workload socket; must be under `/run/omega*` or `/var/run/omega*`                                    |
+| `agent.k8sWorkloadAttestor.enabled`       | `false`                 | Identify pod workloads by their pod (dev / eval); `hostPID`, own ServiceAccount with `list` on pods                   |
 | `agent.localPDP.enabled`                  | `false`                 | Decide on the node (`--local-pdp-addr`)                                                                               |
 | `agent.localPDP.tlsSecret`                | `""`                    | Secret with `ca.crt`, `tls.crt`, `tls.key` for the agent's SVID                                                       |
 | `server.policyBundleSigningKeySecret`     | `""`                    | Secret with `bundle.key` (ECDSA P-256) that signs policy bundles                                                      |
-| `agent.localPDP.verifyBundle`             | `false`                 | Verify bundle signatures with `bundle.pub` from `agent.localPDP.tlsSecret`                                            |
+| `agent.localPDP.verifyBundle`             | `true`                  | Verify bundle signatures with `bundle.pub` from `agent.localPDP.tlsSecret`                                            |
 | `agent.localPDP.spool`                    | `false`                 | Spool decisions to an emptyDir                                                                                        |
 | `server.persistence.size`                 | `1Gi`                   | PVC for SQLite data dir                                                                                               |
 | `csi.enabled`                             | `false`                 | Deploy the SPIFFE CSI driver so pods mount the Workload API with `csi.spiffe.io` (privileged, cluster-wide CSIDriver) |
 | `agent.nodeSelector`, `agent.tolerations` | `{}`, `[]`              | Where the agent runs; the CSI driver follows                                                                          |
+| `server.podLabels` | `{}` | Extra server pod labels, e.g. `azure.workload.identity/use: "true"` |
+| `server.ca.backend` | `disk` | `--ca-backend`; `disk` is for evaluation |
+| `server.ca.azureKeyVault.url` / `.key` / `.keyVersion` | `""` | Key Vault or Managed HSM URL and the EC P-256 key that signs as the CA (`backend: azure-keyvault`) |
+| `server.ca.azureKeyVault.caCertSecret` | `""` | Secret with `ca.crt`, the CA certificate for the key; set it with more than one replica |
+| `server.ca.azureKeyVault.credentialsSecret` | `""` | Secret loaded as `AZURE_*` environment variables for a service principal; leave empty for workload or managed identity, since a client secret takes precedence over both |
+
+## CA in Azure Key Vault
+
+With `server.ca.backend: azure-keyvault` the CA private key stays in Azure Key Vault (or Managed HSM) and the server signs every X.509-SVID and JWT-SVID through it. Create an EC P-256 key and give the server's identity the `sign` and `get` key permissions (the `Key Vault Crypto User` role):
+
+```bash
+az keyvault key create --vault-name myvault --name omega-ca --kty EC --curve P-256 --ops sign verify
+```
+
+On AKS with workload identity, annotate the service account and label the pod:
+
+```yaml
+serviceAccount:
+  annotations:
+    azure.workload.identity/client-id: "<client id>"
+server:
+  podLabels:
+    azure.workload.identity/use: "true"
+  ca:
+    backend: azure-keyvault
+    azureKeyVault:
+      url: https://myvault.vault.azure.net
+      key: omega-ca
+```
+
+Without `caCertSecret` the server self-signs a CA certificate through Key Vault on first start and keeps it in its data volume (`ca/azure-keyvault-ca.crt`). With more than one replica, copy that file into a Secret and set `caCertSecret`, and pin `keyVersion`, so every replica serves the same CA and signs with the same key version; the chart refuses to render otherwise. See [docs/ca-azure-keyvault.md](../../docs/ca-azure-keyvault.md).
 
 ## Verify
 
@@ -52,7 +84,7 @@ Then issue an AuthZEN evaluation as shown in the post-install notes.
 ## Known limitations
 
 - Single-replica server out of the box (SQLite). Postgres-backed HA is available behind `--db postgres://...` plus the leader-election flags; the chart ships the SQLite default.
-- Agent uses UID-based attestation. K8s SAT projection is a planned follow-up.
+- Agent uses UID-based attestation by default. `agent.k8sWorkloadAttestor.enabled` identifies pod workloads by their pod instead, for development and evaluation; it needs a server without `--require-auth` and is not a production substitute for SPIRE ([ADR 0020](../../docs/adr/0020-agent-side-kubernetes-workload-attestor.md)).
 - No CRDs / Operator wiring in this chart.
 
 ## SPIFFE CSI driver

@@ -68,6 +68,16 @@ func (b builtinSource) BundleSequence() int64 {
 	return 1
 }
 
+// UpstreamCAKeeper is an issuing authority backed by an external issuer
+// (Vault PKI, step-ca) that keeps a CA the issuer rotated out trusted for
+// --upstream-ca-grace. SetKeptCAHook reports every change to that kept
+// set; DistrustCAs replaces the operator's list of CAs never to keep,
+// dropping any kept one at once, and returns how many it dropped.
+type UpstreamCAKeeper interface {
+	SetKeptCAHook(func(KeptCAEvent))
+	DistrustCAs([][32]byte) int
+}
+
 // CAReloader is an issuing authority whose CAs can be rotated at runtime
 // by re-reading its directory (see rotation.go).
 type CAReloader interface {

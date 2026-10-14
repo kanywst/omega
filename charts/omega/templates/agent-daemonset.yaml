@@ -18,8 +18,13 @@ spec:
 {{ include "omega.commonLabels" . | indent 8 }}
         app.kubernetes.io/component: agent
     spec:
-      serviceAccountName: {{ include "omega.serviceAccountName" . }}
+      serviceAccountName: {{ include "omega.agentServiceAccountName" . }}
       hostNetwork: {{ .Values.agent.hostNetwork }}
+      {{- if .Values.agent.k8sWorkloadAttestor.enabled }}
+      # The kernel reports a peer's PID only to a process in the same
+      # PID namespace or an ancestor; the attestor reads its cgroup.
+      hostPID: true
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.agent.nodeSelector }}
@@ -71,6 +76,12 @@ spec:
             {{- range .Values.agent.uidMap }}
             - {{ printf "--map=%s" . | quote }}
             {{- end }}
+            {{- with .Values.agent.k8sWorkloadAttestor }}
+            {{- if .enabled }}
+            - --k8s-workload-attestor
+            - {{ printf "--k8s-workload-svid-template=%s" (.svidTemplate | default (printf "spiffe://%s/k8s/{namespace}/{serviceaccount}" $.Values.server.trustDomain)) | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.agent.localPDP.enabled }}
             - --local-pdp-addr={{ .Values.agent.localPDP.addr }}
             - --server-ca=/etc/omega/agent-tls/ca.crt
@@ -81,9 +92,11 @@ spec:
             {{- end }}
             {{- if .Values.agent.localPDP.verifyBundle }}
             {{- if not .Values.server.policyBundleSigningKeySecret }}
-            {{- fail "agent.localPDP.verifyBundle needs server.policyBundleSigningKeySecret: an agent that verifies signatures refuses every unsigned bundle" }}
+            {{- fail "agent.localPDP.verifyBundle (the default) needs server.policyBundleSigningKeySecret: an agent that verifies signatures refuses every unsigned bundle. Set the secret, or agent.localPDP.verifyBundle=false to trust bundles on TLS alone" }}
             {{- end }}
             - --policy-bundle-key=/etc/omega/agent-tls/bundle.pub
+            {{- else }}
+            - --insecure-unsigned-policy-bundles
             {{- end }}
             {{- if .Values.agent.localPDP.spool }}
             - --decision-spool=/var/lib/omega-agent/decisions.spool
@@ -92,6 +105,13 @@ spec:
             {{- range .Values.agent.extraArgs }}
             - {{ . | quote }}
             {{- end }}
+          {{- if .Values.agent.k8sWorkloadAttestor.enabled }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          {{- end }}
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
           volumeMounts:

@@ -49,3 +49,15 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 default
 {{- end -}}
 {{- end -}}
+
+{{/*
+The agent runs under its own ServiceAccount when the Kubernetes workload
+attestor is on, so its cluster-wide pod read does not reach the server.
+*/}}
+{{- define "omega.agentServiceAccountName" -}}
+{{- if .Values.agent.k8sWorkloadAttestor.enabled -}}
+{{ include "omega.agentName" . }}
+{{- else -}}
+{{ include "omega.serviceAccountName" . }}
+{{- end -}}
+{{- end -}}

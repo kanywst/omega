@@ -10,9 +10,26 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ### Added
 
-- **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
-- **SPIFFE CSI driver in the Helm chart.** `csi.enabled` deploys the upstream SPIFFE CSI driver against the Omega agent's socket directory, so pods mount the Workload API with a `csi.spiffe.io` ephemeral volume instead of a hostPath. `examples/kind-csi` checks it end to end in kind, in CI.
+- **Agent-side Kubernetes workload attestor.** `omega agent --k8s-workload-attestor` (Linux) identifies a Workload API peer that runs in a pod on the node by its pod: the peer PID's cgroup names the pod and container, kube-apiserver names the namespace, service account and pod, and `--k8s-workload-svid-template` renders the SPIFFE ID with the server's `--k8s-svid-template` placeholders. Host processes keep the `--map` UID mapping; a pod process never falls back to it. Off by default and meant for the self-issued development and evaluation path, not as a production substitute for SPIRE. Helm: `agent.k8sWorkloadAttestor` (turns on `hostPID` and runs the agent under its own ServiceAccount with `list` on pods). See [ADR 0020](docs/adr/0020-agent-side-kubernetes-workload-attestor.md) and `examples/k8s-workload-attestor/`.
 - **Google Cloud CAS backend.** `--ca-backend=gcp-cas` signs X.509-SVIDs through a Certificate Authority Service CA pool (`--ca-gcp-cas-pool`, plus optional `--ca-gcp-cas-endpoint`, `--ca-gcp-cas-issuing-ca` and `--ca-gcp-cas-certificate-template`), authenticating with Application Default Credentials; the bundle comes from the pool's CA certificates and JWT-SVIDs stay locally signed. The Helm chart gains `server.ca.backend` and `server.ca.gcpCas`. See [docs/ca-gcp-cas.md](docs/ca-gcp-cas.md).
+- **CA key in Azure Key Vault.** `--ca-backend=azure-keyvault` (`--ca-azure-keyvault-url`, `-key`, `-key-version`, `-ca-cert`) keeps the CA private key in Azure Key Vault or Managed HSM: Omega builds X.509-SVIDs and JWT-SVIDs itself and signs both through the key's `sign` operation (EC P-256), one round trip per SVID. The CA certificate is self-signed through Key Vault at first start or supplied as a file; credentials come from a service principal, workload identity or a managed identity. The Helm chart gains `server.ca` and `server.podLabels`. See [ADR 0021](docs/adr/0021-azure-key-vault-remote-signer.md) and [docs/ca-azure-keyvault.md](docs/ca-azure-keyvault.md).
+
+## [0.9.0] - 2026-10-15
+
+Rotates the built-in CA at runtime, carries trust across Vault PKI and step-ca rotations on request, adds the SPIFFE CSI driver to the Helm chart, and makes the local PDP verify policy bundle signatures by default.
+
+A minor with breaking changes: an agent with a local PDP now needs `--policy-bundle-key` (or `--insecure-unsigned-policy-bundles`), and the chart constrains `agent.hostSocketPath`. See Changed.
+
+### Added
+
+- **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
+- **Overlap across Vault PKI and step-ca rotations (opt-in).** With `--upstream-ca-grace` (for example `24h`; never past the CA's expiry), a CA the external issuer stops publishing stays in Omega's served bundle, locally and to federated peers, so SVIDs it signed keep verifying through the rotation, and `spiffe_sequence` advances when the issuer's bundle changes. It is off by default, since Omega cannot tell a rotation from a revocation. Every change to the kept set is recorded in the audit chain as `ca.upstream`, and `--upstream-ca-distrust` (a fingerprint list re-read on `SIGHUP`) drops a kept CA at once after a compromise. The served bundle now holds only the certificates Omega can parse, re-encoded; a chain member Go cannot parse is dropped with a warning instead of passed through. Federated peers now read the Vault PKI or step-ca bundle live, so an issuer rotation reaches them without a `SIGHUP`.
+- **SPIFFE CSI driver in the Helm chart.** `csi.enabled` deploys the upstream SPIFFE CSI driver against the Omega agent's socket directory, so pods mount the Workload API with a `csi.spiffe.io` ephemeral volume instead of a hostPath. `examples/kind-csi` checks it end to end in kind, in CI.
+
+### Changed
+
+- **Breaking: the local PDP verifies bundle signatures by default.** `omega agent --local-pdp-addr` now refuses to start without `--policy-bundle-key`; pass `--insecure-unsigned-policy-bundles` to keep trusting bundles on TLS alone. In the Helm chart `agent.localPDP.verifyBundle` defaults to `true` and needs `server.policyBundleSigningKeySecret`; set it to `false` for the previous behaviour.
+- **Breaking (Helm): stricter agent socket directory.** `agent.hostSocketPath` must be under `/run/omega*` or `/var/run/omega*`, because an init container changes its owner and mode on every node. That init container runs as uid 0 with only `CAP_CHOWN`, so a cluster that enforces `runAsNonRoot` on every container rejects the agent pod.
 
 ### Fixed
 
@@ -913,7 +930,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/kanywst/omega/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kanywst/omega/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kanywst/omega/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kanywst/omega/compare/v0.5.0...v0.6.0

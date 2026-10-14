@@ -31,7 +31,7 @@ Spec versions audited:
 
 | Section | Requirement | Status | omega notes |
 | --- | --- | --- | --- |
-| 3 | Workload API is a gRPC service over a UDS | implemented | `omega agent` serves `SpiffeWorkloadAPI` over `--socket` (default `/tmp/omega-agent.sock`); `peercred` attestor maps caller UID to SPIFFE ID |
+| 3 | Workload API is a gRPC service over a UDS | implemented | `omega agent` serves `SpiffeWorkloadAPI` over `--socket` (default `/tmp/omega-agent.sock`); `peercred` attestor maps caller UID to SPIFFE ID; on Linux `--k8s-workload-attestor` maps a pod's process to its pod's SPIFFE ID |
 | 4.1 | `FetchX509SVID` streaming RPC | implemented | `internal/agent/workloadapi/server.go` |
 | 4.2 | `FetchX509Bundles` streaming RPC | implemented | streams updates when the local trust bundle changes |
 | 4.3 | `FetchJWTSVID` unary RPC with audience | implemented | forwards to the control plane's `POST /v1/svid/jwt` |

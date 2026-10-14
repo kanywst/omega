@@ -19,6 +19,9 @@ spec:
       labels:
 {{ include "omega.commonLabels" . | indent 8 }}
         app.kubernetes.io/component: server
+        {{- with .Values.server.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "omega.serviceAccountName" . }}
       securityContext:
@@ -38,9 +41,6 @@ spec:
             - --http-addr={{ .Values.server.httpAddr }}
             - --trust-domain={{ .Values.server.trustDomain }}
             - --data-dir={{ .Values.server.dataDir }}
-            {{- if ne .Values.server.ca.backend "disk" }}
-            - --ca-backend={{ .Values.server.ca.backend }}
-            {{- end }}
             {{- if eq .Values.server.ca.backend "gcp-cas" }}
             {{- with .Values.server.ca.gcpCas }}
             - --ca-gcp-cas-pool={{ required "server.ca.gcpCas.pool is required when server.ca.backend is gcp-cas" .pool }}
@@ -70,6 +70,26 @@ spec:
             {{- range .Values.server.scimProviders }}
             - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
             {{- end }}
+            {{- $ca := .Values.server.ca }}
+            {{- if not (has $ca.backend (list "disk" "gcp-cas" "azure-keyvault")) }}
+            {{- fail (printf "server.ca.backend %q is not configurable through the chart (supported: disk, gcp-cas, azure-keyvault); use server.extraArgs for other backends" $ca.backend) }}
+            {{- end }}
+            {{- if ne $ca.backend "disk" }}
+            - --ca-backend={{ $ca.backend }}
+            {{- end }}
+            {{- if eq $ca.backend "azure-keyvault" }}
+            {{- if and (gt (int .Values.server.replicas) 1) (not (and $ca.azureKeyVault.caCertSecret $ca.azureKeyVault.keyVersion)) }}
+            {{- fail "server.ca.azureKeyVault.caCertSecret and keyVersion are required when server.replicas > 1, so every replica serves the same CA and signs with the same key version" }}
+            {{- end }}
+            - --ca-azure-keyvault-url={{ required "server.ca.azureKeyVault.url is required with server.ca.backend=azure-keyvault" $ca.azureKeyVault.url }}
+            - --ca-azure-keyvault-key={{ required "server.ca.azureKeyVault.key is required with server.ca.backend=azure-keyvault" $ca.azureKeyVault.key }}
+            {{- with $ca.azureKeyVault.keyVersion }}
+            - --ca-azure-keyvault-key-version={{ . }}
+            {{- end }}
+            {{- if $ca.azureKeyVault.caCertSecret }}
+            - --ca-azure-keyvault-ca-cert=/etc/omega/azure-keyvault/ca.crt
+            {{- end }}
+            {{- end }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}
@@ -77,6 +97,11 @@ spec:
           env:
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /etc/omega/gcp-cas/credentials.json
+          {{- end }}
+          {{- if and (eq .Values.server.ca.backend "azure-keyvault") .Values.server.ca.azureKeyVault.credentialsSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.server.ca.azureKeyVault.credentialsSecret }}
           {{- end }}
           ports:
             - name: http
@@ -119,12 +144,18 @@ spec:
               mountPath: /etc/omega/scim/{{ $p.name }}
               readOnly: true
             {{- end }}
+            {{- if and (eq .Values.server.ca.backend "azure-keyvault") .Values.server.ca.azureKeyVault.caCertSecret }}
+            - name: azure-keyvault-ca
+              mountPath: /etc/omega/azure-keyvault
+              readOnly: true
+            {{- end }}
       {{- $hasPolicy := and .Values.policy.inline (gt (len .Values.policy.inline) 0) .Values.server.policyDir -}}
       {{- $hasEmpty := not .Values.server.persistence.enabled -}}
       {{- $hasSCIM := gt (len .Values.server.scimProviders) 0 -}}
       {{- $hasSigning := .Values.server.policyBundleSigningKeySecret -}}
       {{- $hasGCPCAS := and (eq .Values.server.ca.backend "gcp-cas") .Values.server.ca.gcpCas.credentialsSecret -}}
-      {{- if or $hasPolicy $hasEmpty $hasSCIM $hasSigning $hasGCPCAS }}
+      {{- $hasAzureCA := and (eq .Values.server.ca.backend "azure-keyvault") .Values.server.ca.azureKeyVault.caCertSecret -}}
+      {{- if or $hasPolicy $hasEmpty $hasSCIM $hasSigning $hasGCPCAS $hasAzureCA }}
       volumes:
         {{- if $hasPolicy }}
         - name: policy
@@ -158,6 +189,14 @@ spec:
             items:
               - key: token
                 path: token
+        {{- end }}
+        {{- if $hasAzureCA }}
+        - name: azure-keyvault-ca
+          secret:
+            secretName: {{ .Values.server.ca.azureKeyVault.caCertSecret }}
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}
       {{- end }}
   {{- if .Values.server.persistence.enabled }}

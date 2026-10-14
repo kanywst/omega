@@ -10,34 +10,21 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.8.0)
+## Now (next release, post-0.9.0)
 
-Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 0018](docs/adr/0018-signed-bundles-and-decision-spool.md)) shipped in 0.8.0.
+Nothing is committed yet. Runtime rotation of the built-in CA ([ADR 0019](docs/adr/0019-runtime-ca-rotation.md)), the opt-in overlap across Vault PKI and step-ca rotations, and the SPIFFE CSI driver in the Helm chart shipped in 0.9.0.
 
 ## Next (3-6 months)
 
-- step-ca and Vault PKI rotation handling (today they serve a
-  stale bundle on transient errors). The disk CA rotates at runtime
-  since [ADR 0019](docs/adr/0019-runtime-ca-rotation.md).
+Nothing is queued here; the items below are the next candidates.
 
 ## Later (6-12 months)
 
-- Agent-side Kubernetes workload attestor (cgroup-based pod
-  introspection). The server-side `POST /v1/attest/k8s` endpoint
-  has shipped (TokenReview-backed); the SPIRE-style "agent attests
-  workloads by inspecting `/proc/<pid>/cgroup` then calling
-  kube-apiserver" path is the remaining bit. Demoted from Now in
-  October 2026: it reimplements what a SPIRE agent's k8s workload
-  attestor already does, and the project's direction is to consume an
-  upstream SPIFFE trust domain rather than to compete with its issuing
-  and attestation side. It stays on the list for the self-issued
-  dev / eval path, not as a production substitute for SPIRE.
-
-- Cloud HSM / KMS-backed CA upstream plugins (AWS Private CA,
-  Azure Key Vault). The interface seam is in place
-  ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and three
+- Cloud HSM / KMS-backed CA upstream plugins (AWS Private CA).
+  The interface seam is in place
+  ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and four
   non-disk backends have shipped (`--ca-backend=vault-pki`,
-  `--ca-backend=step-ca` and `--ca-backend=gcp-cas`); the remaining backends follow the same shape
+  `--ca-backend=step-ca`, `--ca-backend=gcp-cas` and `--ca-backend=azure-keyvault`); the remaining backends follow the same shape
   (one `Kind` constant + one `Authority` impl + one `identity.New`
   switch case + tests against a fake HTTP backend), with
   [`docs/ca-plugin-guide.md`](docs/ca-plugin-guide.md) as the

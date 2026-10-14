@@ -1,10 +1,10 @@
 // Package workloadapi implements the SPIFFE Workload API server side
 // that runs inside `omega agent`.
 //
-// X509: FetchX509SVID attests the peer via UID, looks up the SPIFFE ID
-// from the agent's mapping, and serves an X.509-SVID. The first call
-// hits the control plane to issue a fresh certificate; subsequent calls
-// are served from a per-UID cache. The stream stays open and sends a
+// X509: FetchX509SVID attests the peer (through the optional workload
+// attestor, else via its UID and the agent's mapping) and serves an
+// X.509-SVID. The first call hits the control plane to issue a fresh
+// certificate; subsequent calls are served from a per-identity cache. The stream stays open and sends a
 // new SVID at the cert's mid-life refresh point.
 //
 // JWT: FetchJWTSVID forwards an audience-bound JWT-SVID issuance
@@ -47,9 +47,16 @@ import (
 )
 
 // Mapping maps a peer UID to the SPIFFE ID the agent will request on
-// its behalf. Attestor plugins (K8s SAT, process info, etc.) are
-// planned to replace this in a future iteration.
+// its behalf.
 type Mapping map[uint32]string
+
+// WorkloadAttestor resolves a peer process to the SPIFFE ID the agent
+// requests on its behalf, ahead of the UID mapping. ok is false when
+// the process is outside what the attestor covers (a host process for
+// the Kubernetes attestor), and the UID mapping then applies.
+type WorkloadAttestor interface {
+	Attest(ctx context.Context, pid int32) (spiffeID string, ok bool, err error)
+}
 
 // svidEntry is one cached, kernel-attested SVID for a UID.
 type svidEntry struct {
@@ -83,13 +90,20 @@ const jwksCacheTTL = time.Minute
 
 type Server struct {
 	workloadpb.UnimplementedSpiffeWorkloadAPIServer
-	serverURL  string
-	mapping    Mapping
+	serverURL string
+	mapping   Mapping
+	attestor  WorkloadAttestor
+	// deniedErr tells which attestor errors refuse the workload
+	// (PermissionDenied) rather than report a transient failure.
+	deniedErr  error
 	httpClient *http.Client
 	now        func() time.Time
 
+	// cache holds one SVID per attested identity: "uid:<n>" for the UID
+	// mapping, "id:<spiffe-id>" for the workload attestor, whose
+	// workloads with the same SPIFFE ID share one SVID.
 	mu    sync.Mutex
-	cache map[uint32]*svidEntry
+	cache map[string]*svidEntry
 
 	// jwksMu guards `jwks`. Released across the control-plane fetch
 	// in cachedJWKS, mirroring the getOrRefresh pattern below: the
@@ -129,8 +143,39 @@ func NewServer(serverURL string, mapping Mapping) *Server {
 		// call to the control plane, so issuance shows as one trace.
 		httpClient: &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		now:        time.Now,
-		cache:      map[uint32]*svidEntry{},
+		cache:      map[string]*svidEntry{},
 	}
+}
+
+// WithWorkloadAttestor consults a ahead of the UID mapping for every
+// peer. Errors that wrap denied are answered with PermissionDenied,
+// any other with Unavailable.
+func (s *Server) WithWorkloadAttestor(a WorkloadAttestor, denied error) *Server {
+	s.attestor = a
+	s.deniedErr = denied
+	return s
+}
+
+// resolve attests the peer and returns its cache key and SPIFFE ID.
+func (s *Server) resolve(ctx context.Context, creds attestor.Creds) (key, spiffeID string, err error) {
+	if s.attestor != nil {
+		id, ok, err := s.attestor.Attest(ctx, creds.PID)
+		if err != nil {
+			code := codes.Unavailable
+			if s.deniedErr != nil && errors.Is(err, s.deniedErr) {
+				code = codes.PermissionDenied
+			}
+			return "", "", status.Errorf(code, "attest pid=%d: %v", creds.PID, err)
+		}
+		if ok {
+			return "id:" + id, id, nil
+		}
+	}
+	id, ok := s.mapping[creds.UID]
+	if !ok {
+		return "", "", status.Errorf(codes.PermissionDenied, "no SVID mapping for uid=%d", creds.UID)
+	}
+	return fmt.Sprintf("uid:%d", creds.UID), id, nil
 }
 
 func (s *Server) FetchX509SVID(_ *workloadpb.X509SVIDRequest, stream workloadpb.SpiffeWorkloadAPI_FetchX509SVIDServer) error {
@@ -139,13 +184,13 @@ func (s *Server) FetchX509SVID(_ *workloadpb.X509SVIDRequest, stream workloadpb.
 	if err != nil {
 		return err
 	}
-	spiffeID, ok := s.mapping[creds.UID]
-	if !ok {
-		return status.Errorf(codes.PermissionDenied, "no SVID mapping for uid=%d", creds.UID)
+	key, spiffeID, err := s.resolve(ctx, creds)
+	if err != nil {
+		return err
 	}
 
 	for {
-		entry, err := s.getOrRefresh(ctx, creds.UID, spiffeID)
+		entry, err := s.getOrRefresh(ctx, key, spiffeID)
 		if err != nil {
 			return err
 		}
@@ -195,12 +240,12 @@ func (s *Server) FetchJWTSVID(ctx context.Context, req *workloadpb.JWTSVIDReques
 	if err != nil {
 		return nil, err
 	}
-	spiffeID, ok := s.mapping[creds.UID]
-	if !ok {
-		return nil, status.Errorf(codes.PermissionDenied, "no SVID mapping for uid=%d", creds.UID)
+	key, spiffeID, err := s.resolve(ctx, creds)
+	if err != nil {
+		return nil, err
 	}
 	if req.SpiffeId != "" && req.SpiffeId != spiffeID {
-		return nil, status.Errorf(codes.PermissionDenied, "spiffe_id %q is not assigned to uid=%d", req.SpiffeId, creds.UID)
+		return nil, status.Errorf(codes.PermissionDenied, "spiffe_id %q is not assigned to this workload", req.SpiffeId)
 	}
 	if len(req.Audience) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "audience is required")
@@ -208,7 +253,7 @@ func (s *Server) FetchJWTSVID(ctx context.Context, req *workloadpb.JWTSVIDReques
 	// RFC 8705: bind the JWT-SVID to the same X.509-SVID the workload
 	// will present over mTLS. We make sure the cert is cached so the
 	// workload's first call (X.509 or JWT) primes the entry.
-	entry, err := s.getOrRefresh(ctx, creds.UID, spiffeID)
+	entry, err := s.getOrRefresh(ctx, key, spiffeID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,16 +330,16 @@ func (s *Server) ValidateJWTSVID(ctx context.Context, req *workloadpb.ValidateJW
 	}, nil
 }
 
-// getOrRefresh returns a non-stale SVID for the (uid, spiffeID) pair,
+// getOrRefresh returns a non-stale SVID for the (key, spiffeID) pair,
 // reissuing through the control plane if the cached one is missing or
 // past its refresh time. The cache lock is released across the network
-// call so a slow control plane doesn't block other UIDs; the cost is
+// call so a slow control plane doesn't block other workloads; the cost is
 // that two concurrent requests for the same fresh-needed entry may
 // both hit the control plane. Acceptable trade-off given how rare a
-// concurrent miss for the same uid is in practice.
-func (s *Server) getOrRefresh(ctx context.Context, uid uint32, spiffeID string) (*svidEntry, error) {
+// concurrent miss for the same key is in practice.
+func (s *Server) getOrRefresh(ctx context.Context, cacheKey, spiffeID string) (*svidEntry, error) {
 	s.mu.Lock()
-	if entry, ok := s.cache[uid]; ok && entry.spiffeID == spiffeID && !entry.stale(s.now()) {
+	if entry, ok := s.cache[cacheKey]; ok && entry.spiffeID == spiffeID && !entry.stale(s.now()) {
 		s.mu.Unlock()
 		return entry, nil
 	}
@@ -325,7 +370,7 @@ func (s *Server) getOrRefresh(ctx context.Context, uid uint32, spiffeID string) 
 		notAfter:  cert.NotAfter,
 	}
 	s.mu.Lock()
-	s.cache[uid] = entry
+	s.cache[cacheKey] = entry
 	s.mu.Unlock()
 	return entry, nil
 }
