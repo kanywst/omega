@@ -188,10 +188,20 @@ func (a *stepCAAuthority) BundlePEM() []byte {
 		// Re-serve from the last fetch rather than the cached bytes, so a
 		// rotated-out CA whose grace has ended is dropped even while the
 		// issuer cannot be reached.
-		if served := a.overlap.serve(time.Now()); served != nil {
-			return served
+		served := a.overlap.serve(time.Now())
+		if served == nil {
+			served = stale
 		}
-		return stale
+		// Back off before the next attempt, so callers during an issuer
+		// outage are served from the cache instead of each waiting on a
+		// refresh.
+		if len(served) > 0 {
+			a.bundleMu.Lock()
+			a.bundle = served
+			a.bundleExp = time.Now().Add(min(a.bundleTTL, upstreamRefreshBackoff))
+			a.bundleMu.Unlock()
+		}
+		return served
 	}
 	a.bundleMu.RLock()
 	defer a.bundleMu.RUnlock()

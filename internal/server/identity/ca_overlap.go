@@ -24,6 +24,10 @@ import (
 // from a revocation. A CA is never kept past its own expiry.
 const UpstreamCAGrace = 24 * time.Hour
 
+// upstreamRefreshBackoff is how long Vault PKI and step-ca serve the
+// last bundle after a failed refresh before trying the issuer again.
+const upstreamRefreshBackoff = 30 * time.Second
+
 // KeptCAEvent reports a change to the set of rotated-out CAs Omega keeps
 // serving: Action is "kept" or "dropped", Reason for a drop is
 // "grace-ended", "republished" or "distrusted".

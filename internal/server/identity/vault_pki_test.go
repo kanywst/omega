@@ -310,3 +310,28 @@ func TestVaultPKIKeepsTheRotatedOutCATrusted(t *testing.T) {
 		t.Fatalf("spiffe_sequence after rotation: %d", seq())
 	}
 }
+
+func TestVaultPKIBacksOffAfterAFailedRefresh(t *testing.T) {
+	v := newVaultFixture(t, "pki", "omega", "tok")
+	a, err := identity.New(identity.Config{
+		Kind: identity.KindVaultPKI, TrustDomain: "omega.local", Dir: filepath.Join(t.TempDir(), "ca"),
+		VaultPKIAddr: v.server.URL, VaultPKIToken: v.token, VaultPKIMount: v.mount, VaultPKIRole: v.role,
+		VaultPKIBundleTTL: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := a.BundlePEM()
+	time.Sleep(5 * time.Millisecond)
+	broken := []byte("not a PEM bundle") // Vault starts failing
+	v.chain.Store(&broken)
+	before := v.chainHits.Load()
+	for i := 0; i < 20; i++ {
+		if got := a.BundlePEM(); string(got) != string(good) {
+			t.Fatal("the last bundle must keep being served while Vault is down")
+		}
+	}
+	if n := v.chainHits.Load() - before; n > 1 {
+		t.Fatalf("%d refresh attempts during the outage, want at most one before the backoff", n)
+	}
+}

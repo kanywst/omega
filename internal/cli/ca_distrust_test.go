@@ -88,9 +88,12 @@ func TestKeptCAQueueKeepsOrderAndDrainsOnShutdown(t *testing.T) {
 	done := make(chan struct{})
 	block := make(chan struct{})
 	go func() {
-		q.run(ctx, func(_ context.Context, e identity.KeptCAEvent) {
+		q.run(ctx, func(c context.Context, e identity.KeptCAEvent) {
 			if e.Fingerprint == "1" {
 				<-block // a slow store
+			}
+			if c.Err() != nil {
+				return // a cancelled append records nothing
 			}
 			got = append(got, e.Fingerprint)
 		})
@@ -102,6 +105,7 @@ func TestKeptCAQueueKeepsOrderAndDrainsOnShutdown(t *testing.T) {
 	cancel()
 	close(block)
 	<-done
+	<-q.done
 	if strings.Join(got, ",") != "1,2,3" {
 		t.Fatalf("events recorded %v, want all three in order", got)
 	}

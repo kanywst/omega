@@ -348,12 +348,14 @@ func newServerCommand() *cobra.Command {
 			// rotation goes into the audit chain, and the operator's
 			// distrust list drops a kept CA without a restart.
 			keeper, _ := ca.(identity.UpstreamCAKeeper)
+			var keptDone <-chan struct{}
 			if keeper != nil {
 				// The hook runs on a bundle refresh, so it only queues the
 				// event; one goroutine appends the queue to the audit chain
 				// in order, and drains it on shutdown.
 				kept := newKeptCAQueue()
 				go kept.run(ctx, func(c context.Context, e identity.KeptCAEvent) { recordKeptCA(c, store, e) })
+				keptDone = kept.done
 				keeper.SetKeptCAHook(kept.push)
 				// The kept set changes on its own, so peers read the
 				// bundle live rather than a copy refreshed on SIGHUP.
@@ -655,6 +657,13 @@ func newServerCommand() *cobra.Command {
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = srv.Shutdown(shutdownCtx)
+				// Let the kept-CA audit queue finish draining.
+				if keptDone != nil {
+					select {
+					case <-keptDone:
+					case <-shutdownCtx.Done():
+					}
+				}
 				return nil
 			case err := <-errCh:
 				return err
@@ -1365,9 +1374,12 @@ type keptCAQueue struct {
 	mu     sync.Mutex
 	items  []identity.KeptCAEvent
 	signal chan struct{}
+	done   chan struct{}
 }
 
-func newKeptCAQueue() *keptCAQueue { return &keptCAQueue{signal: make(chan struct{}, 1)} }
+func newKeptCAQueue() *keptCAQueue {
+	return &keptCAQueue{signal: make(chan struct{}, 1), done: make(chan struct{})}
+}
 
 func (q *keptCAQueue) push(e identity.KeptCAEvent) {
 	q.mu.Lock()
@@ -1387,21 +1399,25 @@ func (q *keptCAQueue) take() []identity.KeptCAEvent {
 	return items
 }
 
-// run records queued events until ctx ends, then records what is left
-// with a short deadline of its own.
+// run records queued events until ctx ends, then drains what is left,
+// and closes done. Each append gets a context of its own that shutdown
+// does not cancel, so a batch taken just before shutdown is still
+// recorded in full.
 func (q *keptCAQueue) run(ctx context.Context, record func(context.Context, identity.KeptCAEvent)) {
+	defer close(q.done)
+	write := func() {
+		for _, e := range q.take() {
+			c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			record(c, e)
+			cancel()
+		}
+	}
 	for {
 		select {
 		case <-q.signal:
-			for _, e := range q.take() {
-				record(ctx, e)
-			}
+			write()
 		case <-ctx.Done():
-			drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			for _, e := range q.take() {
-				record(drain, e)
-			}
-			cancel()
+			write()
 			return
 		}
 	}
