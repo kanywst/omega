@@ -48,8 +48,13 @@ func TestCADistrustRecordsChangesAndRejections(t *testing.T) {
 	if err := d.apply(ctx); err == nil {
 		t.Fatal("a bad list must be refused")
 	}
-	// Clearing the list is allowed and recorded.
+	// An empty file is refused as a likely truncated write; clearing
+	// takes a file with only a comment, and is recorded.
 	write("")
+	if err := d.apply(ctx); err == nil {
+		t.Fatal("an empty file must be refused")
+	}
+	write("# cleared after the incident\n")
 	if err := d.apply(ctx); err != nil || len(k.got) != 0 {
 		t.Fatalf("clear: %v %v", err, k.got)
 	}
@@ -71,7 +76,7 @@ func TestCADistrustRecordsChangesAndRejections(t *testing.T) {
 		}
 		got = append(got, e.Decision+":"+strings.Repeat("x", n))
 	}
-	if strings.Join(got, ",") != "ok:x,error:,ok:" {
+	if strings.Join(got, ",") != "ok:x,error:,error:,ok:" {
 		t.Fatalf("audit rows: %v", got)
 	}
 }

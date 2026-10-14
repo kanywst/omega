@@ -353,7 +353,27 @@ func newServerCommand() *cobra.Command {
 			// distrust list drops a kept CA without a restart.
 			keeper, _ := ca.(identity.UpstreamCAKeeper)
 			if keeper != nil {
-				keeper.SetKeptCAHook(func(e identity.KeptCAEvent) { recordKeptCA(ctx, store, e) })
+				// The hook runs on a bundle refresh; the audit append
+				// happens on its own goroutine, in order, so a slow store
+				// never holds up bundle reads.
+				keptEvents := make(chan identity.KeptCAEvent, 256)
+				go func() {
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case e := <-keptEvents:
+							recordKeptCA(ctx, store, e)
+						}
+					}
+				}()
+				keeper.SetKeptCAHook(func(e identity.KeptCAEvent) {
+					select {
+					case keptEvents <- e:
+					default:
+						fmt.Fprintf(os.Stderr, "omega server: audit queue full, not recording kept CA change: %s %s %s\n", e.Action, e.Reason, e.Fingerprint)
+					}
+				})
 				// The kept set changes on its own, so peers read the
 				// bundle live rather than a copy refreshed on SIGHUP.
 				fed.SetOwnBundleSource(ca.BundlePEM)
@@ -402,10 +422,10 @@ func newServerCommand() *cobra.Command {
 								}
 							}
 							if upstreamCADistrustFile != "" {
+								// Peers read the bundle live, so the drop
+								// reaches them without a SetOwnBundle.
 								if err := distrust.apply(ctx); err != nil {
 									fmt.Fprintf(os.Stderr, "omega server: upstream CA distrust list rejected, keeping the previous one: %v\n", err)
-								} else {
-									fed.SetOwnBundle(ca.BundlePEM())
 								}
 							}
 							// Reload the Cedar policies too, so local
@@ -1322,6 +1342,12 @@ func (d *caDistrust) applyFile(ctx context.Context) error {
 	raw, err := os.ReadFile(d.path) // #nosec G304 -- operator-supplied path
 	if err != nil {
 		return err
+	}
+	// An empty file is more likely a truncated write than a decision to
+	// trust every CA again; clearing the list takes a file that says so
+	// in a comment.
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return fmt.Errorf("%s is empty; to clear the list, leave only a comment in it", d.path)
 	}
 	fps, err := identity.ParseCAFingerprints(raw)
 	if err != nil {
