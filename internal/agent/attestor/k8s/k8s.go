@@ -104,7 +104,8 @@ type Attestor struct {
 	log      io.Writer
 
 	mu       sync.Mutex
-	pods     map[string]*corev1.Pod // keyed by UID, and by config hash for static pods
+	pods     map[string]*corev1.Pod // keyed by UID
+	mirrors  map[string]*corev1.Pod // static pods' mirror pods, keyed by config hash
 	listedAt time.Time
 }
 
@@ -242,7 +243,7 @@ func (a *Attestor) startTime(pid int32) (string, error) {
 // known but the container is not yet in its status (just started).
 func (a *Attestor) lookup(ctx context.Context, ref ContainerRef) (*corev1.Pod, error) {
 	a.mu.Lock()
-	pod := a.pods[ref.PodUID]
+	pod := a.podLocked(ref.PodUID)
 	fresh := a.now().Sub(a.listedAt) < minRelist
 	a.mu.Unlock()
 	if pod != nil && hasContainer(pod, ref.ContainerID) {
@@ -253,7 +254,7 @@ func (a *Attestor) lookup(ctx context.Context, ref ContainerRef) (*corev1.Pod, e
 			return nil, err
 		}
 		a.mu.Lock()
-		pod = a.pods[ref.PodUID]
+		pod = a.podLocked(ref.PodUID)
 		a.mu.Unlock()
 	}
 	if pod == nil {
@@ -270,6 +271,7 @@ func (a *Attestor) relist(ctx context.Context) error {
 		return fmt.Errorf("list pods on node %s: %w", a.node, err)
 	}
 	pods := make(map[string]*corev1.Pod, len(list.Items))
+	mirrors := map[string]*corev1.Pod{}
 	for i := range list.Items {
 		p := &list.Items[i]
 		// The field selector already filters; checking again keeps a
@@ -279,14 +281,37 @@ func (a *Attestor) relist(ctx context.Context) error {
 			continue
 		}
 		pods[string(p.UID)] = p
-		if hash := p.Annotations[mirrorAnnotation]; hash != "" {
-			pods[hash] = p
+		if hash := p.Annotations[mirrorAnnotation]; hash != "" && ownedByNode(p, a.node) {
+			mirrors[hash] = p
 		}
 	}
 	a.mu.Lock()
-	a.pods, a.listedAt = pods, a.now()
+	a.pods, a.mirrors, a.listedAt = pods, mirrors, a.now()
 	a.mu.Unlock()
 	return nil
+}
+
+// podLocked returns the pod with uid, or the mirror pod of the static
+// pod whose config hash is uid. Real UIDs come first and mirror hashes
+// live apart, so a pod that copies another's UID into its annotation
+// cannot shadow it.
+func (a *Attestor) podLocked(uid string) *corev1.Pod {
+	if p := a.pods[uid]; p != nil {
+		return p
+	}
+	return a.mirrors[uid]
+}
+
+// ownedByNode reports whether the kubelet of node created p as a mirror
+// pod: the kubelet sets the Node as its controller owner, which a user
+// creating an ordinary pod with the annotation does not get.
+func ownedByNode(p *corev1.Pod, node string) bool {
+	for _, o := range p.OwnerReferences {
+		if o.Kind == "Node" && o.APIVersion == "v1" && o.Name == node && o.Controller != nil && *o.Controller {
+			return true
+		}
+	}
+	return false
 }
 
 func hasContainer(pod *corev1.Pod, id string) bool {

@@ -202,6 +202,7 @@ func TestAttestStaticPodByMirrorAnnotation(t *testing.T) {
 	const configHash = "0f0f0f0f-0000-1111-2222-333333333333"
 	mirror := pod("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "kube-system", "etcd-node-a", "", testNode, fixtureContainerID)
 	mirror.Annotations = map[string]string{mirrorAnnotation: configHash}
+	mirror.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: testNode, Controller: ptr(true)}}
 	h.api.setPods(mirror)
 	writeProc(t, h.proc, 11, podCgroup(configHash, fixtureContainerID), "1")
 	id, ok, err := h.att.Attest(context.Background(), 11)
@@ -337,3 +338,31 @@ func TestNewValidatesConfig(t *testing.T) {
 		t.Fatalf("defaults: %v %+v", err, a)
 	}
 }
+
+// The mirror annotation counts only on a pod the node's kubelet owns,
+// and never shadows a real UID: a user pod that copies another pod's
+// UID into the annotation must not make that pod unattestable.
+func TestMirrorAnnotationIsTrustedOnlyOnNodeOwnedPods(t *testing.T) {
+	const configHash = "0f0f0f0f-0000-1111-2222-333333333333"
+	h := newHarness(t, tmpl)
+	fake := pod("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "evil", "fake", "", testNode, fixtureContainerID)
+	fake.Annotations = map[string]string{mirrorAnnotation: configHash}
+	h.api.setPods(fake)
+	writeProc(t, h.proc, 12, podCgroup(configHash, fixtureContainerID), "1")
+	if _, _, err := h.att.Attest(context.Background(), 12); !errors.Is(err, ErrNotAttested) {
+		t.Fatalf("a mirror annotation on a user pod was honoured: %v", err)
+	}
+
+	h = newHarness(t, tmpl)
+	victim := pod(fixturePodUID, "apps", "web-1", "web", testNode, fixtureContainerID)
+	squatter := pod("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "evil", "squat", "", testNode, "ffff")
+	squatter.Annotations = map[string]string{mirrorAnnotation: fixturePodUID}
+	squatter.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: testNode, Controller: ptr(true)}}
+	h.api.setPods(squatter, victim)
+	writeProc(t, h.proc, 13, podCgroup(fixturePodUID, fixtureContainerID), "1")
+	if id, _, err := h.att.Attest(context.Background(), 13); err != nil || id != "spiffe://omega.local/k8s/apps/web" {
+		t.Fatalf("victim: id=%q err=%v", id, err)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

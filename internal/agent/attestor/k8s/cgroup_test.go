@@ -52,7 +52,7 @@ func TestParseCgroupHostProcessIsNotAPod(t *testing.T) {
 // refused, not treated as a host process: falling back to the UID
 // mapping would hand a pod process a host identity.
 func TestParseCgroupRefusesPodProcessOutsideAContainer(t *testing.T) {
-	for _, name := range []string{"v2-pod-no-container", "v2-crio-conmon", "v1-disagree"} {
+	for _, name := range []string{"v2-pod-no-container", "v2-crio-conmon", "v1-disagree", "v2-kubepods-unknown-layout"} {
 		t.Run(name, func(t *testing.T) {
 			_, err := parseFixture(t, name)
 			if err == nil || errors.Is(err, errNotAPod) {
