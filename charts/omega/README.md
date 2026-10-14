@@ -17,26 +17,28 @@ helm install omega ./charts/omega \
 
 See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 
-| Key                                   | Default                 | Notes                                                                                            |
-| ------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ |
-| `image.repository`                    | `ghcr.io/kanywst/omega` | Container image                                                                                  |
-| `server.trustDomain`                  | `omega.local`           | SPIFFE trust domain                                                                              |
-| `server.policyDir`                    | `""`                    | Mount Cedar policies into this path                                                              |
-| `server.domainRootAdmins`             | `[]`                    | `--domain-root-admin` SPIFFE IDs                                                                 |
-| `server.decisionRecorders`            | `[]`                    | Node agents that may read the policy bundle and record local decisions                           |
-| `server.scimProviders`                | `[]`                    | SCIM providers: `name`, `domain`, `tokenSecret` (Secret with a `token` key), optional `template` |
-| `server.ca.backend`                   | `disk`                  | `--ca-backend`; `gcp-cas` reads `server.ca.gcpCas`                                               |
-| `server.ca.gcpCas.pool`               | `""`                    | CAS CA pool `projects/<p>/locations/<l>/caPools/<pool>`; required for `gcp-cas`                  |
-| `server.ca.gcpCas.credentialsSecret`  | `""`                    | Secret with `credentials.json`; leave empty to use GKE Workload Identity                         |
-| `policy.inline`                       | `{}`                    | Inline `*.cedar` files via ConfigMap                                                             |
-| `agent.uidMap`                        | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                 |
-| `agent.hostSocketPath`                | `/run/omega`            | hostPath for the workload socket                                                                 |
-| `agent.localPDP.enabled`              | `false`                 | Decide on the node (`--local-pdp-addr`)                                                          |
-| `agent.localPDP.tlsSecret`            | `""`                    | Secret with `ca.crt`, `tls.crt`, `tls.key` for the agent's SVID                                  |
-| `server.policyBundleSigningKeySecret` | `""`                    | Secret with `bundle.key` (ECDSA P-256) that signs policy bundles                                 |
-| `agent.localPDP.verifyBundle`         | `false`                 | Verify bundle signatures with `bundle.pub` from `agent.localPDP.tlsSecret`                       |
-| `agent.localPDP.spool`                | `false`                 | Spool decisions to an emptyDir                                                                   |
-| `server.persistence.size`             | `1Gi`                   | PVC for SQLite data dir                                                                          |
+| Key                                       | Default                 | Notes                                                                                                                 |
+| ----------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `image.repository`                        | `ghcr.io/kanywst/omega` | Container image                                                                                                       |
+| `server.trustDomain`                      | `omega.local`           | SPIFFE trust domain                                                                                                   |
+| `server.policyDir`                        | `""`                    | Mount Cedar policies into this path                                                                                   |
+| `server.domainRootAdmins`                 | `[]`                    | `--domain-root-admin` SPIFFE IDs                                                                                      |
+| `server.decisionRecorders`                | `[]`                    | Node agents that may read the policy bundle and record local decisions                                                |
+| `server.scimProviders`                    | `[]`                    | SCIM providers: `name`, `domain`, `tokenSecret` (Secret with a `token` key), optional `template`                      |
+| `server.ca.backend`                       | `disk`                  | `--ca-backend`; `gcp-cas` reads `server.ca.gcpCas`                                                                    |
+| `server.ca.gcpCas.pool`                   | `""`                    | CAS CA pool `projects/<p>/locations/<l>/caPools/<pool>`; required for `gcp-cas`                                       |
+| `server.ca.gcpCas.credentialsSecret`      | `""`                    | Secret with `credentials.json`; leave empty to use GKE Workload Identity                                              |
+| `policy.inline`                           | `{}`                    | Inline `*.cedar` files via ConfigMap                                                                                  |
+| `agent.uidMap`                            | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                                      |
+| `agent.hostSocketPath`                    | `/run/omega`            | hostPath for the workload socket; must be under `/run/omega*` or `/var/run/omega*`                                    |
+| `agent.localPDP.enabled`                  | `false`                 | Decide on the node (`--local-pdp-addr`)                                                                               |
+| `agent.localPDP.tlsSecret`                | `""`                    | Secret with `ca.crt`, `tls.crt`, `tls.key` for the agent's SVID                                                       |
+| `server.policyBundleSigningKeySecret`     | `""`                    | Secret with `bundle.key` (ECDSA P-256) that signs policy bundles                                                      |
+| `agent.localPDP.verifyBundle`             | `false`                 | Verify bundle signatures with `bundle.pub` from `agent.localPDP.tlsSecret`                                            |
+| `agent.localPDP.spool`                    | `false`                 | Spool decisions to an emptyDir                                                                                        |
+| `server.persistence.size`                 | `1Gi`                   | PVC for SQLite data dir                                                                                               |
+| `csi.enabled`                             | `false`                 | Deploy the SPIFFE CSI driver so pods mount the Workload API with `csi.spiffe.io` (privileged, cluster-wide CSIDriver) |
+| `agent.nodeSelector`, `agent.tolerations` | `{}`, `[]`              | Where the agent runs; the CSI driver follows                                                                          |
 
 ## Verify
 
@@ -51,4 +53,8 @@ Then issue an AuthZEN evaluation as shown in the post-install notes.
 
 - Single-replica server out of the box (SQLite). Postgres-backed HA is available behind `--db postgres://...` plus the leader-election flags; the chart ships the SQLite default.
 - Agent uses UID-based attestation. K8s SAT projection is a planned follow-up.
-- No CRDs / Operator wiring in this chart. CSI driver is a planned follow-up.
+- No CRDs / Operator wiring in this chart.
+
+## SPIFFE CSI driver
+
+With `csi.enabled`, any pod that may use a `csi.spiffe.io` ephemeral volume can reach the Workload API, and the agent attests a caller by the UID it connects with alone. A pod in any namespace that runs as a UID in `agent.uidMap` therefore receives that identity. Keep each mapped UID unique to one workload (not 65532, the default of most distroless images), and restrict `csi.spiffe.io` volumes with admission policy. The driver container runs privileged with bidirectional mount propagation on `/var/lib/kubelet/pods`; its images are pinned by digest.

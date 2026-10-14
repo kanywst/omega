@@ -116,6 +116,18 @@ jobs:
       - name: helm template (render check)
         run: helm template omega charts/omega > /dev/null
 
+  kind-csi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Installs kind; the demo creates and deletes its own cluster.
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - uses: azure/setup-helm@v5
+      - name: chart + SPIFFE CSI driver, a pod fetches its SVID over csi.spiffe.io
+        run: make -C examples/kind-csi demo
+
   kind-operator:
     runs-on: ubuntu-latest
     steps:
