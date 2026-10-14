@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kanywst/omega/internal/server/policy"
@@ -90,6 +91,8 @@ type PDP struct {
 	// removed counts decisions taken off pending (recorded or dropped),
 	// so Flush knows whether the spool is out of date.
 	removed int
+
+	warnedUnverified atomic.Bool
 
 	// spoolMu serialises spool writes; take it before mu.
 	spoolMu sync.Mutex
@@ -375,6 +378,9 @@ func (p *PDP) Sync(ctx context.Context) error {
 	if b.Directory.TrustDomain != p.cfg.TrustDomain {
 		return fmt.Errorf("bundle is for trust domain %q, not %q", b.Directory.TrustDomain, p.cfg.TrustDomain)
 	}
+	if p.cfg.BundleKey == nil && b.Signature != "" && !p.warnedUnverified.Swap(true) {
+		slog.Warn("local pdp: the control plane signs its policy bundles but this agent does not verify them; set --policy-bundle-key")
+	}
 	if p.cfg.BundleKey != nil {
 		if err := policy.CheckRevision(b); err != nil {
 			return err
@@ -388,7 +394,9 @@ func (p *PDP) Sync(ctx context.Context) error {
 		p.mu.Lock()
 		newest := p.issuedAt
 		p.mu.Unlock()
-		if b.IssuedAt.Before(newest) {
+		// Replicas stamp IssuedAt with their own clocks, so allow them to
+		// differ by maxClockSkew before calling a bundle older.
+		if b.IssuedAt.Before(newest.Add(-maxClockSkew)) {
 			return fmt.Errorf("bundle issued at %s is older than the one already loaded (%s)", b.IssuedAt, newest)
 		}
 		if age := time.Since(b.IssuedAt); age > p.cfg.MaxAge {

@@ -40,6 +40,8 @@ It needs Docker, `curl`, `openssl` and `python3`, and takes a few minutes on a c
 
 ## What is demo-only
 
+The admin and the node agent get their SVIDs through one SPIRE registration selector (`unix:path` of the SPIRE agent binary that fetches them), so the demo does not show workload attestation keeping the two apart; the `403` for the node agent comes from Omega's admin check. In a deployment each gets its own selector.
+
 The SVIDs for the admin and the node agent are fetched once with `spire-agent api fetch x509 -write`; in a deployment a helper such as `spiffe-helper` keeps them rotated on disk, and Omega re-reads the agent's client certificate when it changes. Omega's own serving certificate comes from a throwaway CA, since in upstream mode Omega issues nothing. The local PDP listens on all interfaces so the host can call it (`--local-pdp-allow-remote`); on a real node it stays on loopback beside the PEP.
 
 See [examples/spire-interop](../spire-interop/) for the identity side alone (Omega following SPIRE's CA and signing-key rotations), [docs/local-pdp.md](../../docs/local-pdp.md) and [docs/scim.md](../../docs/scim.md).
