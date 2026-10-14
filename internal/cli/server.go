@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
 
@@ -205,12 +206,7 @@ func newServerCommand() *cobra.Command {
 					Issuer:      strings.TrimSpace(issuerURL),
 					Dir:         filepath.Join(dataDir, "ca"),
 				}
-				// The flag's zero turns the overlap off; Config's zero
-				// is the default.
 				caCfg.UpstreamCAGrace = upstreamCAGrace
-				if upstreamCAGrace == 0 {
-					caCfg.UpstreamCAGrace = -1
-				}
 				if caCfg.Kind == identity.KindVaultPKI {
 					token, err := resolveVaultToken(caVaultPKIToken, caVaultPKITokenFile)
 					if err != nil {
@@ -353,27 +349,12 @@ func newServerCommand() *cobra.Command {
 			// distrust list drops a kept CA without a restart.
 			keeper, _ := ca.(identity.UpstreamCAKeeper)
 			if keeper != nil {
-				// The hook runs on a bundle refresh; the audit append
-				// happens on its own goroutine, in order, so a slow store
-				// never holds up bundle reads.
-				keptEvents := make(chan identity.KeptCAEvent, 256)
-				go func() {
-					for {
-						select {
-						case <-ctx.Done():
-							return
-						case e := <-keptEvents:
-							recordKeptCA(ctx, store, e)
-						}
-					}
-				}()
-				keeper.SetKeptCAHook(func(e identity.KeptCAEvent) {
-					select {
-					case keptEvents <- e:
-					default:
-						fmt.Fprintf(os.Stderr, "omega server: audit queue full, not recording kept CA change: %s %s %s\n", e.Action, e.Reason, e.Fingerprint)
-					}
-				})
+				// The hook runs on a bundle refresh, so it only queues the
+				// event; one goroutine appends the queue to the audit chain
+				// in order, and drains it on shutdown.
+				kept := newKeptCAQueue()
+				go kept.run(ctx, func(c context.Context, e identity.KeptCAEvent) { recordKeptCA(c, store, e) })
+				keeper.SetKeptCAHook(kept.push)
 				// The kept set changes on its own, so peers read the
 				// bundle live rather than a copy refreshed on SIGHUP.
 				fed.SetOwnBundleSource(ca.BundlePEM)
@@ -804,8 +785,8 @@ func newServerCommand() *cobra.Command {
 		"let an identity provider provision users and groups over SCIM 2.0 at /scim/v2/<name>/ (repeatable), as 'name=<name>,domain=<domain>,token-file=<path>[,template=<spiffe-id-template>]'. The provider authenticates with the bearer token in token-file, its groups are created in domain, and each user's memberships go to the SPIFFE ID the template gives ({idp}, {externalId}, {userName}; default spiffe://<trust-domain>/humans/{idp}/{externalId}).")
 	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
-	cmd.Flags().DurationVar(&upstreamCAGrace, "upstream-ca-grace", identity.UpstreamCAGrace,
-		"with --ca-backend=vault-pki or step-ca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers (never past the CA's expiry). 0 drops it at the next refresh, which is what you want after a compromise.")
+	cmd.Flags().DurationVar(&upstreamCAGrace, "upstream-ca-grace", 0,
+		"with --ca-backend=vault-pki or step-ca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers through a rotation (never past the CA's expiry), e.g. 24h. Off by default: Omega cannot tell a rotation from a revocation, so a CA kept this way stays trusted even if the issuer withdrew it because it was compromised, until --upstream-ca-distrust drops it.")
 	cmd.Flags().StringVar(&upstreamCADistrustFile, "upstream-ca-distrust", "",
 		"with --ca-backend=vault-pki or step-ca, a file of SHA-256 fingerprints (hex, one per line, '#' comments) of CAs never to keep after the issuer stops publishing them. Re-read on SIGHUP, so a CA kept from a rotation can be dropped at once, without a restart, after a compromise.")
 	cmd.Flags().StringVar(&bundleSigningKeyFile, "policy-bundle-signing-key", "",
@@ -1376,6 +1357,54 @@ func (d *caDistrust) applyFile(ctx context.Context) error {
 	}
 	d.last = list
 	return nil
+}
+
+// keptCAQueue is an unbounded, ordered queue of kept-CA changes. Kept-CA
+// changes are rare (one per issuer rotation), so nothing is ever dropped.
+type keptCAQueue struct {
+	mu     sync.Mutex
+	items  []identity.KeptCAEvent
+	signal chan struct{}
+}
+
+func newKeptCAQueue() *keptCAQueue { return &keptCAQueue{signal: make(chan struct{}, 1)} }
+
+func (q *keptCAQueue) push(e identity.KeptCAEvent) {
+	q.mu.Lock()
+	q.items = append(q.items, e)
+	q.mu.Unlock()
+	select {
+	case q.signal <- struct{}{}:
+	default:
+	}
+}
+
+func (q *keptCAQueue) take() []identity.KeptCAEvent {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	items := q.items
+	q.items = nil
+	return items
+}
+
+// run records queued events until ctx ends, then records what is left
+// with a short deadline of its own.
+func (q *keptCAQueue) run(ctx context.Context, record func(context.Context, identity.KeptCAEvent)) {
+	for {
+		select {
+		case <-q.signal:
+			for _, e := range q.take() {
+				record(ctx, e)
+			}
+		case <-ctx.Done():
+			drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			for _, e := range q.take() {
+				record(drain, e)
+			}
+			cancel()
+			return
+		}
+	}
 }
 
 // recordKeptCA appends a change to the CAs kept from a Vault PKI or

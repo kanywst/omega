@@ -80,3 +80,29 @@ func TestCADistrustRecordsChangesAndRejections(t *testing.T) {
 		t.Fatalf("audit rows: %v", got)
 	}
 }
+
+func TestKeptCAQueueKeepsOrderAndDrainsOnShutdown(t *testing.T) {
+	q := newKeptCAQueue()
+	ctx, cancel := context.WithCancel(context.Background())
+	var got []string
+	done := make(chan struct{})
+	block := make(chan struct{})
+	go func() {
+		q.run(ctx, func(_ context.Context, e identity.KeptCAEvent) {
+			if e.Fingerprint == "1" {
+				<-block // a slow store
+			}
+			got = append(got, e.Fingerprint)
+		})
+		close(done)
+	}()
+	for _, fp := range []string{"1", "2", "3"} {
+		q.push(identity.KeptCAEvent{Fingerprint: fp})
+	}
+	cancel()
+	close(block)
+	<-done
+	if strings.Join(got, ",") != "1,2,3" {
+		t.Fatalf("events recorded %v, want all three in order", got)
+	}
+}

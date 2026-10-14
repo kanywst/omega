@@ -103,9 +103,9 @@ type Config struct {
 	StepCACACertFile string
 
 	// UpstreamCAGrace is how long a CA that Vault PKI or step-ca stops
-	// publishing stays in the bundle Omega serves. Zero means the default
-	// (24 hours); a negative value turns the overlap off, so a dropped CA
-	// is untrusted at the next refresh.
+	// publishing stays in the bundle Omega serves. Zero (the default) or
+	// negative turns the overlap off, so a dropped CA is untrusted at the
+	// next refresh.
 	UpstreamCAGrace time.Duration
 }
 

@@ -277,7 +277,7 @@ func TestVaultPKIKeepsTheRotatedOutCATrusted(t *testing.T) {
 	a, err := identity.New(identity.Config{
 		Kind: identity.KindVaultPKI, TrustDomain: "omega.local", Dir: filepath.Join(t.TempDir(), "ca"),
 		VaultPKIAddr: v.server.URL, VaultPKIToken: v.token, VaultPKIMount: v.mount, VaultPKIRole: v.role,
-		VaultPKIBundleTTL: time.Millisecond,
+		VaultPKIBundleTTL: time.Millisecond, UpstreamCAGrace: identity.UpstreamCAGrace,
 	})
 	if err != nil {
 		t.Fatal(err)

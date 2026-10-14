@@ -98,7 +98,10 @@ func TestCAOverlapOffAndOrderAndServeTimePruning(t *testing.T) {
 		t.Fatal("with the overlap off a dropped CA must go at once")
 	}
 
-	o := newCAOverlap(upstreamGrace(0))
+	if upstreamGrace(0) != 0 {
+		t.Fatal("the overlap must be off unless configured")
+	}
+	o := newCAOverlap(upstreamGrace(UpstreamCAGrace))
 	_, _ = o.update(append(append([]byte(nil), a...), b...), now)
 	_, _ = o.update(c, now)
 	first := o.serve(now)

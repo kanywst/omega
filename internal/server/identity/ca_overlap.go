@@ -16,11 +16,12 @@ import (
 	"time"
 )
 
-// UpstreamCAGrace is the default for how long a CA that an external issuer (Vault PKI,
-// step-ca) stopped publishing stays in Omega's bundle: SVIDs it signed
-// before the issuer rotated keep verifying for peers that refresh from
-// Omega, until they could all have been reissued. A CA is never kept past
-// its own expiry.
+// UpstreamCAGrace is the suggested grace for --upstream-ca-grace: how long
+// a CA that an external issuer (Vault PKI, step-ca) stopped publishing
+// stays in Omega's bundle, so SVIDs it signed before the issuer rotated
+// keep verifying for peers until they could all have been reissued. The
+// overlap is off unless configured, because Omega cannot tell a rotation
+// from a revocation. A CA is never kept past its own expiry.
 const UpstreamCAGrace = 24 * time.Hour
 
 // KeptCAEvent reports a change to the set of rotated-out CAs Omega keeps
@@ -40,6 +41,7 @@ type KeptCAEvent struct {
 type caOverlap struct {
 	grace      time.Duration
 	mu         sync.Mutex
+	deliverMu  sync.Mutex
 	loaded     bool
 	fetched    []*x509.Certificate
 	current    map[[32]byte]*x509.Certificate
@@ -71,11 +73,15 @@ func (o *caOverlap) setHook(h func(KeptCAEvent)) {
 }
 
 // unlock releases o.mu and then reports the events queued under it, so
-// the hook (an audit append) never runs under the lock.
+// the hook never runs under the lock. deliverMu is taken before o.mu is
+// released, so two callers report their events in the order the changes
+// were made.
 func (o *caOverlap) unlock() {
 	events, hook := o.pending, o.hook
 	o.pending = nil
+	o.deliverMu.Lock()
 	o.mu.Unlock()
+	defer o.deliverMu.Unlock()
 	if hook != nil {
 		for _, e := range events {
 			hook(e)
@@ -115,7 +121,7 @@ func (o *caOverlap) update(fetched []byte, now time.Time) ([]byte, error) {
 				o.retired[fp] = retiredCA{cert: c, until: until}
 				o.pending = append(o.pending, KeptCAEvent{Action: "kept", Subject: c.Subject.String(), Fingerprint: hex.EncodeToString(fp[:]), Until: until})
 				// Omega cannot tell a routine rotation from a revocation.
-				slog.Warn("identity: the issuer stopped publishing a CA; Omega keeps trusting it until the grace ends (--upstream-ca-distrust drops it without a restart)",
+				slog.Warn("identity: the issuer stopped publishing a CA; Omega keeps trusting it until --upstream-ca-grace ends (--upstream-ca-distrust drops it without a restart)",
 					"subject", c.Subject.String(), "fingerprint", hex.EncodeToString(fp[:]), "until", until)
 			}
 		}
@@ -230,13 +236,9 @@ func parsePEMCerts(raw []byte) ([]*x509.Certificate, error) {
 	return out, nil
 }
 
-// upstreamGrace resolves Config.UpstreamCAGrace: zero is the default,
-// negative is off.
+// upstreamGrace resolves Config.UpstreamCAGrace: zero or negative is off.
 func upstreamGrace(d time.Duration) time.Duration {
-	switch {
-	case d == 0:
-		return UpstreamCAGrace
-	case d < 0:
+	if d < 0 {
 		return 0
 	}
 	return d
