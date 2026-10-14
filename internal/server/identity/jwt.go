@@ -61,8 +61,13 @@ func (a *localAuthority) IssueJWTSVID(id spiffeid.ID, audience []string, ttl tim
 		return nil, err
 	}
 
+	// go-jose takes a remote key as an OpaqueSigner, not a crypto.Signer.
+	var key any = st.key
+	if r, ok := st.key.(interface{ joseSigner() jose.OpaqueSigner }); ok {
+		key = r.joseSigner()
+	}
 	signer, err := jose.NewSigner(
-		jose.SigningKey{Algorithm: jose.ES256, Key: st.key},
+		jose.SigningKey{Algorithm: jose.ES256, Key: key},
 		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", kid),
 	)
 	if err != nil {

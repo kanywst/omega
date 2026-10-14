@@ -58,6 +58,11 @@ const (
 	// X.509 root key never sits on omega's disk; JWT-SVID signing
 	// stays local for the same reasons.
 	KindStepCA Kind = "step-ca"
+	// KindAzureKeyVault keeps the CA private key in Azure Key Vault or
+	// Managed HSM. Omega builds certificates and JWTs itself and has
+	// Key Vault sign their digests, so both X.509-SVIDs and JWT-SVIDs
+	// are signed by a key that never leaves Key Vault (ADR 0021).
+	KindAzureKeyVault Kind = "azure-keyvault"
 )
 
 // Config is the disjoint-union-style argument to New. Fields are read
@@ -107,6 +112,22 @@ type Config struct {
 	// negative turns the overlap off, so a dropped CA is untrusted at the
 	// next refresh.
 	UpstreamCAGrace time.Duration
+
+	// KindAzureKeyVault. Credentials come from the environment
+	// (AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET or
+	// AZURE_FEDERATED_TOKEN_FILE, else a managed identity); see
+	// azure_token.go.
+	AzureKeyVaultURL        string // e.g. https://myvault.vault.azure.net
+	AzureKeyVaultKeyName    string // an EC P-256 key permitted to sign
+	AzureKeyVaultKeyVersion string // empty: the current version, pinned at startup
+	// AzureKeyVaultCACertFile is an optional PEM file holding the CA
+	// certificate for the key, plus any other CA certificates to trust
+	// beside it. Empty: Omega self-signs one through Key Vault on first
+	// start and keeps it in Dir.
+	AzureKeyVaultCACertFile string
+	// AzureKeyVaultGetenv reads the AZURE_* credential variables.
+	// Nil means os.Getenv; tests inject their own.
+	AzureKeyVaultGetenv func(string) string
 }
 
 // Authority is the signing + bundle interface every Omega CA backend
@@ -204,8 +225,20 @@ func New(cfg Config) (Authority, error) {
 		}
 		local.issuerURL = issuer
 		return newStepCAAuthority(local, cfg)
+	case KindAzureKeyVault:
+		if cfg.AzureKeyVaultURL == "" {
+			return nil, errors.New("identity: azure-keyvault backend requires AzureKeyVaultURL")
+		}
+		if cfg.AzureKeyVaultKeyName == "" {
+			return nil, errors.New("identity: azure-keyvault backend requires AzureKeyVaultKeyName")
+		}
+		td, err := spiffeid.TrustDomainFromString(cfg.TrustDomain)
+		if err != nil {
+			return nil, fmt.Errorf("identity: trust domain: %w", err)
+		}
+		return newAzureKeyVaultAuthority(td, issuer, cfg)
 	default:
-		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA)
+		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA, KindAzureKeyVault)
 	}
 }
 
