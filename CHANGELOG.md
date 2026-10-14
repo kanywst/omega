@@ -12,6 +12,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 - **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
 
+### Changed
+
+- **Breaking: the local PDP verifies bundle signatures by default.** `omega agent --local-pdp-addr` now refuses to start without `--policy-bundle-key`; pass `--insecure-unsigned-policy-bundles` to keep trusting bundles on TLS alone. In the Helm chart `agent.localPDP.verifyBundle` defaults to `true` and needs `server.policyBundleSigningKeySecret`; set it to `false` for the previous behaviour.
+
 ## [0.8.0] - 2026-10-13
 
 Hardens local policy decisions: the control plane can sign the policy bundle, the node agent refuses unsigned, replayed or stale bundles, decisions survive an agent crash through an on-disk spool, and each local decision is recorded once however often it is resent. Adds `examples/spire-authz`, Omega as the authorization and audit layer on top of a real SPIRE deployment, and builds the arm64 image natively.
