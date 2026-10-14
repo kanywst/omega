@@ -392,3 +392,20 @@ func (a *stepCAAuthority) BundleSequence() int64 {
 	_ = a.BundlePEM()
 	return a.overlap.sequence() + a.localAuthority.BundleSequence() - 1
 }
+
+// SetKeptCAHook implements UpstreamCAKeeper.
+func (a *stepCAAuthority) SetKeptCAHook(h func(KeptCAEvent)) { a.overlap.setHook(h) }
+
+// DistrustCAs implements UpstreamCAKeeper. The cached bundle is replaced
+// at once, so the next caller does not wait for its TTL.
+func (a *stepCAAuthority) DistrustCAs(fps [][32]byte) int {
+	n := a.overlap.distrust(fps, time.Now())
+	if n > 0 {
+		if served := a.overlap.serve(time.Now()); served != nil {
+			a.bundleMu.Lock()
+			a.bundle = served
+			a.bundleMu.Unlock()
+		}
+	}
+	return n
+}

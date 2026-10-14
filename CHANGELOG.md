@@ -11,7 +11,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Added
 
 - **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
-- **Overlap across Vault PKI and step-ca rotations.** A CA the external issuer stops publishing stays in Omega's served bundle for `--upstream-ca-grace` (24 hours by default, `0` to turn it off; never past its expiry), so SVIDs it signed keep verifying for peers, and `spiffe_sequence` advances when the issuer's bundle changes.
+- **Overlap across Vault PKI and step-ca rotations.** A CA the external issuer stops publishing stays in Omega's served bundle for `--upstream-ca-grace` (24 hours by default, `0` to turn it off; never past its expiry), so SVIDs it signed keep verifying for peers, and `spiffe_sequence` advances when the issuer's bundle changes. Every change to the kept set is recorded in the audit chain as `ca.upstream`, and `--upstream-ca-distrust` (a fingerprint list re-read on `SIGHUP`) drops a kept CA at once after a compromise. The overlap is on by default: a CA the issuer withdraws stays trusted for the grace period unless it is distrusted or the grace is `0`.
 
 ## [0.8.0] - 2026-10-13
 

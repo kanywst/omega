@@ -293,8 +293,12 @@ func TestVaultPKIKeepsTheRotatedOutCATrusted(t *testing.T) {
 	der, _ := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
 	next := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	v.chain.Store(&next)
-	time.Sleep(5 * time.Millisecond)
-	// The sequence read first already reflects the new bundle.
+	// The sequence read first already reflects the new bundle, once the
+	// 1ms cache has expired.
+	deadline := time.Now().Add(5 * time.Second)
+	for seq() != 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if seq() != 2 {
 		t.Fatalf("sequence read before the bundle: %d", seq())
 	}

@@ -105,6 +105,7 @@ func newServerCommand() *cobra.Command {
 		decisionRecorders          []string
 		bundleSigningKeyFile       string
 		upstreamCAGrace            time.Duration
+		upstreamCADistrustFile     string
 		scimIDPs                   []string
 		identitySource             string
 		identitySourceBundle       string
@@ -344,7 +345,22 @@ func newServerCommand() *cobra.Command {
 			// the previous material installed.
 			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
 			caReloader, _ := ca.(identity.CAReloader)
-			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "" || caReloader != nil) && len(sighupSignals) > 0 {
+			// Vault PKI and step-ca: every change to the CAs kept from a
+			// rotation goes into the audit chain, and the operator's
+			// distrust list drops a kept CA without a restart.
+			keeper, _ := ca.(identity.UpstreamCAKeeper)
+			if keeper != nil {
+				keeper.SetKeptCAHook(func(e identity.KeptCAEvent) { recordKeptCA(ctx, store, e) })
+			}
+			if upstreamCADistrustFile != "" {
+				if keeper == nil {
+					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki or step-ca")
+				}
+				if err := applyCADistrust(keeper, upstreamCADistrustFile); err != nil {
+					return fmt.Errorf("upstream-ca-distrust: %w", err)
+				}
+			}
+			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "" || caReloader != nil || upstreamCADistrustFile != "") && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)
 				signal.Notify(hup, sighupSignals...)
 				go func() {
@@ -376,6 +392,13 @@ func newServerCommand() *cobra.Command {
 									fed.SetOwnBundle(ca.BundlePEM())
 									fmt.Fprintf(os.Stderr, "omega server: CAs reloaded\n")
 									recordCAReload(ctx, store, ca)
+								}
+							}
+							if upstreamCADistrustFile != "" {
+								if err := applyCADistrust(keeper, upstreamCADistrustFile); err != nil {
+									fmt.Fprintf(os.Stderr, "omega server: upstream CA distrust list rejected, keeping the previous one: %v\n", err)
+								} else {
+									fed.SetOwnBundle(ca.BundlePEM())
 								}
 							}
 							// Reload the Cedar policies too, so local
@@ -756,6 +779,8 @@ func newServerCommand() *cobra.Command {
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
 	cmd.Flags().DurationVar(&upstreamCAGrace, "upstream-ca-grace", identity.UpstreamCAGrace,
 		"with --ca-backend=vault-pki or step-ca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers (never past the CA's expiry). 0 drops it at the next refresh, which is what you want after a compromise.")
+	cmd.Flags().StringVar(&upstreamCADistrustFile, "upstream-ca-distrust", "",
+		"with --ca-backend=vault-pki or step-ca, a file of SHA-256 fingerprints (hex, one per line, '#' comments) of CAs never to keep after the issuer stops publishing them. Re-read on SIGHUP, so a CA kept from a rotation can be dropped at once, without a restart, after a compromise.")
 	cmd.Flags().StringVar(&bundleSigningKeyFile, "policy-bundle-signing-key", "",
 		"ECDSA P-256 private key (PEM) that signs every policy bundle served to node agents, so they can verify it with --policy-bundle-key independently of TLS. Every replica must use the same key.")
 	cmd.Flags().StringArrayVar(&decisionRecorders, "decision-recorder", nil,
@@ -1262,6 +1287,32 @@ func recordCAReload(ctx context.Context, store *storage.Store, ca identity.Autho
 	payload, _ := json.Marshal(map[string]any{"active_kid": active, "trusted_cas": strings.Count(string(ca.BundlePEM()), "BEGIN CERTIFICATE"), "spiffe_sequence": seq})
 	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.reload", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
 		fmt.Fprintf(os.Stderr, "omega server: could not record the CA reload in the audit chain: %v\n", err)
+	}
+}
+
+// applyCADistrust reads the distrust list and hands it to the authority.
+func applyCADistrust(keeper identity.UpstreamCAKeeper, path string) error {
+	raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied path
+	if err != nil {
+		return err
+	}
+	fps, err := identity.ParseCAFingerprints(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if n := keeper.DistrustCAs(fps); n > 0 {
+		fmt.Fprintf(os.Stderr, "omega server: dropped %d kept CA(s) on the distrust list\n", n)
+	}
+	return nil
+}
+
+// recordKeptCA appends a change to the CAs kept from a Vault PKI or
+// step-ca rotation to the audit chain, as ca.upstream. On a replica that
+// is not the leader the append is refused and only the log keeps it.
+func recordKeptCA(ctx context.Context, store *storage.Store, e identity.KeptCAEvent) {
+	payload, _ := json.Marshal(map[string]any{"action": e.Action, "reason": e.Reason, "subject": e.Subject, "fingerprint": e.Fingerprint, "until": e.Until.UTC().Format(time.RFC3339)})
+	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.upstream", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
+		fmt.Fprintf(os.Stderr, "omega server: could not record a kept upstream CA change in the audit chain: %v\n", err)
 	}
 }
 

@@ -21,7 +21,6 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
 
 ## Later (6-12 months)
 
-- Drop a CA kept from a Vault PKI or step-ca rotation without a restart, and record the kept set's changes in the audit chain (today they are logged, and `--upstream-ca-grace 0` needs a restart).
 - Agent-side Kubernetes workload attestor (cgroup-based pod
   introspection). The server-side `POST /v1/attest/k8s` endpoint
   has shipped (TokenReview-backed); the SPIRE-style "agent attests
