@@ -29,6 +29,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +57,12 @@ const (
 	awsPCAMaxCommonName = 64
 	awsPCAPollMin       = 100 * time.Millisecond
 	awsPCAPollMax       = 2 * time.Second
+	// awsPCARefreshRetry spaces bundle refresh attempts after a
+	// failure, capped by the bundle TTL.
+	awsPCARefreshRetry = 30 * time.Second
+	// awsPCAValiditySlack absorbs clock skew between omega and AWS
+	// when checking that a leaf does not outlive the requested TTL.
+	awsPCAValiditySlack = 5 * time.Minute
 )
 
 // awsPCAAuthority signs X.509-SVIDs with an AWS Private CA. The
@@ -200,6 +208,13 @@ func (a *awsPCAAuthority) BundlePEM() []byte {
 	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
 	defer cancel()
 	if _, err := a.refreshBundle(ctx); err != nil {
+		// Push the next attempt out so a sustained outage costs one
+		// AWS call (and one log line) per retry interval, not one per
+		// BundlePEM caller.
+		a.bundleMu.Lock()
+		a.bundleExp = time.Now().Add(min(a.bundleTTL, awsPCARefreshRetry))
+		a.bundleMu.Unlock()
+		slog.Warn("aws-pca: CA bundle refresh failed, serving the cached bundle", "ca", a.caARN, "err", err)
 		return stale
 	}
 	a.bundleMu.RLock()
@@ -275,6 +290,7 @@ func (a *awsPCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 		return nil, err
 	}
 	now := time.Now()
+	notAfter := now.Add(svidValidity)
 	passthrough := &acmpcatypes.ApiPassthrough{
 		Extensions: &acmpcatypes.Extensions{
 			SubjectAlternativeNames: []acmpcatypes.GeneralName{
@@ -293,7 +309,7 @@ func (a *awsPCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 		ApiPassthrough:          passthrough,
 		Validity: &acmpcatypes.Validity{
 			Type:  acmpcatypes.ValidityPeriodTypeAbsolute,
-			Value: aws.Int64(now.Add(svidValidity).Unix()),
+			Value: aws.Int64(notAfter.Unix()),
 		},
 		ValidityNotBefore: &acmpcatypes.Validity{
 			Type:  acmpcatypes.ValidityPeriodTypeAbsolute,
@@ -321,7 +337,7 @@ func (a *awsPCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 	if err != nil {
 		return nil, fmt.Errorf("aws-pca: parse certificate: %w", err)
 	}
-	if err := a.checkIssued(cert, id, csr); err != nil {
+	if err := a.checkIssued(cert, id, csr, notAfter); err != nil {
 		return nil, err
 	}
 	return &SVID{
@@ -366,11 +382,27 @@ func (a *awsPCAAuthority) waitForCertificate(ctx context.Context, certARN string
 
 // checkIssued is defence in depth against a misconfigured template or
 // CA: the leaf must be an end-entity certificate for exactly the
-// requested SPIFFE ID, carry the CSR's key, and be signed by the CA
-// the bundle publishes.
-func (a *awsPCAAuthority) checkIssued(cert *x509.Certificate, id spiffeid.ID, csr *x509.CertificateRequest) error {
+// requested SPIFFE ID, carry the CSR's key, be usable for mTLS in both
+// directions, be valid now and not outlive the requested notAfter, and
+// be signed by the CA the bundle publishes.
+func (a *awsPCAAuthority) checkIssued(cert *x509.Certificate, id spiffeid.ID, csr *x509.CertificateRequest, notAfter time.Time) error {
 	if cert.IsCA {
 		return errors.New("aws-pca: issued certificate is a CA certificate; check the template ARN")
+	}
+	// X.509-SVID: a leaf must assert digitalSignature and must not
+	// assert keyCertSign or cRLSign.
+	if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 || cert.KeyUsage&(x509.KeyUsageCertSign|x509.KeyUsageCRLSign) != 0 {
+		return fmt.Errorf("aws-pca: issued certificate key usage %#x is not an X.509-SVID leaf's; check the template ARN", cert.KeyUsage)
+	}
+	if len(cert.ExtKeyUsage) > 0 && (!slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageServerAuth) || !slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageClientAuth)) {
+		return errors.New("aws-pca: issued certificate lacks the serverAuth or clientAuth extended key usage; check the template ARN")
+	}
+	now := time.Now()
+	if now.Before(cert.NotBefore.Add(-awsPCAValiditySlack)) || !now.Before(cert.NotAfter) {
+		return fmt.Errorf("aws-pca: issued certificate is not valid now (%s to %s)", cert.NotBefore.Format(time.RFC3339), cert.NotAfter.Format(time.RFC3339))
+	}
+	if cert.NotAfter.After(notAfter.Add(awsPCAValiditySlack)) {
+		return fmt.Errorf("aws-pca: issued certificate expires at %s, after the requested %s", cert.NotAfter.Format(time.RFC3339), notAfter.Format(time.RFC3339))
 	}
 	if !bytes.Equal(cert.RawSubjectPublicKeyInfo, csr.RawSubjectPublicKeyInfo) {
 		return errors.New("aws-pca: issued certificate public key does not match CSR")

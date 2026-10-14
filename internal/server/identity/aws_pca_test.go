@@ -41,7 +41,7 @@ type pcaFixture struct {
 	subCert  *x509.Certificate
 	subKey   crypto.Signer
 	subPEM   []byte
-	leafMode atomic.Value // string: "", "extra-uri", "wrong-key", "foreign-ca", "ca-leaf"
+	leafMode atomic.Value // string: "" for a valid leaf, or one of the bad-leaf modes in sign
 
 	inProgress    atomic.Int64 // GetCertificate calls left that answer RequestInProgressException
 	failCA        atomic.Bool
@@ -236,6 +236,15 @@ func (f *pcaFixture) sign(body map[string]any) ([]byte, error) {
 		parent, parentKey = f.foreignCACert, f.foreignCAKey
 	case "ca-leaf":
 		tpl.IsCA = true
+	case "cert-sign-ku":
+		tpl.KeyUsage |= x509.KeyUsageCertSign
+	case "client-only-eku":
+		tpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	case "long-lived":
+		tpl.NotAfter = time.Now().Add(24 * time.Hour)
+	case "expired":
+		tpl.NotBefore = time.Now().Add(-2 * time.Hour)
+		tpl.NotAfter = time.Now().Add(-time.Hour)
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, parent, pub, parentKey)
 	if err != nil {
@@ -397,7 +406,7 @@ func TestAWSPCAIssueSVID_IssueError(t *testing.T) {
 }
 
 func TestAWSPCAIssueSVID_RejectsBadLeaf(t *testing.T) {
-	for _, mode := range []string{"extra-uri", "wrong-key", "foreign-ca", "ca-leaf"} {
+	for _, mode := range []string{"extra-uri", "wrong-key", "foreign-ca", "ca-leaf", "cert-sign-ku", "client-only-eku", "long-lived", "expired"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newPCAFixture(t, nil)
 			a := newPCAAuthority(t, f)
@@ -464,6 +473,28 @@ func TestAWSPCABundleServesStaleOnError(t *testing.T) {
 	}
 	if f.caHits.Load() == hits {
 		t.Error("expired bundle did not trigger a refresh")
+	}
+}
+
+func TestAWSPCABundleRefreshFailureBacksOff(t *testing.T) {
+	f := newPCAFixture(t, nil)
+	cfg := pcaConfig(t, f)
+	cfg.AWSPCABundleTTL = 50 * time.Millisecond
+	a, err := identity.New(cfg)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	f.failCA.Store(true)
+	time.Sleep(60 * time.Millisecond)
+	_ = a.BundlePEM()
+	hits := f.caHits.Load()
+	for range 5 {
+		if len(a.BundlePEM()) == 0 {
+			t.Fatal("empty bundle during an outage")
+		}
+	}
+	if f.caHits.Load() != hits {
+		t.Errorf("failed refresh retried on every call: %d extra calls", f.caHits.Load()-hits)
 	}
 }
 

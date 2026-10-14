@@ -48,11 +48,11 @@ omega calls `IssueCertificate` with the workload's CSR, the configured template,
 
 AWS issues asynchronously: `IssueCertificate` returns a certificate ARN, and `GetCertificate` answers `RequestInProgressException` until the certificate is ready. omega polls with a backoff from 100 ms to 2 s, bounded by a 30-second deadline per issuance.
 
-Before returning the SVID, omega checks that the leaf is not a CA certificate, carries exactly the requested SPIFFE ID as its URI SAN, holds the CSR's public key, and is signed by the configured CA. A leaf that fails any check is refused, which catches a template that drops the SAN or a misdirected CA.
+Before returning the SVID, omega checks that the leaf is not a CA certificate, asserts `digitalSignature` but not `keyCertSign` or `cRLSign`, carries both the server and client authentication EKUs when it carries any, is valid now and does not outlive the requested 30 minutes (with five minutes of skew allowed), carries exactly the requested SPIFFE ID as its URI SAN, holds the CSR's public key, and is signed by the configured CA. A leaf that fails any check is refused, which catches a template override that changes the leaf's shape or a misdirected CA.
 
 ## Trust bundle
 
-`GET /v1/bundle` serves the CA certificate followed by its chain, from `GetCertificateAuthorityCertificate`. For a subordinate CA the bundle therefore holds the issuing CA and the root above it; the SVID itself is the leaf alone. The bundle is fetched at startup, so a wrong ARN, region, endpoint or missing permission stops the server before it serves traffic, and is cached for five minutes afterwards. If a refresh fails, the previous bundle is served rather than none, so an AWS API outage does not break workloads' mTLS. Issuance itself has no such fallback: while AWS is unreachable, new SVIDs fail and workloads keep the SVIDs they hold until those expire.
+`GET /v1/bundle` serves the CA certificate followed by its chain, from `GetCertificateAuthorityCertificate`. For a subordinate CA the bundle therefore holds the issuing CA and the root above it; the SVID itself is the leaf alone. The bundle is fetched at startup, so a wrong ARN, region, endpoint or missing permission stops the server before it serves traffic, and is cached for five minutes afterwards. If a refresh fails, the previous bundle is served rather than none, so an AWS API outage does not break workloads' mTLS; the failure is logged and the next attempt waits 30 seconds (or the cache lifetime, if shorter). Issuance itself has no such fallback: while AWS is unreachable, new SVIDs fail and workloads keep the SVIDs they hold until those expire.
 
 ## Operational notes
 
