@@ -24,7 +24,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -47,15 +49,18 @@ import (
 
 const (
 	defaultAWSPCABundleTTL = 5 * time.Minute
-	defaultAWSPCATimeout   = 30 * time.Second
+	// defaultAWSPCATimeout stays under the API server's 30s write
+	// timeout, so a slow issuance fails with an error the caller sees.
+	defaultAWSPCATimeout = 20 * time.Second
 	// awsPCATemplate is the template the backend uses unless the
 	// operator overrides it. It fixes CA:FALSE, digital signature +
 	// key encipherment, and server + client auth EKUs, and lets the
 	// API supply the SAN and subject.
 	awsPCATemplate = "template/EndEntityCertificate_APIPassthrough/V1"
 	// awsPCAMaxCommonName is AWS Private CA's limit on the subject
-	// CommonName; longer SPIFFE IDs are issued with no subject, which
-	// X.509-SVIDs allow (the URI SAN carries the identity).
+	// CommonName. A longer SPIFFE ID gets the hex SHA-256 of the ID as
+	// its CN (exactly 64 characters), so the subject is always one omega
+	// chose and never the one in the caller's CSR.
 	awsPCAMaxCommonName = 64
 	awsPCAPollMin       = 100 * time.Millisecond
 	awsPCAPollMax       = 2 * time.Second
@@ -160,6 +165,9 @@ func newAWSPCAAuthority(local *localAuthority, cfg Config) (*awsPCAAuthority, er
 	if _, err := a.refreshBundle(ctx); err != nil {
 		return nil, fmt.Errorf("identity: aws-pca: initial CA certificate probe: %w", err)
 	}
+	if a.signingAlg != "" && !slices.Contains(a.signingAlg.Values(), a.signingAlg) {
+		return nil, fmt.Errorf("identity: aws-pca: unknown signing algorithm %q (supported: %v)", a.signingAlg, a.signingAlg.Values())
+	}
 	if a.signingAlg == "" {
 		a.bundleMu.RLock()
 		alg, err := awsPCASigningAlgorithmFor(a.issuingCA)
@@ -232,7 +240,15 @@ func (a *awsPCAAuthority) BundlePEM() []byte {
 	stale := append([]byte(nil), a.bundle...)
 	a.bundleMu.RUnlock()
 
-	a.refreshMu.Lock()
+	// One caller refreshes; while it waits on AWS, the others serve the
+	// cached bundle instead of queueing behind it.
+	if len(stale) > 0 {
+		if !a.refreshMu.TryLock() {
+			return stale
+		}
+	} else {
+		a.refreshMu.Lock()
+	}
 	defer a.refreshMu.Unlock()
 	a.bundleMu.RLock()
 	if len(a.bundle) > 0 && time.Now().Before(a.bundleExp) {
@@ -403,15 +419,23 @@ func (a *awsPCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 	}
 	now := time.Now()
 	notAfter := now.Add(svidValidity)
+	// The subject, SAN, key usage and EKUs all come from omega. API
+	// passthrough values take priority over the CSR's, and template
+	// values over both, so the default template keeps its own KU/EKU
+	// while a Blank*_APIPassthrough override still gets an SVID profile.
+	subjectCN := awsPCASubjectCN(id)
 	passthrough := &acmpcatypes.ApiPassthrough{
+		Subject: &acmpcatypes.ASN1Subject{CommonName: aws.String(subjectCN)},
 		Extensions: &acmpcatypes.Extensions{
 			SubjectAlternativeNames: []acmpcatypes.GeneralName{
 				{UniformResourceIdentifier: aws.String(id.String())},
 			},
+			KeyUsage: &acmpcatypes.KeyUsage{DigitalSignature: true, KeyEncipherment: true},
+			ExtendedKeyUsage: []acmpcatypes.ExtendedKeyUsage{
+				{ExtendedKeyUsageType: acmpcatypes.ExtendedKeyUsageTypeServerAuth},
+				{ExtendedKeyUsageType: acmpcatypes.ExtendedKeyUsageTypeClientAuth},
+			},
 		},
-	}
-	if len(id.String()) <= awsPCAMaxCommonName {
-		passthrough.Subject = &acmpcatypes.ASN1Subject{CommonName: aws.String(id.String())}
 	}
 	issued, err := a.client.IssueCertificate(ctx, &acmpca.IssueCertificateInput{
 		CertificateAuthorityArn: aws.String(a.caARN),
@@ -449,13 +473,15 @@ func (a *awsPCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 	if err != nil {
 		return nil, fmt.Errorf("aws-pca: parse certificate: %w", err)
 	}
-	if err := a.checkIssued(ctx, cert, id, csr, notAfter); err != nil {
+	if err := a.checkIssued(ctx, cert, id, csr, subjectCN, notAfter); err != nil {
 		return nil, err
 	}
 	return &SVID{
-		SPIFFEID:  id,
-		CertPEM:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes}),
-		BundlePEM: a.BundlePEM(),
+		SPIFFEID: id,
+		CertPEM:  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes}),
+		// The bundle checkIssued just verified against; BundlePEM could
+		// wait on another refresh and push the response past its deadline.
+		BundlePEM: a.cachedBundle(),
 		NotBefore: cert.NotBefore,
 		NotAfter:  cert.NotAfter,
 	}, nil
@@ -497,9 +523,15 @@ func (a *awsPCAAuthority) waitForCertificate(ctx context.Context, certARN string
 // requested SPIFFE ID, carry the CSR's key, be usable for mTLS in both
 // directions, be valid now and not outlive the requested notAfter, and
 // be signed by the CA the bundle publishes.
-func (a *awsPCAAuthority) checkIssued(ctx context.Context, cert *x509.Certificate, id spiffeid.ID, csr *x509.CertificateRequest, notAfter time.Time) error {
-	if cert.IsCA {
-		return errors.New("aws-pca: issued certificate is a CA certificate; check the template ARN")
+func (a *awsPCAAuthority) checkIssued(ctx context.Context, cert *x509.Certificate, id spiffeid.ID, csr *x509.CertificateRequest, subjectCN string, notAfter time.Time) error {
+	if !cert.BasicConstraintsValid || cert.IsCA {
+		return errors.New("aws-pca: issued certificate is not marked CA:FALSE; check the template ARN")
+	}
+	// Exactly the subject omega sent: a single CN. Anything else came
+	// from the caller's CSR or the template, and omega did not vouch
+	// for it.
+	if len(cert.Subject.Names) != 1 || !cert.Subject.Names[0].Type.Equal(oidCommonName) || cert.Subject.CommonName != subjectCN {
+		return fmt.Errorf("aws-pca: issued certificate subject %q is not CN=%s", cert.Subject, subjectCN)
 	}
 	// X.509-SVID: a leaf must assert digitalSignature and must not
 	// assert keyCertSign or cRLSign.
@@ -546,6 +578,25 @@ func (a *awsPCAAuthority) checkIssued(ctx context.Context, cert *x509.Certificat
 		return fmt.Errorf("aws-pca: issued certificate is not signed by the configured CA: %w", err)
 	}
 	return nil
+}
+
+// oidCommonName is the X.520 commonName attribute type.
+var oidCommonName = asn1.ObjectIdentifier{2, 5, 4, 3}
+
+// awsPCASubjectCN is the subject CN omega asks for: the SPIFFE ID when it
+// fits AWS's 64-character limit, else the hex SHA-256 of the ID.
+func awsPCASubjectCN(id spiffeid.ID) string {
+	if s := id.String(); len(s) <= awsPCAMaxCommonName {
+		return s
+	}
+	sum := sha256.Sum256([]byte(id.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+func (a *awsPCAAuthority) cachedBundle() []byte {
+	a.bundleMu.RLock()
+	defer a.bundleMu.RUnlock()
+	return append([]byte(nil), a.bundle...)
 }
 
 func (a *awsPCAAuthority) currentIssuingCA() *x509.Certificate {

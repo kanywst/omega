@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -219,8 +220,16 @@ func (f *pcaFixture) sign(body map[string]any) ([]byte, error) {
 			uris = append(uris, parsed)
 		}
 	}
+	// Subject: the API's when given (API passthrough beats the CSR),
+	// else the CSR's, as AWS's order of operations documents.
+	subject := csr.Subject
+	if subj, ok := pt["Subject"].(map[string]any); ok {
+		cn, _ := subj["CommonName"].(string)
+		subject = pkix.Name{CommonName: cn}
+	}
 	tpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               subject,
 		NotBefore:             time.Now().Add(-time.Minute),
 		NotAfter:              time.Now().Add(30 * time.Minute),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
@@ -248,6 +257,12 @@ func (f *pcaFixture) sign(body map[string]any) ([]byte, error) {
 		tpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	case "long-lived":
 		tpl.NotAfter = time.Now().Add(24 * time.Hour)
+	case "csr-subject":
+		tpl.Subject = csr.Subject
+	case "extra-rdn":
+		tpl.Subject.Organization = []string{"evil"}
+	case "no-basic-constraints":
+		tpl.BasicConstraintsValid = false
 	case "dns-san":
 		tpl.DNSNames = []string{"admin.internal"}
 	case "expired":
@@ -414,7 +429,7 @@ func TestAWSPCAIssueSVID_IssueError(t *testing.T) {
 }
 
 func TestAWSPCAIssueSVID_RejectsBadLeaf(t *testing.T) {
-	for _, mode := range []string{"extra-uri", "wrong-key", "foreign-ca", "ca-leaf", "cert-sign-ku", "client-only-eku", "long-lived", "expired", "dns-san"} {
+	for _, mode := range []string{"extra-uri", "wrong-key", "foreign-ca", "ca-leaf", "cert-sign-ku", "client-only-eku", "long-lived", "expired", "dns-san", "csr-subject", "extra-rdn", "no-basic-constraints"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newPCAFixture(t, nil)
 			a := newPCAAuthority(t, f)
@@ -445,19 +460,66 @@ func TestAWSPCAIssueSVID_InputValidation(t *testing.T) {
 	}
 }
 
-func TestAWSPCALongIDHasNoSubject(t *testing.T) {
+func TestAWSPCALongIDGetsAHashedSubjectNotTheCSRs(t *testing.T) {
 	f := newPCAFixture(t, nil)
 	a := newPCAAuthority(t, f)
-	csr, _ := vaultIssueCSR(t)
+	// A hostile caller puts its own DN in the CSR.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "postgres-admin", Organization: []string{"corp"}}}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, _ := x509.ParseCertificateRequest(der)
 	id := spiffeid.RequireFromString("spiffe://omega.local/" + strings.Repeat("a", 80))
-	if _, err := a.IssueSVID(id, csr); err != nil {
+	svid, err := a.IssueSVID(id, csr)
+	if err != nil {
 		t.Fatalf("issue: %v", err)
+	}
+	sum := sha256.Sum256([]byte(id.String()))
+	want := hex.EncodeToString(sum[:])
+	if leaf := parseLeaf(t, svid.CertPEM); leaf.Subject.String() != "CN="+want {
+		t.Errorf("subject = %q, want CN=%s", leaf.Subject, want)
 	}
 	f.mu.Lock()
 	pt, _ := f.lastIssue["ApiPassthrough"].(map[string]any)
 	f.mu.Unlock()
-	if _, ok := pt["Subject"]; ok {
-		t.Error("a SPIFFE ID over 64 bytes must not be sent as the subject CommonName")
+	if subj, _ := pt["Subject"].(map[string]any); subj["CommonName"] != want {
+		t.Errorf("sent subject %v, want CN %s", subj, want)
+	}
+
+	// A template that let the CSR subject through is refused.
+	f.leafMode.Store("csr-subject")
+	if _, err := a.IssueSVID(id, csr); err == nil || !strings.Contains(err.Error(), "subject") {
+		t.Fatalf("CSR subject reached the leaf: %v", err)
+	}
+}
+
+func TestAWSPCASendsTheSVIDProfile(t *testing.T) {
+	f := newPCAFixture(t, nil)
+	a := newPCAAuthority(t, f)
+	csr, _ := vaultIssueCSR(t)
+	if _, err := a.IssueSVID(spiffeid.RequireFromString("spiffe://omega.local/x"), csr); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	pt, _ := f.lastIssue["ApiPassthrough"].(map[string]any)
+	f.mu.Unlock()
+	ext, _ := pt["Extensions"].(map[string]any)
+	ku, _ := ext["KeyUsage"].(map[string]any)
+	if ku["DigitalSignature"] != true || ku["KeyCertSign"] == true {
+		t.Errorf("KeyUsage sent = %v", ku)
+	}
+	if eku, _ := ext["ExtendedKeyUsage"].([]any); len(eku) != 2 {
+		t.Errorf("ExtendedKeyUsage sent = %v", eku)
+	}
+}
+
+func TestAWSPCARejectsUnknownSigningAlgorithm(t *testing.T) {
+	f := newPCAFixture(t, nil)
+	cfg := pcaConfig(t, f)
+	cfg.AWSPCASigningAlgorithm = "SHA1WITHRSA"
+	if _, err := identity.New(cfg); err == nil || !strings.Contains(err.Error(), "unknown signing algorithm") {
+		t.Fatalf("got %v", err)
 	}
 }
 
