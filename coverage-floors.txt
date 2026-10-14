@@ -7,7 +7,7 @@ github.com/kanywst/omega/internal/server/api 83
 github.com/kanywst/omega/internal/server/attest 88
 github.com/kanywst/omega/internal/server/audit 85
 github.com/kanywst/omega/internal/server/federation 78
-github.com/kanywst/omega/internal/server/identity 75
+github.com/kanywst/omega/internal/server/identity 78
 github.com/kanywst/omega/internal/server/oidc 81
 github.com/kanywst/omega/internal/server/policy 84
 github.com/kanywst/omega/internal/server/storage 68
