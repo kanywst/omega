@@ -4,11 +4,11 @@ package attestor
 
 import "golang.org/x/sys/unix"
 
-// getPeerCreds returns (uid, gid) of the peer connected to the unix socket fd.
-func getPeerCreds(fd int) (uid, gid uint32, err error) {
+// getPeerCreds returns the credentials of the peer connected to the unix socket fd.
+func getPeerCreds(fd int) (Creds, error) {
 	cred, err := unix.GetsockoptUcred(fd, unix.SOL_SOCKET, unix.SO_PEERCRED)
 	if err != nil {
-		return 0, 0, err
+		return Creds{}, err
 	}
-	return cred.Uid, cred.Gid, nil
+	return Creds{UID: cred.Uid, GID: cred.Gid, PID: cred.Pid}, nil
 }
