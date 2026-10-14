@@ -321,3 +321,23 @@ func TestServerCommandClientCertOptionalNeedsRequireAuth(t *testing.T) {
 		t.Fatalf("want a refusal without --require-auth, got %v", err)
 	}
 }
+
+// The azure-keyvault flags reach identity.New: a plain-http vault URL
+// is refused before any request carries a token.
+func TestServerCommandAzureKeyVaultFlags(t *testing.T) {
+	cmd := newServerCommand()
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{
+		"--data-dir", t.TempDir(),
+		"--ca-backend", "azure-keyvault",
+		"--ca-azure-keyvault-url", "http://myvault.vault.azure.net",
+		"--ca-azure-keyvault-key", "omega-ca",
+		"--ca-azure-keyvault-key-version", "v1",
+		"--ca-azure-keyvault-ca-cert", "ca.pem",
+	})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "azure-keyvault") || !strings.Contains(err.Error(), "must use https") {
+		t.Fatalf("want the vault URL refused, got: %v", err)
+	}
+}
