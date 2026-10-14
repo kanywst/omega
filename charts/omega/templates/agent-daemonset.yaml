@@ -27,6 +27,42 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Hand the root-owned hostPath directory to the agent's user.
+        {{- $hostDir := clean .Values.agent.hostSocketPath }}
+        {{- if not (regexMatch "^(/var)?/run/omega[A-Za-z0-9._-]*(/[A-Za-z0-9._-]+)*$" $hostDir) }}
+        {{- fail (printf "agent.hostSocketPath %q must be a directory of the agent's own under /run/omega* or /var/run/omega*: its owner and mode are changed on every node." $hostDir) }}
+        {{- end }}
+        - name: prepare-socket-dir
+          image: {{ include "omega.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - agent
+            - prepare-socket-dir
+            - --dir={{ dir .Values.agent.socketPath }}
+            - --uid={{ required "podSecurityContext.runAsUser is required: the agent's socket directory is handed to that user" .Values.podSecurityContext.runAsUser }}
+            - --gid={{ required "podSecurityContext.runAsGroup is required: the agent's socket directory is handed to that group" .Values.podSecurityContext.runAsGroup }}
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: agent-sock
+              mountPath: {{ dir .Values.agent.socketPath }}
       containers:
         - name: agent
           image: {{ include "omega.image" . | quote }}

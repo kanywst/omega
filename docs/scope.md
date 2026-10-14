@@ -27,7 +27,7 @@
 
 ## Out-of-scope today
 
-CSI driver, PQC (ML-DSA), HSM / KMS Authority plugins (AWS Private CA, GCP CAS, Azure Key Vault). See [ROADMAP.md](../ROADMAP.md) for what is queued next.
+PQC (ML-DSA), HSM / KMS Authority plugins (AWS Private CA, GCP CAS, Azure Key Vault). See [ROADMAP.md](../ROADMAP.md) for what is queued next.
 
 ## Definition of Done for the demo
 
