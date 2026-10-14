@@ -467,6 +467,22 @@ func TestAzureKeyVaultSuppliedCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A CA issued by another CA, not a root.
+	other2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	issuedTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(10),
+		Subject:               pkix.Name{CommonName: "issued"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	issuedDER, err := x509.CreateCertificate(rand.Reader, issuedTpl, firstCert(t, prev), &other2.PublicKey, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedExtra := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuedDER})
 	for name, tc := range map[string]struct {
 		extra []byte
 		want  string
@@ -474,6 +490,7 @@ func TestAzureKeyVaultSuppliedCert(t *testing.T) {
 		"non-CA extra":  {selfSigned(t, other, false), "is not a CA certificate"},
 		"P-384 extra":   {selfSigned(t, p384, true), "P-256"},
 		"expired extra": {pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: expiredDER}), "expired"},
+		"issued extra":  {issuedExtra, "not a self-signed root"},
 	} {
 		if err := os.WriteFile(path, append(append([]byte{}, active...), tc.extra...), 0o600); err != nil {
 			t.Fatal(err)
