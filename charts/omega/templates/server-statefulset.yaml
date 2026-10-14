@@ -54,10 +54,11 @@ spec:
             - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
             {{- end }}
             {{- with .Values.server.ca }}
-            {{- if and .backend (ne .backend "disk") }}
-            - --ca-backend={{ .backend }}
+            {{- $backend := default "disk" .backend }}
+            {{- if ne $backend "disk" }}
+            - --ca-backend={{ $backend }}
             {{- end }}
-            {{- if eq .backend "aws-pca" }}
+            {{- if eq $backend "aws-pca" }}
             {{- with .awsPCA }}
             - --ca-aws-pca-arn={{ required "server.ca.awsPCA.arn is required when server.ca.backend=aws-pca" .arn }}
             {{- if .region }}
