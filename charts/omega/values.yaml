@@ -56,13 +56,14 @@ server:
     azureKeyVault:
       url: ""            # https://<vault>.vault.azure.net
       key: ""            # an EC P-256 key
-      keyVersion: ""     # empty: the current version at startup
+      keyVersion: ""     # empty: the current version at startup; required when replicas > 1
       # Secret whose "ca.crt" holds the CA certificate for the key, plus
       # any CA certificate to trust beside it. Empty: each replica
       # self-signs one into its data volume, so set it when replicas > 1.
       caCertSecret: ""
       # Secret loaded as environment variables (AZURE_TENANT_ID,
       # AZURE_CLIENT_ID, AZURE_CLIENT_SECRET) for a service principal.
+      # A client secret takes precedence over workload identity.
       credentialsSecret: ""
   resources:
     limits:

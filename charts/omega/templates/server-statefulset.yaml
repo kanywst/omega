@@ -64,8 +64,8 @@ spec:
             - --ca-backend={{ $ca.backend }}
             {{- end }}
             {{- if eq $ca.backend "azure-keyvault" }}
-            {{- if and (gt (int .Values.server.replicas) 1) (not $ca.azureKeyVault.caCertSecret) }}
-            {{- fail "server.ca.azureKeyVault.caCertSecret is required when server.replicas > 1, so every replica serves the same CA" }}
+            {{- if and (gt (int .Values.server.replicas) 1) (not (and $ca.azureKeyVault.caCertSecret $ca.azureKeyVault.keyVersion)) }}
+            {{- fail "server.ca.azureKeyVault.caCertSecret and keyVersion are required when server.replicas > 1, so every replica serves the same CA and signs with the same key version" }}
             {{- end }}
             - --ca-azure-keyvault-url={{ required "server.ca.azureKeyVault.url is required with server.ca.backend=azure-keyvault" $ca.azureKeyVault.url }}
             - --ca-azure-keyvault-key={{ required "server.ca.azureKeyVault.key is required with server.ca.backend=azure-keyvault" $ca.azureKeyVault.key }}

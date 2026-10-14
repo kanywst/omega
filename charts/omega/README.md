@@ -41,7 +41,7 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `server.ca.backend` | `disk` | `--ca-backend`; `disk` is for evaluation |
 | `server.ca.azureKeyVault.url` / `.key` / `.keyVersion` | `""` | Key Vault or Managed HSM URL and the EC P-256 key that signs as the CA (`backend: azure-keyvault`) |
 | `server.ca.azureKeyVault.caCertSecret` | `""` | Secret with `ca.crt`, the CA certificate for the key; set it with more than one replica |
-| `server.ca.azureKeyVault.credentialsSecret` | `""` | Secret loaded as `AZURE_*` environment variables for a service principal; leave empty for workload or managed identity |
+| `server.ca.azureKeyVault.credentialsSecret` | `""` | Secret loaded as `AZURE_*` environment variables for a service principal; leave empty for workload or managed identity, since a client secret takes precedence over both |
 
 ## CA in Azure Key Vault
 
@@ -67,7 +67,7 @@ server:
       key: omega-ca
 ```
 
-Without `caCertSecret` the server self-signs a CA certificate through Key Vault on first start and keeps it in its data volume (`ca/azure-keyvault-ca.crt`). With more than one replica, copy that file into a Secret and set `caCertSecret`, so every replica serves the same CA. See [docs/ca-azure-keyvault.md](../../docs/ca-azure-keyvault.md).
+Without `caCertSecret` the server self-signs a CA certificate through Key Vault on first start and keeps it in its data volume (`ca/azure-keyvault-ca.crt`). With more than one replica, copy that file into a Secret and set `caCertSecret`, and pin `keyVersion`, so every replica serves the same CA and signs with the same key version; the chart refuses to render otherwise. See [docs/ca-azure-keyvault.md](../../docs/ca-azure-keyvault.md).
 
 ## Verify
 
