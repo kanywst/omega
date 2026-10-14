@@ -11,6 +11,11 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Added
 
 - **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
+- **SPIFFE CSI driver in the Helm chart.** `csi.enabled` deploys the upstream SPIFFE CSI driver against the Omega agent's socket directory, so pods mount the Workload API with a `csi.spiffe.io` ephemeral volume instead of a hostPath. `examples/kind-csi` checks it end to end in kind, in CI.
+
+### Fixed
+
+- **The chart's agent can create its socket on a fresh node.** It runs as uid 65532 while kubelet creates its hostPath directory root-owned, so it failed with `bind: permission denied`. An init container with only `CAP_CHOWN` (`omega agent prepare-socket-dir`) now hands the directory to the agent's user; the agent stays non-root.
 
 ### Changed
 
