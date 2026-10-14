@@ -106,6 +106,19 @@ func TestRegistrySetOwnBundleServesRotatedAnchors(t *testing.T) {
 	}
 }
 
+func TestRegistryOwnBundleSourceIsReadLive(t *testing.T) {
+	ownPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA")
+	nextPEM, _, _ := newSelfSignedCA(t, "Omega Alpha CA v2")
+	td := spiffeid.RequireTrustDomainFromString("omega.alpha")
+	r := newRegistry(t, td, ownPEM, nil, time.Hour)
+	cur := ownPEM
+	r.SetOwnBundleSource(func() []byte { return cur })
+	cur = nextPEM
+	if string(r.Bundles()["omega.alpha"]) != string(nextPEM) {
+		t.Fatal("Bundles() must read the own-bundle source on every call")
+	}
+}
+
 func TestRegistryFetchesPeerViaTDF(t *testing.T) {
 	peerTD := spiffeid.RequireTrustDomainFromString("omega.beta")
 	peerPEM, peerDER, peerCert := newSelfSignedCA(t, "Omega Beta CA")

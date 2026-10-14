@@ -232,6 +232,11 @@ func (a *stepCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	if block == nil || block.Type != "CERTIFICATE" {
 		return nil, errors.New("step-ca: /roots.pem does not begin with a CERTIFICATE block")
 	}
+	// The pinned root must be one Omega serves, and only certificates
+	// that parse are served.
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return nil, fmt.Errorf("step-ca: the first root in /roots.pem does not parse: %w", err)
+	}
 	sum := sha256.Sum256(block.Bytes)
 	rootSHA := hex.EncodeToString(sum[:])
 

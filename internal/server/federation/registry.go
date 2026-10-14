@@ -94,6 +94,9 @@ type PeerConfig struct {
 type Registry struct {
 	ownTD     spiffeid.TrustDomain
 	ownBundle []byte
+	// ownSource, when set, supplies the local bundle on every read
+	// instead of ownBundle.
+	ownSource func() []byte
 
 	peers []PeerConfig
 	// peerClients holds one verifying http.Client per peer (keyed by
@@ -326,9 +329,21 @@ func (r *Registry) clientFor(trustDomain string) (*http.Client, error) {
 // are free to mutate the returned map and slices.
 func (r *Registry) Bundles() map[string][]byte {
 	r.mu.RLock()
+	src := r.ownSource
+	r.mu.RUnlock()
+	// Read the live source outside the lock: it may refresh from the
+	// issuer.
+	var own []byte
+	if src != nil {
+		own = src()
+	}
+	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if src == nil {
+		own = r.ownBundle
+	}
 	out := make(map[string][]byte, len(r.peerBundles)+1)
-	out[r.ownTD.Name()] = append([]byte(nil), r.ownBundle...)
+	out[r.ownTD.Name()] = append([]byte(nil), own...)
 	for td, pem := range r.peerBundles {
 		out[td] = append([]byte(nil), pem...)
 	}
@@ -343,6 +358,15 @@ func (r *Registry) SetOwnBundle(bundle []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ownBundle = append([]byte(nil), bundle...)
+}
+
+// SetOwnBundleSource makes the registry read the local trust bundle from
+// src on every request, for an issuer whose bundle changes without a
+// signal (Vault PKI and step-ca, whose kept CAs come and go on their own).
+func (r *Registry) SetOwnBundleSource(src func() []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ownSource = src
 }
 
 // Peers returns the configured peer set (without bundle contents).

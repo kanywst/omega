@@ -354,6 +354,9 @@ func newServerCommand() *cobra.Command {
 			keeper, _ := ca.(identity.UpstreamCAKeeper)
 			if keeper != nil {
 				keeper.SetKeptCAHook(func(e identity.KeptCAEvent) { recordKeptCA(ctx, store, e) })
+				// The kept set changes on its own, so peers read the
+				// bundle live rather than a copy refreshed on SIGHUP.
+				fed.SetOwnBundleSource(ca.BundlePEM)
 			}
 			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
 			if upstreamCADistrustFile != "" {
@@ -1339,11 +1342,13 @@ func (d *caDistrust) applyFile(ctx context.Context) error {
 	if len(list) == 0 && len(d.last) > 0 {
 		fmt.Fprintf(os.Stderr, "omega server: WARN the upstream CA distrust list is now empty; %d CA(s) may be kept again\n", len(d.last))
 	}
-	d.last = list
 	payload, _ := json.Marshal(map[string]any{"action": "distrust-list", "fingerprints": list, "dropped": dropped})
 	if _, err := d.store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.upstream", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
+		// Not remembered as recorded, so the next SIGHUP tries again.
 		fmt.Fprintf(os.Stderr, "omega server: could not record the distrust list in the audit chain: %v\n", err)
+		return nil
 	}
+	d.last = list
 	return nil
 }
 
