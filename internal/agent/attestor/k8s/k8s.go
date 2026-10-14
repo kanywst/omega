@@ -49,6 +49,9 @@ const mirrorAnnotation = "kubernetes.io/config.mirror"
 // so a process probing the socket cannot turn into apiserver load.
 const minRelist = time.Second
 
+// listTimeout bounds one pod list, which callers queue behind.
+const listTimeout = 10 * time.Second
+
 // Config wires an Attestor.
 type Config struct {
 	// Client reaches kube-apiserver. The agent's service account needs
@@ -103,10 +106,11 @@ type Attestor struct {
 	now      func() time.Time
 	log      io.Writer
 
+	relistMu sync.Mutex // serialises pod lists
 	mu       sync.Mutex
 	pods     map[string]*corev1.Pod // keyed by UID
 	mirrors  map[string]*corev1.Pod // static pods' mirror pods, keyed by config hash
-	listedAt time.Time
+	listedAt time.Time              // when the last list was attempted
 }
 
 // New checks cfg and returns an Attestor. The template must render a
@@ -244,29 +248,53 @@ func (a *Attestor) startTime(pid int32) (string, error) {
 // A miss that cannot re-list yet is reported as transient, not as a
 // refusal, so the workload's client retries instead of giving up.
 func (a *Attestor) lookup(ctx context.Context, ref ContainerRef) (*corev1.Pod, error) {
-	a.mu.Lock()
-	pod := a.podLocked(ref.PodUID)
-	fresh := a.now().Sub(a.listedAt) < minRelist
-	a.mu.Unlock()
-	if pod != nil && hasContainer(pod, ref.ContainerID) {
+	if pod := a.cached(ref.PodUID); pod != nil && hasContainer(pod, ref.ContainerID) {
 		return pod, nil
 	}
-	if fresh {
-		return nil, fmt.Errorf("container %s of pod %s is not in the node's pod list yet; the list is re-fetched at most every %s", ref.ContainerID, ref.PodUID, minRelist)
-	}
-	if err := a.relist(ctx); err != nil {
+	listed, err := a.relistIfDue(ctx)
+	if err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	pod = a.podLocked(ref.PodUID)
-	a.mu.Unlock()
+	// Re-read even without a list of our own: a concurrent miss may
+	// just have fetched the pod.
+	pod := a.cached(ref.PodUID)
+	if !listed && (pod == nil || !hasContainer(pod, ref.ContainerID)) {
+		return nil, fmt.Errorf("container %s of pod %s is not in the node's pod list yet; the list is re-fetched at most every %s", ref.ContainerID, ref.PodUID, minRelist)
+	}
 	if pod == nil {
 		return nil, fmt.Errorf("%w: no pod with UID %s on node %s", ErrNotAttested, ref.PodUID, a.node)
 	}
 	return pod, nil
 }
 
+func (a *Attestor) cached(uid string) *corev1.Pod {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.podLocked(uid)
+}
+
+// relistIfDue re-lists the node's pods unless a list was attempted
+// under minRelist ago. Lists are serialised and the attempt is stamped
+// whether or not it succeeds, so neither concurrent misses nor a
+// failing apiserver exceed one List per minRelist.
+func (a *Attestor) relistIfDue(ctx context.Context) (bool, error) {
+	a.relistMu.Lock()
+	defer a.relistMu.Unlock()
+	a.mu.Lock()
+	due := a.now().Sub(a.listedAt) >= minRelist
+	if due {
+		a.listedAt = a.now()
+	}
+	a.mu.Unlock()
+	if !due {
+		return false, nil
+	}
+	return true, a.relist(ctx)
+}
+
 func (a *Attestor) relist(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, listTimeout)
+	defer cancel()
 	list, err := a.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
 		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", a.node).String(),
 	})
@@ -289,7 +317,7 @@ func (a *Attestor) relist(ctx context.Context) error {
 		}
 	}
 	a.mu.Lock()
-	a.pods, a.mirrors, a.listedAt = pods, mirrors, a.now()
+	a.pods, a.mirrors = pods, mirrors
 	a.mu.Unlock()
 	return nil
 }

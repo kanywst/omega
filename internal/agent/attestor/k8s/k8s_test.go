@@ -368,3 +368,44 @@ func TestMirrorAnnotationIsTrustedOnlyOnNodeOwnedPods(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// A failed list still counts against minRelist, so a failing apiserver
+// is not retried on every connection.
+func TestFailedListIsThrottledToo(t *testing.T) {
+	h := newHarness(t, tmpl)
+	h.api.fail = true
+	writeProc(t, h.proc, 80, podCgroup(fixturePodUID, fixtureContainerID), "1")
+	for range 3 {
+		if _, _, err := h.att.Attest(context.Background(), 80); err == nil || errors.Is(err, ErrNotAttested) {
+			t.Fatalf("got %v, want a transient error", err)
+		}
+	}
+	if n := h.api.lists.Load(); n != 1 {
+		t.Fatalf("lists = %d, want 1", n)
+	}
+}
+
+// Concurrent misses share one list, and every one of them finds the
+// pod that list fetched.
+func TestConcurrentMissesShareOneList(t *testing.T) {
+	h := newHarness(t, tmpl)
+	h.api.setPods(pod(fixturePodUID, "apps", "web-1", "web", testNode, fixtureContainerID))
+	writeProc(t, h.proc, 90, podCgroup(fixturePodUID, fixtureContainerID), "1")
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for range 16 {
+		wg.Go(func() {
+			if _, _, err := h.att.Attest(context.Background(), 90); err != nil {
+				errs <- err
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("attest: %v", err)
+	}
+	if n := h.api.lists.Load(); n != 1 {
+		t.Fatalf("lists = %d, want 1", n)
+	}
+}
