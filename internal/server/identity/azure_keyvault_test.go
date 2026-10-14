@@ -451,6 +451,38 @@ func TestAzureKeyVaultSuppliedCert(t *testing.T) {
 		t.Fatalf("JWKS should carry both CAs: %s", raw)
 	}
 
+	// Every other certificate becomes a trust anchor, so it must be a
+	// current P-256 CA too.
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	expiredTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(9),
+		Subject:               pkix.Name{CommonName: "expired"},
+		NotBefore:             time.Now().Add(-2 * time.Hour),
+		NotAfter:              time.Now().Add(-time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	expiredDER, err := x509.CreateCertificate(rand.Reader, expiredTpl, expiredTpl, &other.PublicKey, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		extra []byte
+		want  string
+	}{
+		"non-CA extra":  {selfSigned(t, other, false), "is not a CA certificate"},
+		"P-384 extra":   {selfSigned(t, p384, true), "P-256"},
+		"expired extra": {pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: expiredDER}), "expired"},
+	} {
+		if err := os.WriteFile(path, append(append([]byte{}, active...), tc.extra...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := identity.New(cfg); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: want %q, got %v", name, tc.want, err)
+		}
+	}
+
 	// A file without a certificate for the Key Vault key is refused.
 	if err := os.WriteFile(path, prev, 0o600); err != nil {
 		t.Fatal(err)

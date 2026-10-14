@@ -227,9 +227,18 @@ func pickAzureCA(certs []*x509.Certificate, signer *azureKeyVaultSigner) (*x509.
 	if now.Before(active.NotBefore) || now.After(active.NotAfter) {
 		return nil, nil, fmt.Errorf("the certificate for the Key Vault key is not valid now (valid %s to %s)", active.NotBefore.Format(time.RFC3339), active.NotAfter.Format(time.RFC3339))
 	}
+	// The other certificates are published as trust anchors in the
+	// bundle and the JWKS, so they get the same checks bar the key.
 	for _, c := range extra {
-		if _, ok := c.PublicKey.(*ecdsa.PublicKey); !ok {
-			return nil, nil, errors.New("every trusted CA certificate must carry an ECDSA P-256 key")
+		pub, ok := c.PublicKey.(*ecdsa.PublicKey)
+		if !ok || pub.Curve != elliptic.P256() {
+			return nil, nil, fmt.Errorf("trusted CA certificate %q must carry an ECDSA P-256 key", c.Subject.CommonName)
+		}
+		if !c.IsCA || !c.BasicConstraintsValid || c.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return nil, nil, fmt.Errorf("trusted certificate %q is not a CA certificate (needs basicConstraints CA:TRUE and keyCertSign)", c.Subject.CommonName)
+		}
+		if now.After(c.NotAfter) {
+			return nil, nil, fmt.Errorf("trusted CA certificate %q expired at %s; remove it", c.Subject.CommonName, c.NotAfter.Format(time.RFC3339))
 		}
 	}
 	return active, extra, nil
