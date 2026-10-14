@@ -6,7 +6,7 @@ End-to-end demo of `omega agent --k8s-workload-attestor`: a process in a pod get
 
 1. boots a one-node `kind` cluster (default name `omega-k8s-wl`);
 2. builds a static Linux `omega` for the node's architecture and copies it into the node container;
-3. renders the chart's ServiceAccount and pod-reader ClusterRole (`agent.k8sWorkloadAttestor.enabled=true`), applies them, and gives the agent a kubeconfig with that service account's token, so the agent has exactly the chart's RBAC;
+3. renders the chart's agent ServiceAccount and pod-reader ClusterRole (`agent.k8sWorkloadAttestor.enabled=true`), applies them, and gives the agent a kubeconfig with that service account's token, so the agent has exactly the chart's RBAC;
 4. starts `omega server` and `omega agent --map uid=0,id=spiffe://omega.local/host/root --k8s-workload-attestor` inside the node container, which shares its PID namespace with the pods as a DaemonSet with `hostPID` would;
 5. fetches an SVID from a host process running as root and asserts it is `spiffe://omega.local/host/root`;
 6. runs a pod in namespace `wl-demo` with service account `web`, also as root, that fetches an SVID over a hostPath socket, and asserts it is `spiffe://omega.local/k8s/wl-demo/web`, not the uid 0 mapping;

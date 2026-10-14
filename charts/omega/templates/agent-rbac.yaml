@@ -2,7 +2,15 @@
 # The agent's Kubernetes workload attestor lists the pods on its node
 # (field selector spec.nodeName). RBAC cannot scope list to one node,
 # so this is cluster-wide read of pod specs; it grants no secrets and
-# no kubelet access.
+# no kubelet access, and goes to the agent's own ServiceAccount only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "omega.agentServiceAccountName" . }}
+  labels:
+{{ include "omega.commonLabels" . | indent 4 }}
+    app.kubernetes.io/component: agent
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -28,6 +36,6 @@ roleRef:
   name: {{ include "omega.agentName" . }}-pod-reader
 subjects:
   - kind: ServiceAccount
-    name: {{ include "omega.serviceAccountName" . }}
+    name: {{ include "omega.agentServiceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}

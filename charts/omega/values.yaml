@@ -62,7 +62,8 @@ agent:
   # Identify workloads in pods on the node by their pod (namespace,
   # service account, pod name) instead of their UID, for development
   # and evaluation. Turns on hostPID, which the attestor needs to read a
-  # peer's cgroup, and lets the chart's service account list pods.
+  # peer's cgroup, and runs the agent under its own ServiceAccount that
+  # may list pods.
   # Needs a server without --require-auth (see ADR 0020).
   k8sWorkloadAttestor:
     enabled: false

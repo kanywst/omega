@@ -6,8 +6,8 @@
 # Topology: a one-node kind cluster. The control plane and the agent
 # both run inside the kind node container (it is the "host" the pods
 # share a PID namespace with), the agent reaches kube-apiserver with a
-# token for a service account that holds only the chart's pod-reader
-# ClusterRole, and the workload is a pod that runs `omega svid fetch`
+# token for the chart's agent ServiceAccount, which holds only its
+# pod-reader ClusterRole, and the workload is a pod that runs `omega svid fetch`
 # against the agent's socket on a hostPath.
 
 set -euo pipefail
@@ -73,9 +73,8 @@ echo "[demo] granting the agent's service account the chart's pod-reader role"
 kubectl get namespace omega-system >/dev/null 2>&1 || kubectl create namespace omega-system >/dev/null
 helm template omega "$REPO_ROOT/charts/omega" --namespace omega-system \
 	--set agent.k8sWorkloadAttestor.enabled=true \
-	--show-only templates/serviceaccount.yaml \
 	--show-only templates/agent-rbac.yaml | kubectl apply -n omega-system -f - >/dev/null
-AGENT_TOKEN=$(kubectl -n omega-system create token omega --duration 1h)
+AGENT_TOKEN=$(kubectl -n omega-system create token omega-agent --duration 1h)
 docker exec -i "$NODE" sh -c 'cat > /opt/omega/kubeconfig' <<EOF
 apiVersion: v1
 kind: Config

@@ -18,7 +18,7 @@ spec:
 {{ include "omega.commonLabels" . | indent 8 }}
         app.kubernetes.io/component: agent
     spec:
-      serviceAccountName: {{ include "omega.serviceAccountName" . }}
+      serviceAccountName: {{ include "omega.agentServiceAccountName" . }}
       hostNetwork: {{ .Values.agent.hostNetwork }}
       {{- if .Values.agent.k8sWorkloadAttestor.enabled }}
       # The kernel reports a peer's PID only to a process in the same
