@@ -68,7 +68,8 @@ agent:
       memory: 32Mi
   # Kubelet creates hostSocketPath root-owned on a fresh node; an init
   # container with only CAP_CHOWN hands it to the agent's user, so the
-  # agent itself stays non-root.
+  # agent itself stays non-root. It must be a directory used only by the
+  # agent: its owner and mode are changed on every node.
   hostSocketPath: /run/omega
   hostNetwork: false
   # Where the agent runs. The CSI driver (csi.enabled) uses the same, so
@@ -98,6 +99,11 @@ agent:
 # It runs privileged (for mount propagation) and installs the
 # cluster-wide CSIDriver `csi.spiffe.io`; do not enable it next to
 # another SPIFFE CSI driver.
+# Trust boundary: any pod in any namespace that mounts a csi.spiffe.io
+# volume reaches the agent, and the agent attests by UID only, so a pod
+# running as a UID in agent.uidMap gets that identity. Keep mapped UIDs
+# unique per workload and restrict csi.spiffe.io volumes with admission
+# policy (docs/threat-model.md, S4).
 csi:
   enabled: false
   # Pinned by digest: the driver runs privileged with bidirectional mounts.

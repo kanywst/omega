@@ -32,6 +32,10 @@ spec:
       {{- end }}
       initContainers:
         # Hand the root-owned hostPath directory to the agent's user.
+        {{- $hostDir := clean .Values.agent.hostSocketPath }}
+        {{- if has $hostDir (list "/" "/run" "/var/run" "/tmp" "/var" "/var/lib" "/var/lib/kubelet" "/etc" "/home" "/root" "/opt" "/usr") }}
+        {{- fail (printf "agent.hostSocketPath %q is a shared host directory; its owner and mode would be changed on every node. Use a dedicated directory such as /run/omega." $hostDir) }}
+        {{- end }}
         - name: prepare-socket-dir
           image: {{ include "omega.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -49,6 +53,8 @@ spec:
             capabilities:
               drop: ["ALL"]
               add: ["CHOWN"]
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
           volumeMounts:
             - name: agent-sock
               mountPath: {{ dir .Values.agent.socketPath }}

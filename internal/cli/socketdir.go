@@ -30,9 +30,14 @@ func newPrepareSocketDirCommand() *cobra.Command {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
-			fi, err := os.Stat(dir)
+			// Never follow a symlink planted at the path: chown and chmod
+			// would land on whatever it points to.
+			fi, err := os.Lstat(dir)
 			if err != nil {
 				return err
+			}
+			if !fi.IsDir() {
+				return fmt.Errorf("%s is not a directory", dir)
 			}
 			// Already handed over on an earlier start: nothing to do.
 			if owner, group, ok := fileOwner(fi); ok && owner == uid && group == gid && fi.Mode().Perm() == 0o755 {
@@ -46,7 +51,7 @@ func newPrepareSocketDirCommand() *cobra.Command {
 				}
 				// Owned by another user and no CAP_FOWNER: with CAP_CHOWN,
 				// take it back first so the mode can be fixed.
-				if err := os.Chown(dir, 0, 0); err != nil {
+				if err := os.Lchown(dir, 0, 0); err != nil {
 					return fmt.Errorf("chown %s: %w", dir, err)
 				}
 				// #nosec G302 -- as above.
@@ -54,7 +59,7 @@ func newPrepareSocketDirCommand() *cobra.Command {
 					return err
 				}
 			}
-			if err := os.Chown(dir, uid, gid); err != nil {
+			if err := os.Lchown(dir, uid, gid); err != nil {
 				return fmt.Errorf("chown %s: %w", dir, err)
 			}
 			return nil
