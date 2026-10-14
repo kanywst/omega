@@ -30,6 +30,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -104,8 +106,10 @@ func newAWSPCAAuthority(local *localAuthority, cfg Config) (*awsPCAAuthority, er
 		return nil, errors.New("identity: aws-pca: region is empty in the CA ARN and AWSPCARegion is unset")
 	}
 	endpoint := strings.TrimRight(strings.TrimSpace(cfg.AWSPCAEndpoint), "/")
-	if endpoint != "" && !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		return nil, fmt.Errorf("identity: aws-pca: AWSPCAEndpoint must be http(s); got %q", cfg.AWSPCAEndpoint)
+	if endpoint != "" {
+		if err := checkAWSPCAEndpoint(endpoint); err != nil {
+			return nil, fmt.Errorf("identity: aws-pca: AWSPCAEndpoint: %w", err)
+		}
 	}
 	templateARN := strings.TrimSpace(cfg.AWSPCATemplateARN)
 	if templateARN == "" {
@@ -159,6 +163,32 @@ func newAWSPCAAuthority(local *localAuthority, cfg Config) (*awsPCAAuthority, er
 		a.signingAlg = alg
 	}
 	return a, nil
+}
+
+// checkAWSPCAEndpoint requires https, except for a loopback host. Over
+// plain http a network attacker could replace both the CA certificate
+// and the issued leaf, so the leaf checks would prove nothing; loopback
+// http is kept for local fakes and test servers.
+func checkAWSPCAEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return err
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%q has no host", endpoint)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+		return fmt.Errorf("%q uses http to a non-loopback host; use https", endpoint)
+	default:
+		return fmt.Errorf("%q must be an https URL", endpoint)
+	}
 }
 
 // awsPCASigningAlgorithmFor picks the IssueCertificate SigningAlgorithm
@@ -394,6 +424,8 @@ func (a *awsPCAAuthority) checkIssued(cert *x509.Certificate, id spiffeid.ID, cs
 	if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 || cert.KeyUsage&(x509.KeyUsageCertSign|x509.KeyUsageCRLSign) != 0 {
 		return fmt.Errorf("aws-pca: issued certificate key usage %#x is not an X.509-SVID leaf's; check the template ARN", cert.KeyUsage)
 	}
+	// No EKU at all leaves the key unrestricted, which X.509-SVID
+	// allows; an EKU list that names only one direction does not.
 	if len(cert.ExtKeyUsage) > 0 && (!slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageServerAuth) || !slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageClientAuth)) {
 		return errors.New("aws-pca: issued certificate lacks the serverAuth or clientAuth extended key usage; check the template ARN")
 	}

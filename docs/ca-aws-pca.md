@@ -15,7 +15,7 @@ omega server \
 | --- | --- | --- |
 | `--ca-aws-pca-arn` | required | ARN of the certificate authority that signs SVIDs |
 | `--ca-aws-pca-region` | region in the ARN | Region of the API endpoint |
-| `--ca-aws-pca-endpoint` | SDK default | Endpoint override, for example a VPC interface endpoint |
+| `--ca-aws-pca-endpoint` | SDK default | Endpoint override, for example a VPC interface endpoint; must be https (plain http is accepted only for a loopback host) |
 | `--ca-aws-pca-template-arn` | `EndEntityCertificate_APIPassthrough/V1` | Certificate template; must be an API-passthrough end-entity template |
 | `--ca-aws-pca-signing-algorithm` | inferred from the CA key | `SHA256WITHECDSA` for P-256, `SHA384WITHECDSA` for P-384, `SHA512WITHECDSA` for P-521, `SHA256WITHRSA` for RSA |
 

@@ -709,7 +709,7 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&caAWSPCARegion, "ca-aws-pca-region", "",
 		"AWS region of the private CA. Empty takes the region from --ca-aws-pca-arn.")
 	cmd.Flags().StringVar(&caAWSPCAEndpoint, "ca-aws-pca-endpoint", "",
-		"override the ACM PCA API endpoint, e.g. a VPC interface endpoint URL. Empty uses the SDK's regional default (AWS_USE_FIPS_ENDPOINT selects the FIPS endpoint).")
+		"override the ACM PCA API endpoint, e.g. a VPC interface endpoint URL; must be https (http only for a loopback host). Empty uses the SDK's regional default (AWS_USE_FIPS_ENDPOINT selects the FIPS endpoint).")
 	cmd.Flags().StringVar(&caAWSPCATemplateARN, "ca-aws-pca-template-arn", "",
 		"certificate template ARN. Empty uses EndEntityCertificate_APIPassthrough/V1 in the CA's partition. Any override must be an API-passthrough end-entity template, because the SPIFFE ID is passed as an API SAN.")
 	cmd.Flags().StringVar(&caAWSPCASigningAlgorithm, "ca-aws-pca-signing-algorithm", "",

@@ -611,7 +611,9 @@ func TestAWSPCAConfigRejected(t *testing.T) {
 		{"no region", func(c *identity.Config) {
 			c.AWSPCACAARN = "arn:aws:acm-pca::111122223333:certificate-authority/abc"
 		}, "region"},
-		{"bad endpoint", func(c *identity.Config) { c.AWSPCAEndpoint = "pca.example" }, "http(s)"},
+		{"endpoint without scheme", func(c *identity.Config) { c.AWSPCAEndpoint = "pca.example" }, "AWSPCAEndpoint"},
+		{"endpoint other scheme", func(c *identity.Config) { c.AWSPCAEndpoint = "ftp://pca.example" }, "must be an https URL"},
+		{"plain http to a remote host", func(c *identity.Config) { c.AWSPCAEndpoint = "http://pca.example" }, "non-loopback"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
