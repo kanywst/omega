@@ -397,8 +397,12 @@ func (a *stepCAAuthority) BundleSequence() int64 {
 func (a *stepCAAuthority) SetKeptCAHook(h func(KeptCAEvent)) { a.overlap.setHook(h) }
 
 // DistrustCAs implements UpstreamCAKeeper. The cached bundle is replaced
-// at once, so the next caller does not wait for its TTL.
+// at once, so the next caller does not wait for its TTL. It holds
+// refreshMu so a refresh already in flight cannot cache the bundle from
+// before the drop after it.
 func (a *stepCAAuthority) DistrustCAs(fps [][32]byte) int {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
 	n := a.overlap.distrust(fps, time.Now())
 	if n > 0 {
 		if served := a.overlap.serve(time.Now()); served != nil {

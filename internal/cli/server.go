@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"sort"
 	"syscall"
 	"time"
 
@@ -352,11 +355,12 @@ func newServerCommand() *cobra.Command {
 			if keeper != nil {
 				keeper.SetKeptCAHook(func(e identity.KeptCAEvent) { recordKeptCA(ctx, store, e) })
 			}
+			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
 			if upstreamCADistrustFile != "" {
 				if keeper == nil {
 					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki or step-ca")
 				}
-				if err := applyCADistrust(keeper, upstreamCADistrustFile); err != nil {
+				if err := distrust.apply(ctx); err != nil {
 					return fmt.Errorf("upstream-ca-distrust: %w", err)
 				}
 			}
@@ -395,7 +399,7 @@ func newServerCommand() *cobra.Command {
 								}
 							}
 							if upstreamCADistrustFile != "" {
-								if err := applyCADistrust(keeper, upstreamCADistrustFile); err != nil {
+								if err := distrust.apply(ctx); err != nil {
 									fmt.Fprintf(os.Stderr, "omega server: upstream CA distrust list rejected, keeping the previous one: %v\n", err)
 								} else {
 									fed.SetOwnBundle(ca.BundlePEM())
@@ -1290,18 +1294,55 @@ func recordCAReload(ctx context.Context, store *storage.Store, ca identity.Autho
 	}
 }
 
-// applyCADistrust reads the distrust list and hands it to the authority.
-func applyCADistrust(keeper identity.UpstreamCAKeeper, path string) error {
-	raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied path
+// caDistrust applies the --upstream-ca-distrust list. Each change to the
+// list, and each list rejected, is recorded in the audit chain as
+// ca.upstream, so a compromise response is on record either way.
+type caDistrust struct {
+	keeper identity.UpstreamCAKeeper
+	path   string
+	store  *storage.Store
+	last   []string
+}
+
+func (d *caDistrust) apply(ctx context.Context) error {
+	err := d.applyFile(ctx)
+	if err != nil {
+		payload, _ := json.Marshal(map[string]any{"action": "distrust-list", "error": err.Error()})
+		if _, aerr := d.store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.upstream", Actor: "omega-server", Decision: "error", Payload: payload}); aerr != nil {
+			fmt.Fprintf(os.Stderr, "omega server: could not record the rejected distrust list in the audit chain: %v\n", aerr)
+		}
+	}
+	return err
+}
+
+func (d *caDistrust) applyFile(ctx context.Context) error {
+	raw, err := os.ReadFile(d.path) // #nosec G304 -- operator-supplied path
 	if err != nil {
 		return err
 	}
 	fps, err := identity.ParseCAFingerprints(raw)
 	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return fmt.Errorf("%s: %w", d.path, err)
 	}
-	if n := keeper.DistrustCAs(fps); n > 0 {
-		fmt.Fprintf(os.Stderr, "omega server: dropped %d kept CA(s) on the distrust list\n", n)
+	list := make([]string, len(fps))
+	for i, fp := range fps {
+		list[i] = hex.EncodeToString(fp[:])
+	}
+	sort.Strings(list)
+	dropped := d.keeper.DistrustCAs(fps)
+	if dropped > 0 {
+		fmt.Fprintf(os.Stderr, "omega server: dropped %d kept CA(s) on the distrust list\n", dropped)
+	}
+	if d.last != nil && slices.Equal(list, d.last) {
+		return nil
+	}
+	if len(list) == 0 && len(d.last) > 0 {
+		fmt.Fprintf(os.Stderr, "omega server: WARN the upstream CA distrust list is now empty; %d CA(s) may be kept again\n", len(d.last))
+	}
+	d.last = list
+	payload, _ := json.Marshal(map[string]any{"action": "distrust-list", "fingerprints": list, "dropped": dropped})
+	if _, err := d.store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.upstream", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
+		fmt.Fprintf(os.Stderr, "omega server: could not record the distrust list in the audit chain: %v\n", err)
 	}
 	return nil
 }
