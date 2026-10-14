@@ -16,8 +16,7 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
 
 ## Next (3-6 months)
 
-- SPIFFE CSI driver integration so workloads can mount SVIDs as a
-  volume instead of dialing the agent's Unix socket.
+Nothing is queued here; the items below are the next candidates.
 
 ## Later (6-12 months)
 
