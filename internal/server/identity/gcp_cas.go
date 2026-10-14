@@ -79,6 +79,9 @@ type gcpCASAuthority struct {
 	// refreshMu serialises concurrent refreshBundle callers so a TTL
 	// expiry under load triggers one fetchCaCerts call, not N.
 	refreshMu sync.Mutex
+	// retryAfter, guarded by refreshMu, holds back the next fetchCaCerts
+	// after a failed one, for every refresh path.
+	retryAfter time.Time
 }
 
 func newGCPCASAuthority(local *localAuthority, cfg Config) (*gcpCASAuthority, error) {
@@ -191,16 +194,31 @@ func (a *gcpCASAuthority) BundlePEM() []byte {
 	}
 	a.bundleMu.RUnlock()
 
-	if _, err := a.refreshBundle(context.Background()); err != nil {
-		slog.Warn("gcp-cas: trust bundle refresh failed; serving the cached bundle", "pool", a.pool, "retry_in", gcpCASRetryInterval, "err", err)
-		a.bundleMu.Lock()
-		a.bundleExp = time.Now().Add(gcpCASRetryInterval)
-		a.bundleMu.Unlock()
+	fresh, err := a.refreshLocked()
+	if err != nil {
 		return stale
 	}
-	a.bundleMu.RLock()
-	defer a.bundleMu.RUnlock()
-	return append([]byte(nil), a.bundle...)
+	return append([]byte(nil), fresh...)
+}
+
+// refreshLocked fetches the bundle unless a refresh failed within the
+// last gcpCASRetryInterval. On failure it logs, pushes the cache expiry
+// to the retry time so BundlePEM keeps serving the stale bundle, and
+// arms the backoff. The caller holds refreshMu.
+func (a *gcpCASAuthority) refreshLocked() ([]byte, error) {
+	if time.Now().Before(a.retryAfter) {
+		return nil, errors.New("gcp-cas: fetchCaCerts is backing off after a failed refresh")
+	}
+	fresh, err := a.refreshBundle(context.Background())
+	if err != nil {
+		slog.Warn("gcp-cas: trust bundle refresh failed; serving the cached bundle", "pool", a.pool, "retry_in", gcpCASRetryInterval, "err", err)
+		a.retryAfter = time.Now().Add(gcpCASRetryInterval)
+		a.bundleMu.Lock()
+		a.bundleExp = a.retryAfter
+		a.bundleMu.Unlock()
+		return nil, err
+	}
+	return fresh, nil
 }
 
 // refreshBundle calls `POST /v1/<pool>:fetchCaCerts` and caches every
@@ -360,7 +378,14 @@ func checkGCPCASLeaf(cert *x509.Certificate, id spiffeid.ID, csr *x509.Certifica
 	if len(cert.DNSNames) > 0 || len(cert.IPAddresses) > 0 || len(cert.EmailAddresses) > 0 {
 		return errors.New("gcp-cas: issued certificate carries DNS, IP or email SANs omega did not request")
 	}
-	if cert.NotAfter.After(time.Now().Add(svidValidity + gcpCASClockSkew)) {
+	now := time.Now()
+	if cert.NotBefore.After(now.Add(gcpCASClockSkew)) || cert.NotBefore.Before(now.Add(-gcpCASClockSkew)) {
+		return fmt.Errorf("gcp-cas: issued certificate notBefore %s is not within %s of now", cert.NotBefore.UTC().Format(time.RFC3339), gcpCASClockSkew)
+	}
+	if !cert.NotAfter.After(now) {
+		return errors.New("gcp-cas: issued certificate is already expired")
+	}
+	if cert.NotAfter.After(now.Add(svidValidity + gcpCASClockSkew)) {
 		return fmt.Errorf("gcp-cas: issued certificate is valid until %s, longer than the %s SVID lifetime", cert.NotAfter.UTC().Format(time.RFC3339), svidValidity)
 	}
 	return nil
@@ -376,7 +401,7 @@ func (a *gcpCASAuthority) verifyLeaf(cert *x509.Certificate) ([]byte, error) {
 		return bundle, nil
 	}
 	a.refreshMu.Lock()
-	fresh, err := a.refreshBundle(context.Background())
+	fresh, err := a.refreshLocked()
 	a.refreshMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("gcp-cas: issued certificate does not chain to the cached bundle and the refresh failed: %w", err)
@@ -392,12 +417,17 @@ func verifyAgainstBundle(cert *x509.Certificate, bundle []byte) error {
 	if !roots.AppendCertsFromPEM(bundle) {
 		return errors.New("empty trust bundle")
 	}
-	// Verify at the leaf's own notBefore: this checks the chain, not the
-	// clock, so a CAS clock slightly ahead of omega's cannot fail it.
+	// Verify now, so an expired CA in the bundle fails. checkGCPCASLeaf
+	// has already bounded notBefore to the skew window; a leaf that CAS
+	// dated slightly ahead of omega's clock is checked at its notBefore.
+	at := time.Now()
+	if cert.NotBefore.After(at) {
+		at = cert.NotBefore
+	}
 	_, err := cert.Verify(x509.VerifyOptions{
 		Roots:       roots,
 		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-		CurrentTime: cert.NotBefore,
+		CurrentTime: at,
 	})
 	return err
 }

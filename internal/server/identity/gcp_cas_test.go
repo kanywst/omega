@@ -430,6 +430,18 @@ func TestGCPCASRejectsMisissuedCertificates(t *testing.T) {
 			tpl.DNSNames = []string{"admin.example"}
 			return pub
 		}, wantErr: "DNS, IP or email SANs"},
+		{name: "back-dated", mutate: func(tpl *x509.Certificate, pub any) any {
+			tpl.NotBefore = time.Now().Add(-48 * time.Hour)
+			return pub
+		}, wantErr: "notBefore"},
+		{name: "future-dated", mutate: func(tpl *x509.Certificate, pub any) any {
+			tpl.NotBefore = time.Now().Add(time.Hour)
+			return pub
+		}, wantErr: "notBefore"},
+		{name: "expired", mutate: func(tpl *x509.Certificate, pub any) any {
+			tpl.NotBefore, tpl.NotAfter = time.Now().Add(-2*time.Minute), time.Now().Add(-time.Minute)
+			return pub
+		}, wantErr: "already expired"},
 		{name: "long lifetime", mutate: func(tpl *x509.Certificate, pub any) any {
 			tpl.NotAfter = time.Now().Add(24 * time.Hour)
 			return pub
@@ -664,5 +676,55 @@ func TestGCPCASBacksOffAfterAFailedRefresh(t *testing.T) {
 	}
 	if got := f.fetchHits.Load() - before; got != 1 {
 		t.Fatalf("expected one refresh attempt within the retry interval, got %d", got)
+	}
+}
+
+func TestGCPCASIssueRefreshHonoursBackoff(t *testing.T) {
+	f := newCASFixture(t)
+	a := newCASAuthority(t, f)
+	foreign, foreignKey, _ := newCA(t, "Foreign CA", nil, nil)
+	f.mu.Lock()
+	f.signCert, f.signKey = foreign, foreignKey
+	f.mu.Unlock()
+	f.fetchFail.Store(true)
+	before := f.fetchHits.Load()
+	for range 3 {
+		csr, _ := vaultIssueCSR(t)
+		if _, err := a.IssueSVID(spiffeid.RequireFromString("spiffe://omega.local/web"), csr); err == nil {
+			t.Fatal("expected a chain failure")
+		}
+	}
+	if got := f.fetchHits.Load() - before; got != 1 {
+		t.Fatalf("expected one fetchCaCerts during the backoff window, got %d", got)
+	}
+}
+
+func TestGCPCASRejectsLeafFromExpiredCA(t *testing.T) {
+	f := newCASFixture(t)
+	a := newCASAuthority(t, f)
+	// An intermediate that has expired but is still published: the leaf
+	// must fail the chain check at the current time.
+	expiredTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(99),
+		Subject:               pkix.Name{CommonName: "Expired CA"},
+		NotBefore:             time.Now().Add(-48 * time.Hour),
+		NotAfter:              time.Now().Add(-24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, err := x509.CreateCertificate(rand.Reader, expiredTpl, f.rootCert, &key.PublicKey, f.rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, _ := x509.ParseCertificate(der)
+	f.mu.Lock()
+	f.signCert, f.signKey = expired, key
+	f.extraCA = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	f.mu.Unlock()
+	csr, _ := vaultIssueCSR(t)
+	if _, err := a.IssueSVID(spiffeid.RequireFromString("spiffe://omega.local/web"), csr); err == nil || !strings.Contains(err.Error(), "does not chain") {
+		t.Fatalf("err = %v, want a chain failure for an expired CA", err)
 	}
 }
