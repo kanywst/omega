@@ -138,6 +138,14 @@ func newAWSPCAAuthority(local *localAuthority, cfg Config) (*awsPCAAuthority, er
 			o.BaseEndpoint = aws.String(endpoint)
 		}
 	})
+	// The SDK also takes an endpoint from AWS_ENDPOINT_URL,
+	// AWS_ENDPOINT_URL_ACM_PCA or endpoint_url in the shared config;
+	// hold whichever one won to the same https rule as the flag.
+	if resolved := aws.ToString(client.Options().BaseEndpoint); resolved != "" {
+		if err := checkAWSPCAEndpoint(resolved); err != nil {
+			return nil, fmt.Errorf("identity: aws-pca: resolved endpoint: %w", err)
+		}
+	}
 
 	a := &awsPCAAuthority{
 		localAuthority: local,
@@ -263,28 +271,38 @@ func (a *awsPCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("aws-pca: GetCertificateAuthorityCertificate: %w", err)
 	}
-	caPEM := strings.TrimSpace(aws.ToString(out.Certificate))
-	block, _ := pem.Decode([]byte(caPEM))
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, errors.New("aws-pca: CA certificate is not PEM")
-	}
-	caCert, err := x509.ParseCertificate(block.Bytes)
+	cas, err := parseAWSPCACerts(aws.ToString(out.Certificate))
 	if err != nil {
-		return nil, fmt.Errorf("aws-pca: parse CA certificate: %w", err)
+		return nil, fmt.Errorf("aws-pca: CA certificate: %w", err)
 	}
-	if !caCert.IsCA {
-		return nil, errors.New("aws-pca: CA certificate is not marked CA:TRUE")
+	if len(cas) != 1 {
+		return nil, fmt.Errorf("aws-pca: CA certificate field holds %d certificates, want 1", len(cas))
 	}
-	var buf bytes.Buffer
-	buf.WriteString(caPEM)
-	buf.WriteByte('\n')
-	if chain := strings.TrimSpace(aws.ToString(out.CertificateChain)); chain != "" {
-		if !strings.Contains(chain, "-----BEGIN CERTIFICATE-----") {
-			return nil, errors.New("aws-pca: CA certificate chain is not PEM")
+	chain, err := parseAWSPCACerts(aws.ToString(out.CertificateChain))
+	if err != nil {
+		return nil, fmt.Errorf("aws-pca: CA certificate chain: %w", err)
+	}
+	// The bundle is the trust anchor set served to workloads and
+	// federation peers, so every certificate in it must be a CA and
+	// the chain must link from the issuing CA up to its root.
+	certs := append(cas, chain...)
+	for _, c := range certs {
+		if !c.IsCA {
+			return nil, fmt.Errorf("aws-pca: bundle certificate %q is not marked CA:TRUE", c.Subject)
 		}
-		buf.WriteString(chain)
-		buf.WriteByte('\n')
 	}
+	// Re-encode rather than echo AWS's strings, so nothing but the
+	// parsed certificates reaches the bundle.
+	var buf bytes.Buffer
+	for i, c := range certs {
+		if i+1 < len(certs) {
+			if err := c.CheckSignatureFrom(certs[i+1]); err != nil {
+				return nil, fmt.Errorf("aws-pca: chain does not link %q to %q: %w", c.Subject, certs[i+1].Subject, err)
+			}
+		}
+		_ = pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
+	}
+	caCert := cas[0]
 	body := buf.Bytes()
 
 	a.bundleMu.Lock()
@@ -293,6 +311,29 @@ func (a *awsPCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	a.bundleExp = time.Now().Add(a.bundleTTL)
 	a.bundleMu.Unlock()
 	return body, nil
+}
+
+// parseAWSPCACerts parses a concatenation of PEM CERTIFICATE blocks,
+// rejecting anything else (stray text, other block types, bad DER).
+func parseAWSPCACerts(s string) ([]*x509.Certificate, error) {
+	rest := []byte(strings.TrimSpace(s))
+	var out []*x509.Certificate
+	for len(rest) > 0 {
+		block, r := pem.Decode(rest)
+		if block == nil {
+			return nil, errors.New("not PEM")
+		}
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("unexpected PEM block %q", block.Type)
+		}
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+		rest = bytes.TrimSpace(r)
+	}
+	return out, nil
 }
 
 // IssueSVID submits the CSR to IssueCertificate, polls GetCertificate

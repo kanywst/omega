@@ -45,6 +45,7 @@ type pcaFixture struct {
 
 	inProgress    atomic.Int64 // GetCertificate calls left that answer RequestInProgressException
 	failCA        atomic.Bool
+	caOverride    atomic.Value // [2]string{Certificate, CertificateChain} replacing the real answer
 	failIssue     atomic.Bool
 	issueHits     atomic.Int64
 	getHits       atomic.Int64
@@ -139,9 +140,13 @@ func (f *pcaFixture) serve(w http.ResponseWriter, r *http.Request) {
 			pcaError(w, "AccessDeniedException")
 			return
 		}
+		ca, chain := string(f.subPEM), string(f.rootPEM)
+		if o, ok := f.caOverride.Load().([2]string); ok {
+			ca, chain = o[0], o[1]
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"Certificate":      string(f.subPEM),
-			"CertificateChain": string(f.rootPEM),
+			"Certificate":      ca,
+			"CertificateChain": chain,
 		})
 	case "ACMPrivateCA.IssueCertificate":
 		f.issueHits.Add(1)
@@ -507,6 +512,67 @@ func TestAWSPCABundleCached(t *testing.T) {
 	}
 	if f.caHits.Load() != hits {
 		t.Errorf("cached bundle refetched: %d extra calls", f.caHits.Load()-hits)
+	}
+}
+
+func TestAWSPCARejectsBadCAMaterial(t *testing.T) {
+	nonCA := func(f *pcaFixture) string {
+		tpl := &x509.Certificate{
+			SerialNumber: big.NewInt(7),
+			NotBefore:    time.Now().Add(-time.Minute),
+			NotAfter:     time.Now().Add(time.Hour),
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tpl, f.subCert, f.subKey.Public(), f.subKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	}
+	cases := []struct {
+		name string
+		resp func(f *pcaFixture) (ca, chain string)
+		want string
+	}{
+		{"trailing garbage in chain", func(f *pcaFixture) (string, string) {
+			return string(f.subPEM), string(f.rootPEM) + "junk\n"
+		}, "not PEM"},
+		{"other block in chain", func(f *pcaFixture) (string, string) {
+			return string(f.subPEM), "-----BEGIN X509 CRL-----\nAAAA\n-----END X509 CRL-----\n"
+		}, "unexpected PEM block"},
+		{"non-CA in chain", func(f *pcaFixture) (string, string) {
+			return string(f.subPEM), nonCA(f)
+		}, "not marked CA:TRUE"},
+		{"chain does not link", func(f *pcaFixture) (string, string) {
+			return string(f.subPEM), string(certPEM(f.foreignCACert))
+		}, "does not link"},
+		{"two certificates as the CA", func(f *pcaFixture) (string, string) {
+			return string(f.subPEM) + string(f.rootPEM), ""
+		}, "want 1"},
+		{"empty CA", func(f *pcaFixture) (string, string) {
+			return "", string(f.rootPEM)
+		}, "want 1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPCAFixture(t, nil)
+			ca, chain := tc.resp(f)
+			f.caOverride.Store([2]string{ca, chain})
+			_, err := identity.New(pcaConfig(t, f))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAWSPCARejectsPlainHTTPEndpointFromEnv(t *testing.T) {
+	f := newPCAFixture(t, nil)
+	cfg := pcaConfig(t, f)
+	cfg.AWSPCAEndpoint = ""
+	t.Setenv("AWS_ENDPOINT_URL_ACM_PCA", "http://pca.example")
+	_, err := identity.New(cfg)
+	if err == nil || !strings.Contains(err.Error(), "resolved endpoint") {
+		t.Fatalf("got %v, want the env endpoint rejected", err)
 	}
 }
 
