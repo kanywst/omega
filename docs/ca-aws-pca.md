@@ -19,7 +19,7 @@ omega server \
 | `--ca-aws-pca-template-arn` | `EndEntityCertificate_APIPassthrough/V1` | Certificate template; must be an API-passthrough end-entity template |
 | `--ca-aws-pca-signing-algorithm` | inferred from the CA key | `SHA256WITHECDSA` for P-256, `SHA384WITHECDSA` for P-384, `SHA512WITHECDSA` for P-521, `SHA256WITHRSA` for RSA |
 
-Credentials come from the standard AWS SDK chain: environment variables, the shared config and credentials files, web identity (IRSA), EKS Pod Identity and ECS container credentials, and instance metadata. omega has no flag for an access key, so a secret never appears in argv or in Helm values. The Helm chart exposes the same settings under `server.ca.awsPCA`; see the [chart README](../charts/omega/README.md#aws-private-ca).
+Credentials come from the standard AWS SDK chain: environment variables, the shared config and credentials files, web identity (IRSA), EKS Pod Identity and ECS container credentials, and instance metadata. omega has no flag for an access key, so a secret never appears in argv or in Helm values. The Helm chart exposes the same settings under `server.ca.awsPCA`; see the [chart README](../charts/omega/README.md#aws-private-ca). [`examples/ca-aws-pca`](../examples/ca-aws-pca/README.md) runs the whole flow against a mock, with no AWS account.
 
 The IAM principal omega runs as needs three actions on the CA:
 
