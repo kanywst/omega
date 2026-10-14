@@ -30,9 +30,14 @@ func newPrepareSocketDirCommand() *cobra.Command {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
-			// Never follow a symlink planted at the path: chown and chmod
-			// would land on whatever it points to.
-			fi, err := os.Lstat(dir)
+			// Work on a descriptor opened without following a symlink, so
+			// a link planted at the path cannot redirect chown or chmod.
+			d, err := openDirNoFollow(dir)
+			if err != nil {
+				return fmt.Errorf("open %s: %w", dir, err)
+			}
+			defer d.Close()
+			fi, err := d.Stat()
 			if err != nil {
 				return err
 			}
@@ -45,21 +50,21 @@ func newPrepareSocketDirCommand() *cobra.Command {
 			}
 			// #nosec G302 -- the Workload API directory must be traversable by
 			// every workload; the socket inside carries its own permissions.
-			if err := os.Chmod(dir, 0o755); err != nil {
+			if err := d.Chmod(0o755); err != nil {
 				if !errors.Is(err, fs.ErrPermission) {
 					return err
 				}
 				// Owned by another user and no CAP_FOWNER: with CAP_CHOWN,
 				// take it back first so the mode can be fixed.
-				if err := os.Lchown(dir, 0, 0); err != nil {
+				if err := d.Chown(0, 0); err != nil {
 					return fmt.Errorf("chown %s: %w", dir, err)
 				}
 				// #nosec G302 -- as above.
-				if err := os.Chmod(dir, 0o755); err != nil {
+				if err := d.Chmod(0o755); err != nil {
 					return err
 				}
 			}
-			if err := os.Lchown(dir, uid, gid); err != nil {
+			if err := d.Chown(uid, gid); err != nil {
 				return fmt.Errorf("chown %s: %w", dir, err)
 			}
 			return nil

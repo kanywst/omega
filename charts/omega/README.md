@@ -27,7 +27,7 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `server.scimProviders`                    | `[]`                    | SCIM providers: `name`, `domain`, `tokenSecret` (Secret with a `token` key), optional `template`                      |
 | `policy.inline`                           | `{}`                    | Inline `*.cedar` files via ConfigMap                                                                                  |
 | `agent.uidMap`                            | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                                      |
-| `agent.hostSocketPath`                    | `/run/omega`            | hostPath for the workload socket                                                                                      |
+| `agent.hostSocketPath`                    | `/run/omega`            | hostPath for the workload socket; must be under `/run/omega*` or `/var/run/omega*`                                    |
 | `agent.localPDP.enabled`                  | `false`                 | Decide on the node (`--local-pdp-addr`)                                                                               |
 | `agent.localPDP.tlsSecret`                | `""`                    | Secret with `ca.crt`, `tls.crt`, `tls.key` for the agent's SVID                                                       |
 | `server.policyBundleSigningKeySecret`     | `""`                    | Secret with `bundle.key` (ECDSA P-256) that signs policy bundles                                                      |

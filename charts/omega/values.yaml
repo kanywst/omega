@@ -69,7 +69,8 @@ agent:
   # Kubelet creates hostSocketPath root-owned on a fresh node; an init
   # container with only CAP_CHOWN hands it to the agent's user, so the
   # agent itself stays non-root. It must be a directory used only by the
-  # agent: its owner and mode are changed on every node.
+  # agent, under /run/omega* or /var/run/omega*: its owner and mode are
+  # changed on every node.
   hostSocketPath: /run/omega
   hostNetwork: false
   # Where the agent runs. The CSI driver (csi.enabled) uses the same, so

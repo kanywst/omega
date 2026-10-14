@@ -1,3 +1,6 @@
+{{- if and .Values.csi.enabled (not .Values.agent.enabled) }}
+{{- fail "csi.enabled needs agent.enabled: the CSI driver serves the Omega agent's socket" }}
+{{- end }}
 {{- if and .Values.agent.enabled .Values.csi.enabled }}
 # The upstream SPIFFE CSI driver (github.com/spiffe/spiffe-csi), pointed at
 # the Omega agent's socket directory: a pod mounts the Workload API with a
