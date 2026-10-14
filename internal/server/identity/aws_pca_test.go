@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -692,5 +693,69 @@ func TestAWSPCAConfigRejected(t *testing.T) {
 				t.Fatalf("got %v, want error containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestAWSPCAKeepsTheRotatedOutCATrusted(t *testing.T) {
+	f := newPCAFixture(t, nil)
+	cfg := pcaConfig(t, f)
+	cfg.AWSPCABundleTTL = time.Millisecond
+	cfg.UpstreamCAGrace = identity.UpstreamCAGrace
+	a, err := identity.New(cfg)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	keeper, ok := a.(identity.UpstreamCAKeeper)
+	if !ok {
+		t.Fatal("aws-pca authority does not implement UpstreamCAKeeper")
+	}
+	var mu sync.Mutex
+	var events []identity.KeptCAEvent
+	keeper.SetKeptCAHook(func(e identity.KeptCAEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	})
+	seq := func() int64 { return a.(identity.BundleSequencer).BundleSequence() }
+	if n := strings.Count(string(a.BundlePEM()), "BEGIN CERTIFICATE"); n != 2 || seq() != 1 {
+		t.Fatalf("before: %d certs, seq %d", n, seq())
+	}
+
+	// The CA in AWS is replaced by a new self-signed one.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	next := certPEM(mustCA(t, "PCA Mock CA 2", key, nil, nil))
+	f.caOverride.Store([2]string{string(next), ""})
+	deadline := time.Now().Add(5 * time.Second)
+	for seq() != 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	bundle := string(a.BundlePEM())
+	if n := strings.Count(bundle, "BEGIN CERTIFICATE"); n != 3 || !strings.HasPrefix(bundle, string(next)) {
+		t.Fatalf("after rotation the new CA comes first and the old issuing CA and root stay trusted: %d certs", n)
+	}
+	if seq() != 2 {
+		t.Fatalf("spiffe_sequence after rotation: %d", seq())
+	}
+
+	// The operator distrusts the old issuing CA: it leaves the bundle at once.
+	if n := keeper.DistrustCAs([][32]byte{sha256.Sum256(f.subCert.Raw)}); n != 1 {
+		t.Fatalf("DistrustCAs dropped %d, want 1", n)
+	}
+	if strings.Contains(string(a.BundlePEM()), string(f.subPEM)) {
+		t.Fatal("distrusted CA is still served")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var kept, dropped int
+	for _, e := range events {
+		switch e.Action {
+		case "kept":
+			kept++
+		case "dropped":
+			dropped++
+		}
+	}
+	if kept != 2 || dropped != 1 {
+		t.Fatalf("kept-CA events: %d kept, %d dropped; want 2 and 1", kept, dropped)
 	}
 }

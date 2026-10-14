@@ -59,9 +59,6 @@ const (
 	awsPCAMaxCommonName = 64
 	awsPCAPollMin       = 100 * time.Millisecond
 	awsPCAPollMax       = 2 * time.Second
-	// awsPCARefreshRetry spaces bundle refresh attempts after a
-	// failure, capped by the bundle TTL.
-	awsPCARefreshRetry = 30 * time.Second
 	// awsPCAValiditySlack absorbs clock skew between omega and AWS
 	// when checking that a leaf does not outlive the requested TTL.
 	awsPCAValiditySlack = 5 * time.Minute
@@ -84,6 +81,7 @@ type awsPCAAuthority struct {
 	issuingCA *x509.Certificate // the CA's own certificate, used to check issued leaves
 	bundleExp time.Time
 	bundleTTL time.Duration
+	overlap   *caOverlap
 	// refreshMu serialises concurrent refreshBundle callers so a TTL
 	// expiry under load triggers one round-trip to AWS, not N.
 	refreshMu sync.Mutex
@@ -155,6 +153,7 @@ func newAWSPCAAuthority(local *localAuthority, cfg Config) (*awsPCAAuthority, er
 		client:         client,
 		timeout:        timeout,
 		bundleTTL:      bundleTTL,
+		overlap:        newCAOverlap(upstreamGrace(cfg.UpstreamCAGrace)),
 	}
 	// Boot-time probe so a wrong ARN, region, endpoint or missing IAM
 	// permission fails at startup instead of at the first IssueSVID.
@@ -246,14 +245,24 @@ func (a *awsPCAAuthority) BundlePEM() []byte {
 	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
 	defer cancel()
 	if _, err := a.refreshBundle(ctx); err != nil {
+		// Re-serve from the last fetch rather than the cached bytes, so
+		// a rotated-out CA whose grace has ended is dropped even while
+		// AWS cannot be reached.
+		served := a.overlap.serve(time.Now())
+		if served == nil {
+			served = stale
+		}
 		// Push the next attempt out so a sustained outage costs one
 		// AWS call (and one log line) per retry interval, not one per
 		// BundlePEM caller.
 		a.bundleMu.Lock()
-		a.bundleExp = time.Now().Add(min(a.bundleTTL, awsPCARefreshRetry))
+		if len(served) > 0 {
+			a.bundle = served
+		}
+		a.bundleExp = time.Now().Add(min(a.bundleTTL, upstreamRefreshBackoff))
 		a.bundleMu.Unlock()
 		slog.Warn("aws-pca: CA bundle refresh failed, serving the cached bundle", "ca", a.caARN, "err", err)
-		return stale
+		return served
 	}
 	a.bundleMu.RLock()
 	defer a.bundleMu.RUnlock()
@@ -303,14 +312,46 @@ func (a *awsPCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 		_ = pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
 	}
 	caCert := cas[0]
-	body := buf.Bytes()
+	served, err := a.overlap.update(buf.Bytes(), time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("aws-pca: %w", err)
+	}
 
 	a.bundleMu.Lock()
-	a.bundle = body
+	a.bundle = served
 	a.issuingCA = caCert
 	a.bundleExp = time.Now().Add(a.bundleTTL)
 	a.bundleMu.Unlock()
-	return body, nil
+	return served, nil
+}
+
+// BundleSequence advances when the CA's bundle from AWS or the local JWT
+// signing CAs change.
+func (a *awsPCAAuthority) BundleSequence() int64 {
+	// Refresh first, so the sequence a caller reads matches the bundle
+	// it reads next (the SPIFFE bundle endpoint reads the sequence first).
+	_ = a.BundlePEM()
+	return a.overlap.sequence() + a.localAuthority.BundleSequence() - 1
+}
+
+// SetKeptCAHook implements UpstreamCAKeeper.
+func (a *awsPCAAuthority) SetKeptCAHook(h func(KeptCAEvent)) { a.overlap.setHook(h) }
+
+// DistrustCAs implements UpstreamCAKeeper. The cached bundle is replaced
+// at once, under refreshMu so a refresh in flight cannot cache the
+// bundle from before the drop after it.
+func (a *awsPCAAuthority) DistrustCAs(fps [][32]byte) int {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	n := a.overlap.distrust(fps, time.Now())
+	if n > 0 {
+		if served := a.overlap.serve(time.Now()); served != nil {
+			a.bundleMu.Lock()
+			a.bundle = served
+			a.bundleMu.Unlock()
+		}
+	}
+	return n
 }
 
 // parseAWSPCACerts parses a concatenation of PEM CERTIFICATE blocks,

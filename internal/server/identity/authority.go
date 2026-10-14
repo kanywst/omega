@@ -125,10 +125,10 @@ type Config struct {
 	// an issued certificate. Zero means 30s.
 	AWSPCATimeout time.Duration
 
-	// UpstreamCAGrace is how long a CA that Vault PKI or step-ca stops
-	// publishing stays in the bundle Omega serves. Zero (the default) or
-	// negative turns the overlap off, so a dropped CA is untrusted at the
-	// next refresh.
+	// UpstreamCAGrace is how long a CA that Vault PKI, step-ca or AWS
+	// Private CA stops publishing stays in the bundle Omega serves. Zero
+	// (the default) or negative turns the overlap off, so a dropped CA is
+	// untrusted at the next refresh.
 	UpstreamCAGrace time.Duration
 }
 

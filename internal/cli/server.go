@@ -356,7 +356,7 @@ func newServerCommand() *cobra.Command {
 			// the previous material installed.
 			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
 			caReloader, _ := ca.(identity.CAReloader)
-			// Vault PKI and step-ca: every change to the CAs kept from a
+			// Vault PKI, step-ca and AWS Private CA: every change to the CAs kept from a
 			// rotation goes into the audit chain, and the operator's
 			// distrust list drops a kept CA without a restart.
 			keeper, _ := ca.(identity.UpstreamCAKeeper)
@@ -376,7 +376,7 @@ func newServerCommand() *cobra.Command {
 			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
 			if upstreamCADistrustFile != "" {
 				if keeper == nil {
-					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki or step-ca")
+					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki, step-ca or aws-pca")
 				}
 				if err := distrust.apply(ctx); err != nil {
 					return fmt.Errorf("upstream-ca-distrust: %w", err)
@@ -819,9 +819,9 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
 	cmd.Flags().DurationVar(&upstreamCAGrace, "upstream-ca-grace", 0,
-		"with --ca-backend=vault-pki or step-ca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers through a rotation (never past the CA's expiry), e.g. 24h. Off by default: Omega cannot tell a rotation from a revocation, so a CA kept this way stays trusted even if the issuer withdrew it because it was compromised, until --upstream-ca-distrust drops it.")
+		"with --ca-backend=vault-pki, step-ca or aws-pca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers through a rotation (never past the CA's expiry), e.g. 24h. Off by default: Omega cannot tell a rotation from a revocation, so a CA kept this way stays trusted even if the issuer withdrew it because it was compromised, until --upstream-ca-distrust drops it.")
 	cmd.Flags().StringVar(&upstreamCADistrustFile, "upstream-ca-distrust", "",
-		"with --ca-backend=vault-pki or step-ca, a file of SHA-256 fingerprints (hex, one per line, '#' comments) of CAs never to keep after the issuer stops publishing them. Re-read on SIGHUP, so a CA kept from a rotation can be dropped at once, without a restart, after a compromise.")
+		"with --ca-backend=vault-pki, step-ca or aws-pca, a file of SHA-256 fingerprints (hex, one per line, '#' comments) of CAs never to keep after the issuer stops publishing them. Re-read on SIGHUP, so a CA kept from a rotation can be dropped at once, without a restart, after a compromise.")
 	cmd.Flags().StringVar(&bundleSigningKeyFile, "policy-bundle-signing-key", "",
 		"ECDSA P-256 private key (PEM) that signs every policy bundle served to node agents, so they can verify it with --policy-bundle-key independently of TLS. Every replica must use the same key.")
 	cmd.Flags().StringArrayVar(&decisionRecorders, "decision-recorder", nil,

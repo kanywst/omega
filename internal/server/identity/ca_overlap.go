@@ -17,14 +17,14 @@ import (
 )
 
 // UpstreamCAGrace is the suggested grace for --upstream-ca-grace: how long
-// a CA that an external issuer (Vault PKI, step-ca) stopped publishing
+// a CA that an external issuer (Vault PKI, step-ca, AWS Private CA) stopped publishing
 // stays in Omega's bundle, so SVIDs it signed before the issuer rotated
 // keep verifying for peers until they could all have been reissued. The
 // overlap is off unless configured, because Omega cannot tell a rotation
 // from a revocation. A CA is never kept past its own expiry.
 const UpstreamCAGrace = 24 * time.Hour
 
-// upstreamRefreshBackoff is how long Vault PKI and step-ca serve the
+// upstreamRefreshBackoff is how long the external-issuer backends serve the
 // last bundle after a failed refresh before trying the issuer again.
 const upstreamRefreshBackoff = 30 * time.Second
 
