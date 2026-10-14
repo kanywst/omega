@@ -16,8 +16,6 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
 
 ## Next (3-6 months)
 
-- SPIFFE CSI driver integration so workloads can mount SVIDs as a
-  volume instead of dialing the agent's Unix socket.
 - step-ca, Vault PKI and AWS Private CA rotation handling (today they
   serve a stale bundle on transient errors and do not overlap an old
   and a new CA). The disk CA rotates at runtime
