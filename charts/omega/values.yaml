@@ -99,8 +99,9 @@ agent:
     tlsSecret: ""
     # Verify bundle signatures with "bundle.pub", the public half of
     # server.policyBundleSigningKeySecret, which tlsSecret must then hold.
-    # Needs server.policyBundleSigningKeySecret.
-    verifyBundle: false
+    # Needs server.policyBundleSigningKeySecret. false trusts bundles on
+    # TLS alone (--insecure-unsigned-policy-bundles).
+    verifyBundle: true
     # Spool decisions to an emptyDir so they survive an agent container
     # crash and restart (not the pod's deletion); one fsync per decision.
     spool: false

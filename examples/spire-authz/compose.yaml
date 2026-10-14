@@ -67,6 +67,7 @@ services:
       - --domain-root-admin=spiffe://upstream.demo/platform/admin
       - --decision-recorder=spiffe://upstream.demo/nodes/
       - --scim-idp=name=corp,domain=people,token-file=/run/demo/scim-token
+      - --policy-bundle-signing-key=/run/demo/bundle.key
     depends_on:
       spire-agent:
         condition: service_healthy
@@ -89,6 +90,7 @@ services:
       - --client-cert=/run/demo/node.pem
       - --client-key=/run/demo/node.key
       - --local-pdp-addr=0.0.0.0:8181
+      - --policy-bundle-key=/run/demo/bundle.pem
       # Published to the host so the demo can call it; on a real node the
       # PEP runs beside the agent and the address stays on loopback.
       - --local-pdp-allow-remote

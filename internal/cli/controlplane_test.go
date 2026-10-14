@@ -175,6 +175,23 @@ func TestAgentNeedsAMapOrALocalPDP(t *testing.T) {
 	}
 }
 
+func TestLocalPDPNeedsABundleKey(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--local-pdp-addr", "127.0.0.1:0", "--server", "https://cp"}, "needs --policy-bundle-key"},
+		{[]string{"--local-pdp-addr", "127.0.0.1:0", "--server", "https://cp", "--policy-bundle-key", "k.pem", "--insecure-unsigned-policy-bundles"}, "contradict"},
+	} {
+		cmd := newAgentCommand()
+		cmd.SilenceErrors, cmd.SilenceUsage = true, true
+		cmd.SetArgs(tc.args)
+		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%v: want %q, got %v", tc.args, tc.want, err)
+		}
+	}
+}
+
 func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 	dir := t.TempDir()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -192,7 +209,7 @@ func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 	}
 	defer busy.Close()
 
-	base := []string{"--server", "https://127.0.0.1:1", "--server-ca", cert, "--client-cert", cert, "--client-key", keyFile, "--local-pdp-addr", busy.Addr().String()}
+	base := []string{"--server", "https://127.0.0.1:1", "--server-ca", cert, "--client-cert", cert, "--client-key", keyFile, "--local-pdp-addr", busy.Addr().String(), "--insecure-unsigned-policy-bundles"}
 	for name, extra := range map[string][]string{
 		"local PDP only":        nil,
 		"with the Workload API": {"--socket", shortSocketPath(t), "--map", "uid=0,id=spiffe://omega.local/x"},
@@ -204,7 +221,9 @@ func TestLocalPDPOnlyAgentExitsWhenItCannotListen(t *testing.T) {
 		go func() { done <- cmd.Execute() }()
 		select {
 		case err := <-done:
-			if err == nil || !strings.Contains(err.Error(), "local PDP") {
+			// --insecure-unsigned-policy-bundles gets it past the key
+			// check to the listener.
+			if err == nil || !strings.Contains(err.Error(), "local PDP") || strings.Contains(err.Error(), "policy-bundle-key") {
 				t.Fatalf("%s: want the listener error, got %v", name, err)
 			}
 		case <-time.After(10 * time.Second):
