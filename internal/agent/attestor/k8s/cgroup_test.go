@@ -48,11 +48,12 @@ func TestParseCgroupHostProcessIsNotAPod(t *testing.T) {
 	}
 }
 
-// A process inside a pod's cgroup but not in a container's must be
-// refused, not treated as a host process: falling back to the UID
-// mapping would hand a pod process a host identity.
+// A process inside a pod's cgroup but not in a container's, or in a
+// container whose layout the parser does not know, must be refused,
+// not treated as a host process: falling back to the UID mapping
+// would hand a containerised process a host identity.
 func TestParseCgroupRefusesPodProcessOutsideAContainer(t *testing.T) {
-	for _, name := range []string{"v2-pod-no-container", "v2-crio-conmon", "v1-disagree", "v2-kubepods-unknown-layout"} {
+	for _, name := range []string{"v2-pod-no-container", "v2-crio-conmon", "v1-disagree", "v2-kubepods-unknown-layout", "v2-container-custom-cgroup-root", "v1-docker-not-kubelet"} {
 		t.Run(name, func(t *testing.T) {
 			_, err := parseFixture(t, name)
 			if err == nil || errors.Is(err, errNotAPod) {

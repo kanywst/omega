@@ -33,14 +33,15 @@ var (
 )
 
 // errNotAPod is returned when no line of a cgroup file is under the
-// kubelet's cgroup tree.
+// kubelet's cgroup tree or in a container.
 var errNotAPod = errors.New("process is not in a Kubernetes pod cgroup")
 
 // ParseCgroup reads a /proc/<pid>/cgroup file (cgroup v1 or v2) and
 // returns the pod container the process belongs to. It returns
 // errNotAPod only when no line is under the kubelet's "kubepods" tree
-// (a host process), and an error when the lines disagree, a line is
-// under that tree in a layout this parser does not know, or the
+// or names a container ID (a host process), and an error when the
+// lines disagree, a line looks like a container in a layout this
+// parser does not know, or the
 // process sits in a pod cgroup but outside any container (the pod
 // sandbox or a stray process). An unknown layout must not read as a
 // host process: that would hand a pod process the UID mapping.
@@ -99,9 +100,13 @@ func parseCgroupPath(path string) (ContainerRef, bool, error) {
 		}
 		return ContainerRef{PodUID: podUID, ContainerID: c[1]}, true, nil
 	}
+	// Not a pod layout this parser knows. If the path still looks like
+	// the kubelet's tree or a container (a kubelet with a custom
+	// --cgroup-root, a runtime's own layout), refuse rather than let a
+	// containerised process reach the UID mapping.
 	for _, seg := range segs {
-		if strings.Contains(seg, "kubepods") {
-			return ContainerRef{}, false, fmt.Errorf("cgroup %q is under the kubelet's tree but names no pod container", path)
+		if strings.Contains(seg, "kubepods") || containerSegment.MatchString(seg) {
+			return ContainerRef{}, false, fmt.Errorf("cgroup %q looks like a container but names no pod this attestor recognises", path)
 		}
 	}
 	return ContainerRef{}, false, nil

@@ -259,7 +259,9 @@ func TestAttestAPIServerFailureIsNotARefusal(t *testing.T) {
 }
 
 // A new pod is found by re-listing on a miss, but at most once per
-// minRelist, so a stream of unknown processes cannot flood the apiserver.
+// minRelist, so a stream of unknown processes cannot flood the
+// apiserver. A miss inside the interval is transient (the client
+// retries), not a refusal.
 func TestLookupRelistsOnMissAtMostOncePerInterval(t *testing.T) {
 	h := newHarness(t, tmpl)
 	writeProc(t, h.proc, 50, podCgroup(fixturePodUID, fixtureContainerID), "1")
@@ -268,8 +270,8 @@ func TestLookupRelistsOnMissAtMostOncePerInterval(t *testing.T) {
 		t.Fatalf("before the pod exists: %v", err)
 	}
 	h.api.setPods(pod(fixturePodUID, "apps", "web-1", "web", testNode, fixtureContainerID))
-	if _, _, err := h.att.Attest(context.Background(), 50); !errors.Is(err, ErrNotAttested) {
-		t.Fatalf("within the relist interval: %v", err)
+	if _, _, err := h.att.Attest(context.Background(), 50); err == nil || errors.Is(err, ErrNotAttested) {
+		t.Fatalf("within the relist interval: got %v, want a transient error", err)
 	}
 	if n := h.api.lists.Load(); n != 1 {
 		t.Fatalf("lists = %d, want 1", n)

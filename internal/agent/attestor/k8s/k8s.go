@@ -241,6 +241,8 @@ func (a *Attestor) startTime(pid int32) (string, error) {
 // lookup finds the pod for ref among the pods on this node, re-listing
 // on a miss (a pod scheduled since the last list) or when the pod is
 // known but the container is not yet in its status (just started).
+// A miss that cannot re-list yet is reported as transient, not as a
+// refusal, so the workload's client retries instead of giving up.
 func (a *Attestor) lookup(ctx context.Context, ref ContainerRef) (*corev1.Pod, error) {
 	a.mu.Lock()
 	pod := a.podLocked(ref.PodUID)
@@ -249,14 +251,15 @@ func (a *Attestor) lookup(ctx context.Context, ref ContainerRef) (*corev1.Pod, e
 	if pod != nil && hasContainer(pod, ref.ContainerID) {
 		return pod, nil
 	}
-	if !fresh {
-		if err := a.relist(ctx); err != nil {
-			return nil, err
-		}
-		a.mu.Lock()
-		pod = a.podLocked(ref.PodUID)
-		a.mu.Unlock()
+	if fresh {
+		return nil, fmt.Errorf("container %s of pod %s is not in the node's pod list yet; the list is re-fetched at most every %s", ref.ContainerID, ref.PodUID, minRelist)
 	}
+	if err := a.relist(ctx); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	pod = a.podLocked(ref.PodUID)
+	a.mu.Unlock()
 	if pod == nil {
 		return nil, fmt.Errorf("%w: no pod with UID %s on node %s", ErrNotAttested, ref.PodUID, a.node)
 	}
