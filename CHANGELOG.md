@@ -11,6 +11,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Added
 
 - **Runtime rotation of the built-in CA.** `omega ca prepare`, `activate` and `retire` (plus `status`) rotate the `--ca-backend=disk` CA in place; the server picks up each step on `SIGHUP`, keeps the next and previous CAs in the bundle and JWKS around the switch, verifies JWT-SVIDs by `kid` across them, and advances `spiffe_sequence`. See [ADR 0019](docs/adr/0019-runtime-ca-rotation.md), [docs/ca-rotation.md](docs/ca-rotation.md) and `examples/ca-rotation/`.
+- **Agent-side Kubernetes workload attestor.** `omega agent --k8s-workload-attestor` (Linux) identifies a Workload API peer that runs in a pod on the node by its pod: the peer PID's cgroup names the pod and container, kube-apiserver names the namespace, service account and pod, and `--k8s-workload-svid-template` renders the SPIFFE ID with the server's `--k8s-svid-template` placeholders. Host processes keep the `--map` UID mapping; a pod process never falls back to it. Off by default and meant for the self-issued development and evaluation path, not as a production substitute for SPIRE. Helm: `agent.k8sWorkloadAttestor` (turns on `hostPID` and grants `list` on pods). See [ADR 0020](docs/adr/0020-agent-side-kubernetes-workload-attestor.md) and `examples/k8s-workload-attestor/`.
 
 ## [0.8.0] - 2026-10-13
 

@@ -24,17 +24,6 @@ Nothing is committed yet. Signed policy bundles and the decision spool ([ADR 001
 
 ## Later (6-12 months)
 
-- Agent-side Kubernetes workload attestor (cgroup-based pod
-  introspection). The server-side `POST /v1/attest/k8s` endpoint
-  has shipped (TokenReview-backed); the SPIRE-style "agent attests
-  workloads by inspecting `/proc/<pid>/cgroup` then calling
-  kube-apiserver" path is the remaining bit. Demoted from Now in
-  October 2026: it reimplements what a SPIRE agent's k8s workload
-  attestor already does, and the project's direction is to consume an
-  upstream SPIFFE trust domain rather than to compete with its issuing
-  and attestation side. It stays on the list for the self-issued
-  dev / eval path, not as a production substitute for SPIRE.
-
 - Cloud HSM / KMS-backed CA upstream plugins (AWS Private CA, GCP CAS,
   Azure Key Vault). The interface seam is in place
   ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and two

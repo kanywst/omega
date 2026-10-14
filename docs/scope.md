@@ -14,7 +14,7 @@
 - Single binary `omega` with subcommands: `server`, `agent`, `operator`, `domain`, `group`, `policy`, `svid`.
 - Self-signed CA on first boot, or Vault PKI / step-ca, or identities consumed from an upstream SPIRE / Istio trust domain. X.509-SVID and JWT-SVID; 30-minute X.509 validity.
   SPIFFE ID format `spiffe://omega.local/<domain-path>/<service>`.
-- SPIFFE Workload API on `/tmp/omega-agent.sock`, UID-based attestation; Kubernetes ServiceAccount attestation on the server.
+- SPIFFE Workload API on `/tmp/omega-agent.sock`, UID-based attestation, and an opt-in Kubernetes workload attestor in the agent for development and evaluation; Kubernetes ServiceAccount attestation on the server.
 - Cedar engine embedded. OpenID AuthZEN 1.0 PDP API at `POST /access/v1/evaluation`, also served by the agent from a synced policy bundle.
 - Domain tree with delegated admins, and domain-owned groups with expiring membership.
 - People: OIDC IdP federation and SCIM 2.0 provisioning. Agents: RFC 8693 token exchange and the ID-JAG grant.

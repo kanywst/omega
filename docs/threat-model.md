@@ -159,6 +159,13 @@ open CA. This is the threat the startup warning names.
   network layer (NetworkPolicy, security group, mesh authorization).
 - `--client-cert-optional` ([ADR 0012](adr/0012-optional-client-certificates.md)) moves the client-certificate requirement from the handshake to the gated routes: they still require a verified SVID, while the ungated routes become reachable without one (`GET /healthz`, `GET /v1/leader`, `GET /v1/domains` and `GET /v1/domains/{name}` (domain data), `GET /v1/bundle`, `GET /v1/spiffe-bundle`, `GET /v1/jwt/bundle`, `GET /v1/federation/bundles` (federation peers), the `/.well-known/` discovery documents, `GET /metrics`, and the enrollment paths `POST /v1/attest/k8s` and `POST /v1/oidc/exchange`), including their audit deny rows and TokenReview calls. It is refused without `--require-auth`.
 
+### S4: Spoofing a pod identity to the agent's Kubernetes attestor
+
+With `omega agent --k8s-workload-attestor`, a process on the node tries to be attested as a pod it is not: by reusing another process's PID, by running in a pod's cgroup outside its container, or by making the agent believe the wrong pod spec.
+
+- Mitigation: the PID comes from the kernel (`SO_PEERCRED`), its cgroup from procfs, and a process in a pod's cgroup but in no container is refused rather than handed to the UID mapping. The pod is listed with the field selector `spec.nodeName` and each result is re-checked against the agent's node, and its container must appear in the pod's status. The PID's start time must be the same before and after the lookup. The service account holds `list` on pods only, not `nodes/proxy` ([ADR 0020](adr/0020-agent-side-kubernetes-workload-attestor.md)).
+- Residual risk: PID reuse between the peer's `connect` and the agent's first read of `/proc` is not closed (no pidfd), so a peer that hands its socket to another process and exits can, if the target is then given its PID, be attested as the target. The agent needs `hostPID` and can read every pod spec in the cluster, so its compromise discloses more than a UID-only agent's. It trusts kube-apiserver's answer for the pod's namespace and service account. Issuance for an attested pod goes through `POST /v1/svid`, which is open only without `--require-auth` (S3); the attestor is for development and evaluation, not a production substitute for SPIRE's Kubernetes workload attestor.
+
 ### T1: Tampering with the audit log
 
 An attacker with database access edits or deletes audit rows to
