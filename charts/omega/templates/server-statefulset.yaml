@@ -53,6 +53,28 @@ spec:
             {{- range .Values.server.scimProviders }}
             - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
             {{- end }}
+            {{- with .Values.server.ca }}
+            {{- if and .backend (ne .backend "disk") }}
+            - --ca-backend={{ .backend }}
+            {{- end }}
+            {{- if eq .backend "aws-pca" }}
+            {{- with .awsPCA }}
+            - --ca-aws-pca-arn={{ required "server.ca.awsPCA.arn is required when server.ca.backend=aws-pca" .arn }}
+            {{- if .region }}
+            - --ca-aws-pca-region={{ .region }}
+            {{- end }}
+            {{- if .endpoint }}
+            - --ca-aws-pca-endpoint={{ .endpoint }}
+            {{- end }}
+            {{- if .templateArn }}
+            - --ca-aws-pca-template-arn={{ .templateArn }}
+            {{- end }}
+            {{- if .signingAlgorithm }}
+            - --ca-aws-pca-signing-algorithm={{ .signingAlgorithm }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}

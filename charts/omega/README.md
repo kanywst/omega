@@ -34,6 +34,20 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `agent.localPDP.verifyBundle`         | `false`                 | Verify bundle signatures with `bundle.pub` from `agent.localPDP.tlsSecret`                       |
 | `agent.localPDP.spool`                | `false`                 | Spool decisions to an emptyDir                                                                   |
 | `server.persistence.size`             | `1Gi`                   | PVC for SQLite data dir                                                                          |
+| `server.ca.backend`                   | `disk`                  | `--ca-backend`; `aws-pca` is configured below, other backends through `server.extraArgs`        |
+| `server.ca.awsPCA.arn`                | `""`                    | AWS Private CA ARN (required for `aws-pca`); see [AWS Private CA](#aws-private-ca)                |
+
+## AWS Private CA
+
+With `server.ca.backend=aws-pca`, the server signs X.509-SVIDs with an AWS Private CA and the CA key never leaves AWS. JWT-SVIDs are still signed by a key under `server.dataDir`, so keep persistence enabled. The server authenticates with the pod's AWS identity, so no credentials go into values. With IRSA, annotate the service account with a role that may call `acm-pca:IssueCertificate`, `acm-pca:GetCertificate` and `acm-pca:GetCertificateAuthorityCertificate` on the CA:
+
+```bash
+helm install omega ./charts/omega \
+  --set server.trustDomain=example.com \
+  --set server.ca.backend=aws-pca \
+  --set server.ca.awsPCA.arn=arn:aws:acm-pca:us-east-1:111122223333:certificate-authority/EXAMPLE \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::111122223333:role/omega-pca
+```
 
 ## Verify
 

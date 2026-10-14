@@ -38,6 +38,19 @@ server:
   #       domain: people
   #       tokenSecret: omega-scim-corp
   scimProviders: []
+  # CA backend that signs X.509-SVIDs (--ca-backend). "disk" is a
+  # self-signed root for dev/eval. "aws-pca" signs with AWS Private CA;
+  # credentials come from the pod's AWS identity (IRSA via
+  # serviceAccount.annotations, or EKS Pod Identity), never from values.
+  # Other backends (vault-pki, step-ca) are configured with extraArgs.
+  ca:
+    backend: disk
+    awsPCA:
+      arn: ""              # required for aws-pca: certificate-authority ARN
+      region: ""           # empty takes the region from arn
+      endpoint: ""         # e.g. a VPC interface endpoint URL
+      templateArn: ""      # empty uses EndEntityCertificate_APIPassthrough/V1
+      signingAlgorithm: "" # empty infers it from the CA key
   extraArgs: []
   resources:
     limits:
