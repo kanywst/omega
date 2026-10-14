@@ -8,12 +8,12 @@ Omega calls two methods of the CAS v1 REST API with an OAuth 2.0 access token fr
 
 | Call | Used for |
 | --- | --- |
-| `POST /v1/<pool>:fetchCaCerts` | The trust bundle. Every certificate of every CA chain in the pool, deduplicated, is served as the X.509 bundle. It is fetched once at startup (a failure stops the server) and refreshed every five minutes; if a refresh fails, the last good bundle keeps being served. |
+| `POST /v1/<pool>:fetchCaCerts` | The trust bundle. Every certificate of every CA chain in the pool, deduplicated, is served as the X.509 bundle. It is fetched once at startup (a failure stops the server) and refreshed every five minutes; if a refresh fails, the last good bundle keeps being served, a warning is logged, and the next attempt waits 30 seconds. |
 | `POST /v1/<pool>/certificates` | One call per X.509-SVID, with a 30-minute `lifetime`. |
 
-Workload CSRs carry no SANs, so Omega does not forward them as `pemCsr`. It sends a `CertificateConfig` instead: the CSR's public key, an empty subject, the SPIFFE ID as the only URI SAN, `digitalSignature`, `keyEncipherment` and `keyAgreement` key usages, `serverAuth` and `clientAuth` extended key usages, and `isCa: false`. Before the certificate reaches the workload, Omega checks that it binds the CSR's public key, carries the requested SPIFFE ID as a URI SAN, and is not a CA certificate; a pool or template that changes any of those makes issuance fail instead of handing out a wrong SVID.
+Workload CSRs carry no SANs, so Omega does not forward them as `pemCsr`. It sends a `CertificateConfig` instead: the CSR's public key, an empty subject, the SPIFFE ID as the only URI SAN, `digitalSignature`, `keyEncipherment` and `keyAgreement` key usages, `serverAuth` and `clientAuth` extended key usages, and `isCa: false`. Before the certificate reaches the workload, Omega checks that it binds the CSR's public key, carries the requested SPIFFE ID as its only URI SAN and no DNS, IP or email SAN, is not a CA certificate, lives no longer than an SVID (30 minutes, plus five minutes of clock skew), and chains to the pool's CA certificates (refreshing the bundle once if a CA added to the pool signed it). A pool baseline or template that changes any of those makes issuance fail instead of handing out a wrong SVID.
 
-Workloads receive the leaf alone. When the pool's CAs are subordinate CAs, the issuing CA is in the bundle (fetchCaCerts returns it with the root), so the leaf still verifies against the bundle.
+Workloads receive the leaf alone. When the pool's CAs are subordinate CAs, the issuing CA is in the bundle (fetchCaCerts returns it with the root), so the leaf still verifies against the bundle. This makes every CA in the pool, intermediates included, a trust anchor for workloads and federated peers, also when `--ca-gcp-cas-issuing-ca` pins issuance to one of them. Keep the pool dedicated to the trust domain: a CA in it that signs for anything else is trusted by everything that trusts Omega's bundle.
 
 ## Setting up the pool
 

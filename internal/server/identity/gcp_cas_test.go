@@ -43,6 +43,7 @@ type casFixture struct {
 	subKey   *ecdsa.PrivateKey
 	subPEM   []byte
 	rootCert *x509.Certificate
+	rootKey  *ecdsa.PrivateKey
 
 	fetchHits  atomic.Int64
 	createHits atomic.Int64
@@ -56,6 +57,38 @@ type casFixture struct {
 	mutate func(tpl *x509.Certificate, pub any) any
 	// rawCreate, when set, replaces the whole create response.
 	rawCreate func(w http.ResponseWriter)
+	// signCert / signKey, when set, sign leaves instead of the
+	// fixture's issuing CA; extraCA is appended to fetchCaCerts.
+	signCert *x509.Certificate
+	signKey  *ecdsa.PrivateKey
+	extraCA  []byte
+}
+
+// newCA mints a CA certificate signed by parent (self-signed when nil).
+func newCA(t *testing.T, cn string, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	tpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	if parent == nil {
+		parent, parentKey = tpl, key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, parent, &key.PublicKey, parentKey)
+	if err != nil {
+		t.Fatalf("sign %s: %v", cn, err)
+	}
+	cert, _ := x509.ParseCertificate(der)
+	return cert, key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 func newCASFixture(t *testing.T) *casFixture {
@@ -99,6 +132,7 @@ func newCASFixture(t *testing.T) *casFixture {
 	f := &casFixture{
 		rootPEM:  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}),
 		rootCert: rootCert,
+		rootKey:  rootKey,
 		subCert:  subCert,
 		subKey:   subKey,
 		subPEM:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: subDER}),
@@ -134,12 +168,16 @@ func (f *casFixture) handleFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	// Two CAs in the pool sharing a root: the root must appear once in
 	// the bundle omega builds.
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"caCerts": []map[string]any{
-			{"certificates": []string{string(f.subPEM), string(f.rootPEM)}},
-			{"certificates": []string{string(f.rootPEM)}},
-		},
-	})
+	chains := []map[string]any{
+		{"certificates": []string{string(f.subPEM), string(f.rootPEM)}},
+		{"certificates": []string{string(f.rootPEM)}},
+	}
+	f.mu.Lock()
+	if f.extraCA != nil {
+		chains = append(chains, map[string]any{"certificates": []string{string(f.extraCA), string(f.rootPEM)}})
+	}
+	f.mu.Unlock()
+	_ = json.NewEncoder(w).Encode(map[string]any{"caCerts": chains})
 }
 
 func (f *casFixture) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +194,10 @@ func (f *casFixture) handleCreate(w http.ResponseWriter, r *http.Request) {
 	f.lastQuery = r.URL.Query()
 	f.lastBody = body
 	mutate, rawCreate := f.mutate, f.rawCreate
+	signCert, signKey := f.subCert, f.subKey
+	if f.signCert != nil {
+		signCert, signKey = f.signCert, f.signKey
+	}
 	f.mu.Unlock()
 	if rawCreate != nil {
 		rawCreate(w)
@@ -218,7 +260,7 @@ func (f *casFixture) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if mutate != nil {
 		pub = mutate(tpl, pub)
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, f.subCert, pub, f.subKey)
+	der, err := x509.CreateCertificate(rand.Reader, tpl, signCert, pub, signKey)
 	if err != nil {
 		http.Error(w, "sign: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -380,6 +422,18 @@ func TestGCPCASRejectsMisissuedCertificates(t *testing.T) {
 			tpl.URIs = nil
 			return pub
 		}, wantErr: "SAN passthrough"},
+		{name: "extra uri san", mutate: func(tpl *x509.Certificate, pub any) any {
+			tpl.URIs = append(tpl.URIs, &url.URL{Scheme: "spiffe", Host: "omega.local", Path: "/admin"})
+			return pub
+		}, wantErr: "not exactly the requested SPIFFE ID"},
+		{name: "dns san", mutate: func(tpl *x509.Certificate, pub any) any {
+			tpl.DNSNames = []string{"admin.example"}
+			return pub
+		}, wantErr: "DNS, IP or email SANs"},
+		{name: "long lifetime", mutate: func(tpl *x509.Certificate, pub any) any {
+			tpl.NotAfter = time.Now().Add(24 * time.Hour)
+			return pub
+		}, wantErr: "longer than"},
 		{name: "no certificate", raw: func(w http.ResponseWriter) {
 			_, _ = w.Write([]byte(`{}`))
 		}, wantErr: "no pemCertificate"},
@@ -548,5 +602,67 @@ func TestGCPCASDefaultCredentialsMissing(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "application default credentials") {
 		t.Fatalf("expected an ADC error, got %v", err)
+	}
+}
+
+func TestGCPCASRejectsLeafOutsideThePool(t *testing.T) {
+	f := newCASFixture(t)
+	a := newCASAuthority(t, f)
+	// A CA CAS never published in fetchCaCerts signs the leaf.
+	foreign, foreignKey, _ := newCA(t, "Foreign CA", nil, nil)
+	f.mu.Lock()
+	f.signCert, f.signKey = foreign, foreignKey
+	f.mu.Unlock()
+	before := f.fetchHits.Load()
+	csr, _ := vaultIssueCSR(t)
+	_, err := a.IssueSVID(spiffeid.RequireFromString("spiffe://omega.local/web"), csr)
+	if err == nil || !strings.Contains(err.Error(), "does not chain") {
+		t.Fatalf("err = %v, want a chain verification failure", err)
+	}
+	if f.fetchHits.Load() != before+1 {
+		t.Errorf("expected one bundle refresh before rejecting, got %d", f.fetchHits.Load()-before)
+	}
+}
+
+func TestGCPCASPicksUpANewPoolCAOnIssue(t *testing.T) {
+	f := newCASFixture(t)
+	a := newCASAuthority(t, f)
+	// A CA added to the pool after the bundle was cached signs the next
+	// leaf; issuance refreshes the bundle instead of failing.
+	newSub, newSubKey, newSubPEM := newCA(t, "CAS Mock Issuing CA 2", f.rootCert, f.rootKey)
+	f.mu.Lock()
+	f.signCert, f.signKey, f.extraCA = newSub, newSubKey, newSubPEM
+	f.mu.Unlock()
+	csr, _ := vaultIssueCSR(t)
+	svid, err := a.IssueSVID(spiffeid.RequireFromString("spiffe://omega.local/web"), csr)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if !strings.Contains(string(svid.BundlePEM), strings.TrimSpace(string(newSubPEM))) {
+		t.Error("returned bundle does not include the new pool CA")
+	}
+	if !strings.Contains(string(a.BundlePEM()), strings.TrimSpace(string(newSubPEM))) {
+		t.Error("cached bundle was not updated")
+	}
+}
+
+func TestGCPCASBacksOffAfterAFailedRefresh(t *testing.T) {
+	f := newCASFixture(t)
+	cfg := f.config(t)
+	cfg.GCPCASBundleTTL = time.Millisecond
+	a, err := identity.New(cfg)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	f.fetchFail.Store(true)
+	before := f.fetchHits.Load()
+	for range 5 {
+		if len(a.BundlePEM()) == 0 {
+			t.Fatal("expected the stale bundle")
+		}
+	}
+	if got := f.fetchHits.Load() - before; got != 1 {
+		t.Fatalf("expected one refresh attempt within the retry interval, got %d", got)
 	}
 }

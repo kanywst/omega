@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -43,8 +44,15 @@ const (
 	defaultGCPCASEndpoint  = "https://privateca.googleapis.com"
 	defaultGCPCASBundleTTL = 5 * time.Minute
 	defaultGCPCASTimeout   = 10 * time.Second
-	gcpCASScope            = "https://www.googleapis.com/auth/cloud-platform"
-	maxGCPCASResp          = 1 << 20
+	// gcpCASRetryInterval is how long a stale bundle is served after a
+	// failed refresh before the next attempt, so an outage costs one
+	// fetchCaCerts timeout per interval instead of one per caller.
+	gcpCASRetryInterval = 30 * time.Second
+	// gcpCASClockSkew bounds how far CAS's clock may lead omega's when
+	// checking the issued certificate's validity window.
+	gcpCASClockSkew = 5 * time.Minute
+	gcpCASScope     = "https://www.googleapis.com/auth/cloud-platform"
+	maxGCPCASResp   = 1 << 20
 )
 
 var (
@@ -184,6 +192,10 @@ func (a *gcpCASAuthority) BundlePEM() []byte {
 	a.bundleMu.RUnlock()
 
 	if _, err := a.refreshBundle(context.Background()); err != nil {
+		slog.Warn("gcp-cas: trust bundle refresh failed; serving the cached bundle", "pool", a.pool, "retry_in", gcpCASRetryInterval, "err", err)
+		a.bundleMu.Lock()
+		a.bundleExp = time.Now().Add(gcpCASRetryInterval)
+		a.bundleMu.Unlock()
 		return stale
 	}
 	a.bundleMu.RLock()
@@ -315,34 +327,79 @@ func (a *gcpCASAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 	if err != nil {
 		return nil, fmt.Errorf("gcp-cas: parse certificate: %w", err)
 	}
-	// Defence in depth, as in the other remote backends: a pool's
-	// baseline values, a template, or a hostile upstream could return
-	// a certificate that is a CA, binds another key, or drops the
-	// requested SPIFFE ID. Reject those before the workload sees them.
-	if cert.IsCA {
-		return nil, errors.New("gcp-cas: issued certificate is a CA certificate")
+	if err := checkGCPCASLeaf(cert, id, csr); err != nil {
+		return nil, err
 	}
-	if !bytes.Equal(cert.RawSubjectPublicKeyInfo, csr.RawSubjectPublicKeyInfo) {
-		return nil, errors.New("gcp-cas: issued certificate public key does not match CSR")
-	}
-	wantURI := id.URL().String()
-	var haveURI bool
-	for _, u := range cert.URIs {
-		if u.String() == wantURI {
-			haveURI = true
-			break
-		}
-	}
-	if !haveURI {
-		return nil, fmt.Errorf("gcp-cas: issued certificate URI SANs %v do not contain requested SPIFFE ID %q (does the pool's issuance policy allow SAN passthrough?)", cert.URIs, wantURI)
+	bundle, err := a.verifyLeaf(cert)
+	if err != nil {
+		return nil, err
 	}
 	return &SVID{
 		SPIFFEID:  id,
 		CertPEM:   pem.EncodeToMemory(block),
-		BundlePEM: a.BundlePEM(),
+		BundlePEM: bundle,
 		NotBefore: cert.NotBefore,
 		NotAfter:  cert.NotAfter,
 	}, nil
+}
+
+// checkGCPCASLeaf is defence in depth against a pool's baseline values,
+// a template, or a hostile upstream: the certificate must be a leaf for
+// the CSR's key, name exactly the requested SPIFFE ID and nothing else
+// (an X.509-SVID has one URI SAN), and live no longer than an SVID.
+func checkGCPCASLeaf(cert *x509.Certificate, id spiffeid.ID, csr *x509.CertificateRequest) error {
+	if cert.IsCA {
+		return errors.New("gcp-cas: issued certificate is a CA certificate")
+	}
+	if !bytes.Equal(cert.RawSubjectPublicKeyInfo, csr.RawSubjectPublicKeyInfo) {
+		return errors.New("gcp-cas: issued certificate public key does not match CSR")
+	}
+	if len(cert.URIs) != 1 || cert.URIs[0].String() != id.URL().String() {
+		return fmt.Errorf("gcp-cas: issued certificate URI SANs %v are not exactly the requested SPIFFE ID %q (does the pool's issuance policy allow SAN passthrough?)", cert.URIs, id)
+	}
+	if len(cert.DNSNames) > 0 || len(cert.IPAddresses) > 0 || len(cert.EmailAddresses) > 0 {
+		return errors.New("gcp-cas: issued certificate carries DNS, IP or email SANs omega did not request")
+	}
+	if cert.NotAfter.After(time.Now().Add(svidValidity + gcpCASClockSkew)) {
+		return fmt.Errorf("gcp-cas: issued certificate is valid until %s, longer than the %s SVID lifetime", cert.NotAfter.UTC().Format(time.RFC3339), svidValidity)
+	}
+	return nil
+}
+
+// verifyLeaf checks that cert chains to the pool's trust bundle and
+// returns that bundle. A failure against the cached bundle triggers one
+// refresh first, since a CA newly added to the pool can sign before the
+// cache would have picked it up.
+func (a *gcpCASAuthority) verifyLeaf(cert *x509.Certificate) ([]byte, error) {
+	bundle := a.BundlePEM()
+	if verifyAgainstBundle(cert, bundle) == nil {
+		return bundle, nil
+	}
+	a.refreshMu.Lock()
+	fresh, err := a.refreshBundle(context.Background())
+	a.refreshMu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("gcp-cas: issued certificate does not chain to the cached bundle and the refresh failed: %w", err)
+	}
+	if err := verifyAgainstBundle(cert, fresh); err != nil {
+		return nil, fmt.Errorf("gcp-cas: issued certificate does not chain to the pool's CA certificates: %w", err)
+	}
+	return append([]byte(nil), fresh...), nil
+}
+
+func verifyAgainstBundle(cert *x509.Certificate, bundle []byte) error {
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(bundle) {
+		return errors.New("empty trust bundle")
+	}
+	// Verify at the leaf's own notBefore: this checks the chain, not the
+	// clock, so a CAS clock slightly ahead of omega's cannot fail it.
+	_, err := cert.Verify(x509.VerifyOptions{
+		Roots:       roots,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		CurrentTime: cert.NotBefore,
+	})
+	return err
 }
 
 // call POSTs body to endpoint+path?query and decodes a 2xx JSON reply
