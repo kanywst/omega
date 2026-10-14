@@ -165,7 +165,14 @@ open CA. This is the threat the startup warning names.
 With the chart's `csi.enabled`, any pod that can mount a `csi.spiffe.io` volume reaches the agent's Workload API socket, including pods in other namespaces.
 
 - Mitigation today: the agent attests by the caller's UID (`SO_PEERCRED`) against `agent.uidMap`, as in S1; the CSI images are pinned by digest.
-- Residual risk: attestation has no pod, namespace or service-account selector, so a pod running as a mapped UID receives that identity. Keep mapped UIDs unique per workload and restrict `csi.spiffe.io` volumes with admission policy. The driver runs privileged with bidirectional mount propagation on `/var/lib/kubelet/pods`, so a compromise of its image or node is a node-level compromise.
+- Residual risk: attestation has no pod, namespace or service-account selector, so a pod running as a mapped UID receives that identity. Keep mapped UIDs unique per workload and restrict `csi.spiffe.io` volumes with admission policy. With `agent.k8sWorkloadAttestor.enabled`, a pod caller is attested by its pod instead and never receives a UID mapping (S5). The driver runs privileged with bidirectional mount propagation on `/var/lib/kubelet/pods`, so a compromise of its image or node is a node-level compromise.
+
+### S5: Spoofing a pod identity to the agent's Kubernetes attestor
+
+With `omega agent --k8s-workload-attestor`, a process on the node tries to be attested as a pod it is not: by reusing another process's PID, by running in a pod's cgroup outside its container, or by making the agent believe the wrong pod spec.
+
+- Mitigation: the PID comes from the kernel (`SO_PEERCRED`), its cgroup from procfs, and a process in a pod's cgroup but in no container, or under the kubelet's `kubepods` tree or in a container in an unknown layout, is refused rather than handed to the UID mapping. A static pod's mirror annotation only nominates candidates: the pod whose status lists the container wins, and two that both list it are refused. The pod is listed with the field selector `spec.nodeName` and each result is re-checked against the agent's node, and its container must appear in the pod's status. The PID's start time must be the same before and after the lookup, also when the answer is a host process. The agent's own service account holds `list` on pods only, not `nodes/proxy` ([ADR 0020](adr/0020-agent-side-kubernetes-workload-attestor.md)).
+- Residual risk: PID reuse between the peer's `connect` and the agent's first read of `/proc` is not closed (no pidfd), so a peer that hands its socket to another process and exits can, if the target is then given its PID, be attested as the target. The agent needs `hostPID` and can read every pod spec in the cluster, so its compromise discloses more than a UID-only agent's. It trusts kube-apiserver's answer for the pod's namespace and service account. Issuance for an attested pod goes through `POST /v1/svid`, which is open only without `--require-auth` (S3); the attestor is for development and evaluation, not a production substitute for SPIRE's Kubernetes workload attestor.
 
 ### T1: Tampering with the audit log
 

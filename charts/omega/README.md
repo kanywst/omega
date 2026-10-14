@@ -28,6 +28,7 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `policy.inline`                           | `{}`                    | Inline `*.cedar` files via ConfigMap                                                                                  |
 | `agent.uidMap`                            | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                                      |
 | `agent.hostSocketPath`                    | `/run/omega`            | hostPath for the workload socket; must be under `/run/omega*` or `/var/run/omega*`                                    |
+| `agent.k8sWorkloadAttestor.enabled`       | `false`                 | Identify pod workloads by their pod (dev / eval); `hostPID`, own ServiceAccount with `list` on pods                   |
 | `agent.localPDP.enabled`                  | `false`                 | Decide on the node (`--local-pdp-addr`)                                                                               |
 | `agent.localPDP.tlsSecret`                | `""`                    | Secret with `ca.crt`, `tls.crt`, `tls.key` for the agent's SVID                                                       |
 | `server.policyBundleSigningKeySecret`     | `""`                    | Secret with `bundle.key` (ECDSA P-256) that signs policy bundles                                                      |
@@ -67,7 +68,7 @@ Then issue an AuthZEN evaluation as shown in the post-install notes.
 ## Known limitations
 
 - Single-replica server out of the box (SQLite). Postgres-backed HA is available behind `--db postgres://...` plus the leader-election flags; the chart ships the SQLite default.
-- Agent uses UID-based attestation. K8s SAT projection is a planned follow-up.
+- Agent uses UID-based attestation by default. `agent.k8sWorkloadAttestor.enabled` identifies pod workloads by their pod instead, for development and evaluation; it needs a server without `--require-auth` and is not a production substitute for SPIRE ([ADR 0020](../../docs/adr/0020-agent-side-kubernetes-workload-attestor.md)).
 - No CRDs / Operator wiring in this chart.
 
 ## SPIFFE CSI driver

@@ -77,3 +77,4 @@ index to avoid collisions.
 | [0017](0017-scim-provisioning.md) | Provisioning users and groups over SCIM 2.0 | Accepted |
 | [0018](0018-signed-bundles-and-decision-spool.md) | Signed policy bundles and a decision spool | Accepted |
 | [0019](0019-runtime-ca-rotation.md) | Rotating the built-in CA at runtime | Accepted |
+| [0020](0020-agent-side-kubernetes-workload-attestor.md) | An agent-side Kubernetes workload attestor for the self-issued path | Accepted |

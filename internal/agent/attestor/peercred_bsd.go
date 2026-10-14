@@ -4,20 +4,21 @@ package attestor
 
 import "golang.org/x/sys/unix"
 
-// getPeerCreds returns (uid, gid) of the peer connected to the unix socket fd.
+// getPeerCreds returns the credentials of the peer connected to the unix socket fd.
 //
 // Darwin/BSD don't expose SO_PEERCRED. Instead we read the kernel-attested
 // peer credentials via getsockopt(SOL_LOCAL, LOCAL_PEERCRED) which returns
 // an xucred struct. xucred carries the effective UID and a list of GIDs;
 // we surface the first GID as the peer GID for symmetry with Linux ucred.
-func getPeerCreds(fd int) (uid, gid uint32, err error) {
+// The PID is left zero: only the Linux Kubernetes attestor uses it.
+func getPeerCreds(fd int) (Creds, error) {
 	xu, err := unix.GetsockoptXucred(fd, unix.SOL_LOCAL, unix.LOCAL_PEERCRED)
 	if err != nil {
-		return 0, 0, err
+		return Creds{}, err
 	}
-	uid = xu.Uid
+	c := Creds{UID: xu.Uid}
 	if xu.Ngroups > 0 {
-		gid = xu.Groups[0]
+		c.GID = xu.Groups[0]
 	}
-	return uid, gid, nil
+	return c, nil
 }

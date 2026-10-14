@@ -114,7 +114,9 @@ jobs:
       - name: helm lint
         run: helm lint charts/omega
       - name: helm template (render check)
-        run: helm template omega charts/omega > /dev/null
+        run: |
+          helm template omega charts/omega > /dev/null
+          helm template omega charts/omega --set agent.k8sWorkloadAttestor.enabled=true > /dev/null
 
   kind-csi:
     runs-on: ubuntu-latest
@@ -200,6 +202,26 @@ jobs:
         # `kind create` step a no-op against the cluster that
         # helm/kind-action already brought up.
         working-directory: examples/k8s-attest
+        run: KEEP_CLUSTER=1 make demo
+
+  kind-k8s-workload-attestor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: azure/setup-helm@v5
+        with:
+          version: latest
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: omega-k8s-wl
+      - name: run k8s-workload-attestor demo
+        # The demo builds its own linux omega for the kind node and
+        # reuses the cluster helm/kind-action brought up.
+        working-directory: examples/k8s-workload-attestor
         run: KEEP_CLUSTER=1 make demo
 
   lint:
