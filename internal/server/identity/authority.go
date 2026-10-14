@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -62,6 +63,15 @@ const (
 	// The CA key stays in AWS; JWT-SVID signing stays local for the
 	// same reasons as the other non-disk backends.
 	KindAWSPCA Kind = "aws-pca"
+	// KindAzureKeyVault keeps the CA private key in Azure Key Vault or
+	// Managed HSM. Omega builds certificates and JWTs itself and has
+	// Key Vault sign their digests, so both X.509-SVIDs and JWT-SVIDs
+	// are signed by a key that never leaves Key Vault (ADR 0021).
+	KindAzureKeyVault Kind = "azure-keyvault"
+	// KindGCPCAS signs X.509-SVIDs via a Google Cloud Certificate
+	// Authority Service CA pool; the CA keys stay in Google-managed
+	// HSMs. JWT-SVID signing stays local, as for KindVaultPKI.
+	KindGCPCAS Kind = "gcp-cas"
 )
 
 // Config is the disjoint-union-style argument to New. Fields are read
@@ -130,6 +140,33 @@ type Config struct {
 	// (the default) or negative turns the overlap off, so a dropped CA is
 	// untrusted at the next refresh.
 	UpstreamCAGrace time.Duration
+
+	// KindAzureKeyVault. Credentials come from the environment
+	// (AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET or
+	// AZURE_FEDERATED_TOKEN_FILE, else a managed identity); see
+	// azure_token.go.
+	AzureKeyVaultURL        string // e.g. https://myvault.vault.azure.net
+	AzureKeyVaultKeyName    string // an EC P-256 key permitted to sign
+	AzureKeyVaultKeyVersion string // empty: the current version, pinned at startup
+	// AzureKeyVaultCACertFile is an optional PEM file holding the CA
+	// certificate for the key, plus any other CA certificates to trust
+	// beside it. Empty: Omega self-signs one through Key Vault on first
+	// start and keeps it in Dir.
+	AzureKeyVaultCACertFile string
+	// AzureKeyVaultGetenv reads the AZURE_* credential variables.
+	// Nil means os.Getenv; tests inject their own.
+	AzureKeyVaultGetenv func(string) string
+
+	// KindGCPCAS
+	GCPCASPool                string // projects/<project>/locations/<location>/caPools/<pool>
+	GCPCASEndpoint            string // API base URL, default https://privateca.googleapis.com
+	GCPCASIssuingCA           string // optional CA id pinning issuance to one CA in the pool
+	GCPCASCertificateTemplate string // optional projects/<p>/locations/<l>/certificateTemplates/<t>
+	GCPCASBundleTTL           time.Duration
+	// GCPCASTokenSource overrides Application Default Credentials as the
+	// source of the OAuth 2.0 bearer token. Nil (the default) uses ADC;
+	// tests set it to talk to a fake CAS.
+	GCPCASTokenSource oauth2.TokenSource
 }
 
 // Authority is the signing + bundle interface every Omega CA backend
@@ -240,8 +277,33 @@ func New(cfg Config) (Authority, error) {
 		}
 		local.issuerURL = issuer
 		return newAWSPCAAuthority(local, cfg)
+	case KindGCPCAS:
+		if cfg.Dir == "" {
+			return nil, errors.New("identity: gcp-cas backend still needs --data-dir for the local JWT signing key")
+		}
+		if cfg.GCPCASPool == "" {
+			return nil, errors.New("identity: gcp-cas backend requires GCPCASPool")
+		}
+		local, err := loadOrCreateDisk(cfg.Dir, cfg.TrustDomain)
+		if err != nil {
+			return nil, err
+		}
+		local.issuerURL = issuer
+		return newGCPCASAuthority(local, cfg)
+	case KindAzureKeyVault:
+		if cfg.AzureKeyVaultURL == "" {
+			return nil, errors.New("identity: azure-keyvault backend requires AzureKeyVaultURL")
+		}
+		if cfg.AzureKeyVaultKeyName == "" {
+			return nil, errors.New("identity: azure-keyvault backend requires AzureKeyVaultKeyName")
+		}
+		td, err := spiffeid.TrustDomainFromString(cfg.TrustDomain)
+		if err != nil {
+			return nil, fmt.Errorf("identity: trust domain: %w", err)
+		}
+		return newAzureKeyVaultAuthority(td, issuer, cfg)
 	default:
-		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA, KindAWSPCA)
+		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q, %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA, KindAWSPCA, KindGCPCAS, KindAzureKeyVault)
 	}
 }
 

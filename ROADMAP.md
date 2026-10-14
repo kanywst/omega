@@ -20,11 +20,10 @@ Nothing is queued here; the items below are the next candidates.
 
 ## Later (6-12 months)
 
-- Cloud HSM / KMS-backed CA upstream plugins (GCP CAS, Azure Key
-  Vault). The interface seam is in place
-  ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and three
+- Further Cloud HSM / KMS-backed CA upstream plugins. The interface seam is in place
+  ([ADR 0005](docs/adr/0005-ca-plugin-architecture.md)) and five
   non-disk backends have shipped (`--ca-backend=vault-pki`,
-  `--ca-backend=step-ca` and `--ca-backend=aws-pca`); the remaining backends follow the same shape
+  `--ca-backend=step-ca`, `--ca-backend=aws-pca`, `--ca-backend=gcp-cas` and `--ca-backend=azure-keyvault`); the remaining backends follow the same shape
   (one `Kind` constant + one `Authority` impl + one `identity.New`
   switch case + tests against a fake HTTP backend), with
   [`docs/ca-plugin-guide.md`](docs/ca-plugin-guide.md) as the

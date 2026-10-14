@@ -132,6 +132,14 @@ func newServerCommand() *cobra.Command {
 		caAWSPCAEndpoint           string
 		caAWSPCATemplateARN        string
 		caAWSPCASigningAlgorithm   string
+		caGCPCASPool               string
+		caGCPCASEndpoint           string
+		caGCPCASIssuingCA          string
+		caGCPCASTemplate           string
+		caAzureKVURL               string
+		caAzureKVKey               string
+		caAzureKVKeyVersion        string
+		caAzureKVCACertFile        string
 		tlsCertFile                string
 		tlsKeyFile                 string
 		clientCAFile               string
@@ -244,6 +252,21 @@ func newServerCommand() *cobra.Command {
 					caCfg.AWSPCATemplateARN = strings.TrimSpace(caAWSPCATemplateARN)
 					caCfg.AWSPCASigningAlgorithm = strings.TrimSpace(caAWSPCASigningAlgorithm)
 				}
+				if caCfg.Kind == identity.KindGCPCAS {
+					if strings.TrimSpace(caGCPCASPool) == "" {
+						return errors.New("--ca-gcp-cas-pool is required when --ca-backend=gcp-cas")
+					}
+					caCfg.GCPCASPool = strings.TrimSpace(caGCPCASPool)
+					caCfg.GCPCASEndpoint = strings.TrimSpace(caGCPCASEndpoint)
+					caCfg.GCPCASIssuingCA = strings.TrimSpace(caGCPCASIssuingCA)
+					caCfg.GCPCASCertificateTemplate = strings.TrimSpace(caGCPCASTemplate)
+				}
+				if caCfg.Kind == identity.KindAzureKeyVault {
+					caCfg.AzureKeyVaultURL = strings.TrimSpace(caAzureKVURL)
+					caCfg.AzureKeyVaultKeyName = strings.TrimSpace(caAzureKVKey)
+					caCfg.AzureKeyVaultKeyVersion = strings.TrimSpace(caAzureKVKeyVersion)
+					caCfg.AzureKeyVaultCACertFile = strings.TrimSpace(caAzureKVCACertFile)
+				}
 				ca, err = identity.New(caCfg)
 				if err != nil {
 					return fmt.Errorf("ca: %w", err)
@@ -251,7 +274,7 @@ func newServerCommand() *cobra.Command {
 				if caCfg.Kind == identity.KindDisk || caCfg.Kind == "" {
 					// identity.New treats an empty Kind as the disk default
 					// (case "", KindDisk), so the warning must cover both.
-					fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki, step-ca or aws-pca for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
+					fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki, step-ca, aws-pca, gcp-cas or azure-keyvault for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
 				}
 			case identity.SourceSPIREUpstream:
 				// Omega consumes identities minted by an upstream SPIFFE
@@ -732,7 +755,15 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&identitySourceWLAPIJWT, "identity-source-workload-api-jwt", false,
 		"also follow the upstream JWT bundle over --identity-source-workload-api, serving those keys at /v1/jwt/bundle. Off by default because omega consumes only EC P-256 (ES256) signing keys: an upstream whose JWT key is RSA has no usable key and startup fails closed rather than serving an empty JWKS.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
-		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT; 'aws-pca' delegates to AWS Private CA. For all non-disk backends the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005).")
+		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT; 'aws-pca' delegates to AWS Private CA; 'gcp-cas' delegates to a Google Cloud Certificate Authority Service CA pool; for these the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005). 'azure-keyvault' keeps the CA key in Azure Key Vault or Managed HSM and signs both X.509-SVIDs and JWT-SVIDs through it (see ADR 0021).")
+	cmd.Flags().StringVar(&caAzureKVURL, "ca-azure-keyvault-url", "",
+		"Key Vault or Managed HSM URL, e.g. https://myvault.vault.azure.net. Required when --ca-backend=azure-keyvault. Credentials come from AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET or AZURE_FEDERATED_TOKEN_FILE, else a managed identity.")
+	cmd.Flags().StringVar(&caAzureKVKey, "ca-azure-keyvault-key", "",
+		"name of the EC P-256 key that signs as the CA. Required when --ca-backend=azure-keyvault.")
+	cmd.Flags().StringVar(&caAzureKVKeyVersion, "ca-azure-keyvault-key-version", "",
+		"key version to sign with. Empty uses the version that is current at startup and keeps it until restart.")
+	cmd.Flags().StringVar(&caAzureKVCACertFile, "ca-azure-keyvault-ca-cert", "",
+		"PEM file with the CA certificate for the key, plus any other CA certificates to trust beside it (a previous or next CA during a key rotation). Empty: omega self-signs one through Key Vault on first start and keeps it under --data-dir/ca. Set it when running more than one replica so they all serve the same CA.")
 	cmd.Flags().StringVar(&caVaultPKIAddr, "ca-vault-pki-addr", "",
 		"Vault address, e.g. https://vault.example:8200. Required when --ca-backend=vault-pki.")
 	cmd.Flags().StringVar(&caVaultPKIToken, "ca-vault-pki-token", "",
@@ -763,6 +794,14 @@ func newServerCommand() *cobra.Command {
 		"certificate template ARN. Empty uses EndEntityCertificate_APIPassthrough/V1 in the CA's partition. Any override must be an API-passthrough end-entity template, because the SPIFFE ID is passed as an API SAN.")
 	cmd.Flags().StringVar(&caAWSPCASigningAlgorithm, "ca-aws-pca-signing-algorithm", "",
 		"IssueCertificate signing algorithm, e.g. SHA256WITHECDSA or SHA256WITHRSA. Empty infers it from the CA certificate's key.")
+	cmd.Flags().StringVar(&caGCPCASPool, "ca-gcp-cas-pool", "",
+		"Certificate Authority Service CA pool, as projects/<project>/locations/<location>/caPools/<pool>. Required when --ca-backend=gcp-cas. Credentials come from Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS, GKE Workload Identity, or the metadata server); the identity needs roles/privateca.certificateRequester and roles/privateca.poolReader on the pool, and the pool's issuance policy must allow SAN passthrough.")
+	cmd.Flags().StringVar(&caGCPCASEndpoint, "ca-gcp-cas-endpoint", "",
+		"Certificate Authority Service API base URL. Empty uses https://privateca.googleapis.com; set it for a Private Service Connect or regional endpoint. Must be https except for a loopback host.")
+	cmd.Flags().StringVar(&caGCPCASIssuingCA, "ca-gcp-cas-issuing-ca", "",
+		"optional CA id inside the pool that signs every SVID, overriding the pool's load balancing across its CAs.")
+	cmd.Flags().StringVar(&caGCPCASTemplate, "ca-gcp-cas-certificate-template", "",
+		"optional certificate template applied to every SVID, as projects/<project>/locations/<location>/certificateTemplates/<template>.")
 
 	cmd.Flags().StringArrayVar(&oidcIDPs, "oidc-idp", nil,
 		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key is required and takes one or more values separated by ';'; it is the set of `aud` values an incoming ID token must match, so tokens minted for other relying parties at the same issuer are rejected. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")

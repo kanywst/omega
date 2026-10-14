@@ -2,7 +2,7 @@ package identity
 
 // SourceKind identifies where Omega's SPIFFE identities come from. It is
 // a different axis from Kind: Kind selects the CA backend that signs
-// (disk / vault-pki / step-ca) when Omega is the issuer, whereas
+// (disk / vault-pki / step-ca / gcp-cas) when Omega is the issuer, whereas
 // SourceKind selects whether Omega issues at all or consumes identities
 // minted by an upstream SPIFFE issuer.
 type SourceKind string
@@ -10,7 +10,7 @@ type SourceKind string
 const (
 	// SourceBuiltIn means Omega issues its own SVIDs through an
 	// Authority (the CA backend selected by Kind). The self-signed disk
-	// default is for dev/eval; vault-pki / step-ca are production CAs.
+	// default is for dev/eval; vault-pki / step-ca / gcp-cas are production CAs.
 	SourceBuiltIn SourceKind = "built-in"
 
 	// SourceSPIREUpstream means Omega consumes SPIFFE identities issued
