@@ -40,6 +40,8 @@ type pcaFixture struct {
 	server *httptest.Server
 
 	rootPEM  []byte
+	rootCert *x509.Certificate
+	rootKey  crypto.Signer
 	subCert  *x509.Certificate
 	subKey   crypto.Signer
 	subPEM   []byte
@@ -102,6 +104,8 @@ func newPCAFixture(t *testing.T, subKey crypto.Signer) *pcaFixture {
 
 	f := &pcaFixture{
 		rootPEM:       certPEM(root),
+		rootCert:      root,
+		rootKey:       rootKey,
 		subCert:       sub,
 		subKey:        subKey,
 		subPEM:        certPEM(sub),
@@ -745,6 +749,7 @@ func TestAWSPCAConfigRejected(t *testing.T) {
 		{"endpoint without scheme", func(c *identity.Config) { c.AWSPCAEndpoint = "pca.example" }, "AWSPCAEndpoint"},
 		{"endpoint other scheme", func(c *identity.Config) { c.AWSPCAEndpoint = "ftp://pca.example" }, "must be an https URL"},
 		{"plain http to a remote host", func(c *identity.Config) { c.AWSPCAEndpoint = "http://pca.example" }, "non-loopback"},
+		{"unknown bundle mode", func(c *identity.Config) { c.AWSPCABundle = "root" }, "AWSPCABundle"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -835,5 +840,98 @@ func TestAWSPCAIssueSVID_FollowsACAChangeBeforeTheCacheExpires(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(svid.BundlePEM), string(certPEM(f.foreignCACert))) {
 		t.Error("bundle was not refreshed to the new CA")
+	}
+}
+
+// siblingLeaf is a certificate for id from another subordinate of the
+// fixture's root, as anyone else allowed to issue under that root could
+// mint. It returns the leaf and the sibling CA a peer would present as
+// its intermediate.
+func (f *pcaFixture) siblingLeaf(t *testing.T, id spiffeid.ID) (leaf, sibling *x509.Certificate) {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	sibling = mustCA(t, "Sibling Issuing CA", key, f.rootCert, f.rootKey)
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(30 * time.Minute),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		URIs:                  []*url.URL{id.URL()},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, sibling, &leafKey.PublicKey, key)
+	if err != nil {
+		t.Fatalf("sibling leaf: %v", err)
+	}
+	leaf, err = x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse sibling leaf: %v", err)
+	}
+	return leaf, sibling
+}
+
+// verifyAgainstBundle checks leaf the way a peer holding bundle as its
+// trust anchors does, with the presented chain as intermediates.
+func verifyAgainstBundle(bundle []byte, leaf *x509.Certificate, presented ...*x509.Certificate) error {
+	roots, inter := x509.NewCertPool(), x509.NewCertPool()
+	roots.AppendCertsFromPEM(bundle)
+	for _, c := range presented {
+		inter.AddCert(c)
+	}
+	_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+	return err
+}
+
+func TestAWSPCABundleModes(t *testing.T) {
+	id := spiffeid.RequireFromString("spiffe://omega.local/example/web")
+	cases := []struct {
+		mode        string
+		wantBundle  func(f *pcaFixture) string
+		siblingOK   bool
+		wantCertNum int
+	}{
+		{"", func(f *pcaFixture) string { return string(f.subPEM) + string(f.rootPEM) }, true, 2},
+		{identity.AWSPCABundleChain, func(f *pcaFixture) string { return string(f.subPEM) + string(f.rootPEM) }, true, 2},
+		{identity.AWSPCABundleIssuing, func(f *pcaFixture) string { return string(f.subPEM) }, false, 1},
+	}
+	for _, tc := range cases {
+		t.Run("mode="+tc.mode, func(t *testing.T) {
+			f := newPCAFixture(t, nil)
+			cfg := pcaConfig(t, f)
+			cfg.AWSPCABundle = tc.mode
+			a, err := identity.New(cfg)
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+			bundle := a.BundlePEM()
+			if string(bundle) != tc.wantBundle(f) {
+				t.Fatalf("bundle holds %d certificates, want %d", strings.Count(string(bundle), "BEGIN CERTIFICATE"), tc.wantCertNum)
+			}
+
+			csr, _ := vaultIssueCSR(t)
+			svid, err := a.IssueSVID(id, csr)
+			if err != nil {
+				t.Fatalf("issue: %v", err)
+			}
+			if string(svid.BundlePEM) != string(bundle) {
+				t.Error("SVID bundle differs from the served bundle")
+			}
+			// Omega's own leaf verifies in either mode: in issuing mode
+			// the issuing CA is the anchor, though it is not self-signed.
+			if err := verifyAgainstBundle(svid.BundlePEM, parseLeaf(t, svid.CertPEM)); err != nil {
+				t.Fatalf("issued leaf does not verify against the bundle: %v", err)
+			}
+
+			leaf, sibling := f.siblingLeaf(t, id)
+			err = verifyAgainstBundle(bundle, leaf, sibling)
+			if tc.siblingOK && err != nil {
+				t.Errorf("chain mode: sibling leaf should verify through the shared root, got %v", err)
+			}
+			if !tc.siblingOK && err == nil {
+				t.Error("issuing mode: a leaf from a sibling subordinate verified against the bundle")
+			}
+		})
 	}
 }

@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Issuing-CA-only bundle for AWS Private CA.** `--ca-aws-pca-bundle=issuing` (Helm: `server.ca.awsPCA.bundle`) serves only the issuing CA as the trust anchor, instead of the issuing CA plus the chain to the root, so certificates from other subordinates of the same root no longer verify for the trust domain. Peers and federation partners must accept a CA that is not self-signed as an anchor. The default, `chain`, keeps the current behavior. See [docs/ca-aws-pca.md](docs/ca-aws-pca.md#trust-bundle).
+
 ## [0.10.0] - 2026-10-15
 
 Adds three cloud CA backends (AWS Private CA, Google Cloud CAS and Azure Key Vault), an agent-side Kubernetes workload attestor for the self-issued path, and holds every external issuer's certificates to the X.509-SVID profile.

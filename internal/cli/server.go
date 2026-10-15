@@ -132,6 +132,7 @@ func newServerCommand() *cobra.Command {
 		caAWSPCAEndpoint           string
 		caAWSPCATemplateARN        string
 		caAWSPCASigningAlgorithm   string
+		caAWSPCABundle             string
 		caGCPCASPool               string
 		caGCPCASEndpoint           string
 		caGCPCASIssuingCA          string
@@ -251,6 +252,7 @@ func newServerCommand() *cobra.Command {
 					caCfg.AWSPCAEndpoint = strings.TrimSpace(caAWSPCAEndpoint)
 					caCfg.AWSPCATemplateARN = strings.TrimSpace(caAWSPCATemplateARN)
 					caCfg.AWSPCASigningAlgorithm = strings.TrimSpace(caAWSPCASigningAlgorithm)
+					caCfg.AWSPCABundle = strings.TrimSpace(caAWSPCABundle)
 				}
 				if caCfg.Kind == identity.KindGCPCAS {
 					if strings.TrimSpace(caGCPCASPool) == "" {
@@ -794,6 +796,8 @@ func newServerCommand() *cobra.Command {
 		"certificate template ARN. Empty uses EndEntityCertificate_APIPassthrough/V1 in the CA's partition. Any override must be an API-passthrough end-entity template, because the SPIFFE ID is passed as an API SAN.")
 	cmd.Flags().StringVar(&caAWSPCASigningAlgorithm, "ca-aws-pca-signing-algorithm", "",
 		"IssueCertificate signing algorithm, e.g. SHA256WITHECDSA or SHA256WITHRSA. Empty infers it from the CA certificate's key.")
+	cmd.Flags().StringVar(&caAWSPCABundle, "ca-aws-pca-bundle", identity.AWSPCABundleChain,
+		"which CA certificates the served trust bundle holds: 'chain' (the issuing CA and the chain above it to the root) or 'issuing' (the issuing CA alone). 'issuing' keeps other subordinates of the same root from being trusted for the trust domain, but peers and federation partners must accept a CA that is not self-signed as a trust anchor.")
 	cmd.Flags().StringVar(&caGCPCASPool, "ca-gcp-cas-pool", "",
 		"Certificate Authority Service CA pool, as projects/<project>/locations/<location>/caPools/<pool>. Required when --ca-backend=gcp-cas. Credentials come from Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS, GKE Workload Identity, or the metadata server); the identity needs roles/privateca.certificateRequester and roles/privateca.poolReader on the pool, and the pool's issuance policy must allow SAN passthrough.")
 	cmd.Flags().StringVar(&caGCPCASEndpoint, "ca-gcp-cas-endpoint", "",

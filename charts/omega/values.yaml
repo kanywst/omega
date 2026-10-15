@@ -58,6 +58,10 @@ server:
       endpoint: ""         # e.g. a VPC interface endpoint URL
       templateArn: ""      # empty uses EndEntityCertificate_APIPassthrough/V1
       signingAlgorithm: "" # empty infers it from the CA key
+      # chain serves the issuing CA and its chain to the root; issuing
+      # serves the issuing CA alone, so other subordinates of the root
+      # are not trusted, but peers must accept it as a non-self-signed anchor.
+      bundle: chain
     # backend: gcp-cas signs through a Google Cloud Certificate Authority
     # Service CA pool. Credentials come from Application Default
     # Credentials: on GKE, bind the chart's ServiceAccount to a Google

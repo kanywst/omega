@@ -69,6 +69,19 @@ const (
 	awsPCAValiditySlack = 5 * time.Minute
 )
 
+// AWSPCABundle values: which of the certificates AWS returns for the CA
+// go into the served trust bundle.
+const (
+	// AWSPCABundleChain serves the issuing CA and the chain above it up
+	// to the root. Peers get a self-signed anchor, but every other
+	// subordinate of that root is trusted for the trust domain too.
+	AWSPCABundleChain = "chain"
+	// AWSPCABundleIssuing serves only the issuing CA, so a sibling
+	// subordinate's certificates do not verify; peers must accept a
+	// certificate that is not self-signed as a trust anchor.
+	AWSPCABundleIssuing = "issuing"
+)
+
 // awsPCAAuthority signs X.509-SVIDs with an AWS Private CA. The
 // embedded *localAuthority handles the JWT-SVID side, trust domain
 // accessor, and OIDC issuer URL.
@@ -80,6 +93,8 @@ type awsPCAAuthority struct {
 	signingAlg  acmpcatypes.SigningAlgorithm
 	client      *acmpca.Client
 	timeout     time.Duration
+	// issuingOnly serves the issuing CA alone (AWSPCABundleIssuing).
+	issuingOnly bool
 
 	bundleMu  sync.RWMutex
 	bundle    []byte
@@ -122,6 +137,14 @@ func newAWSPCAAuthority(local *localAuthority, cfg Config) (*awsPCAAuthority, er
 	if bundleTTL <= 0 {
 		bundleTTL = defaultAWSPCABundleTTL
 	}
+	var issuingOnly bool
+	switch strings.TrimSpace(cfg.AWSPCABundle) {
+	case "", AWSPCABundleChain:
+	case AWSPCABundleIssuing:
+		issuingOnly = true
+	default:
+		return nil, fmt.Errorf("identity: aws-pca: AWSPCABundle %q is not %q or %q", cfg.AWSPCABundle, AWSPCABundleChain, AWSPCABundleIssuing)
+	}
 	timeout := cfg.AWSPCATimeout
 	if timeout <= 0 {
 		timeout = defaultAWSPCATimeout
@@ -157,6 +180,7 @@ func newAWSPCAAuthority(local *localAuthority, cfg Config) (*awsPCAAuthority, er
 		signingAlg:     acmpcatypes.SigningAlgorithm(strings.TrimSpace(cfg.AWSPCASigningAlgorithm)),
 		client:         client,
 		timeout:        timeout,
+		issuingOnly:    issuingOnly,
 		bundleTTL:      bundleTTL,
 		overlap:        newCAOverlap(upstreamGrace(cfg.UpstreamCAGrace)),
 	}
@@ -226,8 +250,8 @@ func awsPCASigningAlgorithmFor(ca *x509.Certificate) (acmpcatypes.SigningAlgorit
 	return "", fmt.Errorf("cannot infer a signing algorithm from the CA key (%T); set AWSPCASigningAlgorithm", ca.PublicKey)
 }
 
-// BundlePEM returns the CA certificate and its chain, cached for
-// bundleTTL. On a failed refresh the stale bundle is served: it is
+// BundlePEM returns the CA certificate and, unless issuingOnly, its
+// chain, cached for bundleTTL. On a failed refresh the stale bundle is served: it is
 // still the trust anchor consumers were chaining to, and returning nil
 // would break every workload's mTLS handshake on an AWS API blip.
 func (a *awsPCAAuthority) BundlePEM() []byte {
@@ -287,7 +311,8 @@ func (a *awsPCAAuthority) BundlePEM() []byte {
 
 // refreshBundle calls GetCertificateAuthorityCertificate and replaces
 // the cached bundle with the CA certificate followed by its chain (the
-// chain is empty for a root CA). The call is made outside bundleMu so
+// chain is empty for a root CA), or with the CA certificate alone when
+// issuingOnly. The chain is checked either way. The call is made outside bundleMu so
 // cache hits are not blocked by a slow AWS endpoint.
 func (a *awsPCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 	out, err := a.client.GetCertificateAuthorityCertificate(ctx, &acmpca.GetCertificateAuthorityCertificateInput{
@@ -316,15 +341,18 @@ func (a *awsPCAAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 			return nil, fmt.Errorf("aws-pca: bundle certificate %q is not marked CA:TRUE", c.Subject)
 		}
 	}
+	for i := 0; i+1 < len(certs); i++ {
+		if err := certs[i].CheckSignatureFrom(certs[i+1]); err != nil {
+			return nil, fmt.Errorf("aws-pca: chain does not link %q to %q: %w", certs[i].Subject, certs[i+1].Subject, err)
+		}
+	}
+	if a.issuingOnly {
+		certs = cas
+	}
 	// Re-encode rather than echo AWS's strings, so nothing but the
 	// parsed certificates reaches the bundle.
 	var buf bytes.Buffer
-	for i, c := range certs {
-		if i+1 < len(certs) {
-			if err := c.CheckSignatureFrom(certs[i+1]); err != nil {
-				return nil, fmt.Errorf("aws-pca: chain does not link %q to %q: %w", c.Subject, certs[i+1].Subject, err)
-			}
-		}
+	for _, c := range certs {
 		_ = pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
 	}
 	caCert := cas[0]

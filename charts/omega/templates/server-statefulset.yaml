@@ -105,6 +105,12 @@ spec:
             {{- if $pca.signingAlgorithm }}
             - --ca-aws-pca-signing-algorithm={{ $pca.signingAlgorithm }}
             {{- end }}
+            {{- if $pca.bundle }}
+            {{- if not (has $pca.bundle (list "chain" "issuing")) }}
+            {{- fail (printf "server.ca.awsPCA.bundle %q must be chain or issuing" $pca.bundle) }}
+            {{- end }}
+            - --ca-aws-pca-bundle={{ $pca.bundle }}
+            {{- end }}
             {{- end }}
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
