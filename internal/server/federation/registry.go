@@ -364,7 +364,8 @@ func (r *Registry) SetOwnBundle(bundle []byte) {
 
 // SetOwnBundleSource makes the registry read the local trust bundle from
 // src on every request, for an issuer whose bundle changes without a
-// signal (Vault PKI and step-ca, whose kept CAs come and go on their own).
+// signal (Vault PKI, step-ca and AWS Private CA, whose kept CAs come and
+// go on their own).
 func (r *Registry) SetOwnBundleSource(src func() []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

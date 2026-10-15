@@ -59,6 +59,10 @@ const (
 	// X.509 root key never sits on omega's disk; JWT-SVID signing
 	// stays local for the same reasons.
 	KindStepCA Kind = "step-ca"
+	// KindAWSPCA signs X.509-SVIDs via AWS Private CA (ACM PCA).
+	// The CA key stays in AWS; JWT-SVID signing stays local for the
+	// same reasons as the other non-disk backends.
+	KindAWSPCA Kind = "aws-pca"
 	// KindAzureKeyVault keeps the CA private key in Azure Key Vault or
 	// Managed HSM. Omega builds certificates and JWTs itself and has
 	// Key Vault sign their digests, so both X.509-SVIDs and JWT-SVIDs
@@ -111,11 +115,30 @@ type Config struct {
 	// more trust anchors used to verify step-ca's TLS certificate.
 	// Empty falls back to the system trust store.
 	StepCACACertFile string
+	// KindAWSPCA. Credentials come from the standard AWS chain (env,
+	// shared config, web identity, ECS, IMDS); none are configured here.
+	AWSPCACAARN string // certificate-authority ARN
+	// AWSPCARegion overrides the region taken from AWSPCACAARN.
+	AWSPCARegion string
+	// AWSPCAEndpoint overrides the ACM PCA endpoint (VPC endpoint,
+	// FIPS endpoint, or a test fake). Empty uses the SDK default.
+	AWSPCAEndpoint string
+	// AWSPCATemplateARN overrides the default
+	// EndEntityCertificate_APIPassthrough/V1 template. It must be an
+	// API-passthrough template so the SPIFFE ID reaches the leaf.
+	AWSPCATemplateARN string
+	// AWSPCASigningAlgorithm overrides the algorithm inferred from
+	// the CA key (e.g. SHA256WITHECDSA, SHA256WITHRSA).
+	AWSPCASigningAlgorithm string
+	AWSPCABundleTTL        time.Duration
+	// AWSPCATimeout bounds each AWS call, including the polling for
+	// an issued certificate. Zero means 30s.
+	AWSPCATimeout time.Duration
 
-	// UpstreamCAGrace is how long a CA that Vault PKI or step-ca stops
-	// publishing stays in the bundle Omega serves. Zero (the default) or
-	// negative turns the overlap off, so a dropped CA is untrusted at the
-	// next refresh.
+	// UpstreamCAGrace is how long a CA that Vault PKI, step-ca or AWS
+	// Private CA stops publishing stays in the bundle Omega serves. Zero
+	// (the default) or negative turns the overlap off, so a dropped CA is
+	// untrusted at the next refresh.
 	UpstreamCAGrace time.Duration
 
 	// KindAzureKeyVault. Credentials come from the environment
@@ -241,6 +264,19 @@ func New(cfg Config) (Authority, error) {
 		}
 		local.issuerURL = issuer
 		return newStepCAAuthority(local, cfg)
+	case KindAWSPCA:
+		if cfg.Dir == "" {
+			return nil, errors.New("identity: aws-pca backend still needs --data-dir for the local JWT signing key")
+		}
+		if strings.TrimSpace(cfg.AWSPCACAARN) == "" {
+			return nil, errors.New("identity: aws-pca backend requires AWSPCACAARN")
+		}
+		local, err := loadOrCreateDisk(cfg.Dir, cfg.TrustDomain)
+		if err != nil {
+			return nil, err
+		}
+		local.issuerURL = issuer
+		return newAWSPCAAuthority(local, cfg)
 	case KindGCPCAS:
 		if cfg.Dir == "" {
 			return nil, errors.New("identity: gcp-cas backend still needs --data-dir for the local JWT signing key")
@@ -267,7 +303,7 @@ func New(cfg Config) (Authority, error) {
 		}
 		return newAzureKeyVaultAuthority(td, issuer, cfg)
 	default:
-		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA, KindGCPCAS, KindAzureKeyVault)
+		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q, %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA, KindAWSPCA, KindGCPCAS, KindAzureKeyVault)
 	}
 }
 

@@ -25,8 +25,9 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `server.domainRootAdmins`                 | `[]`                    | `--domain-root-admin` SPIFFE IDs                                                                                      |
 | `server.decisionRecorders`                | `[]`                    | Node agents that may read the policy bundle and record local decisions                                                |
 | `server.scimProviders`                    | `[]`                    | SCIM providers: `name`, `domain`, `tokenSecret` (Secret with a `token` key), optional `template`                      |
-| `server.ca.backend`                       | `disk`                  | `--ca-backend`; `gcp-cas` reads `server.ca.gcpCas`                                                                    |
+| `server.ca.backend` | `disk` | `--ca-backend`: `disk` (evaluation), `aws-pca`, `gcp-cas` or `azure-keyvault`, each configured by its block below; other backends through `server.extraArgs` |
 | `server.ca.gcpCas.pool`                   | `""`                    | CAS CA pool `projects/<p>/locations/<l>/caPools/<pool>`; required for `gcp-cas`                                       |
+| `server.ca.gcpCas.endpoint` / `.issuingCA` / `.certificateTemplate` | `""` | API endpoint override (https), a CA id that pins issuance inside the pool, and a certificate template |
 | `server.ca.gcpCas.credentialsSecret`      | `""`                    | Secret with `credentials.json`; leave empty to use GKE Workload Identity                                              |
 | `policy.inline`                           | `{}`                    | Inline `*.cedar` files via ConfigMap                                                                                  |
 | `agent.uidMap`                            | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                                      |
@@ -38,10 +39,14 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `agent.localPDP.verifyBundle`             | `true`                  | Verify bundle signatures with `bundle.pub` from `agent.localPDP.tlsSecret`                                            |
 | `agent.localPDP.spool`                    | `false`                 | Spool decisions to an emptyDir                                                                                        |
 | `server.persistence.size`                 | `1Gi`                   | PVC for SQLite data dir                                                                                               |
+| `server.ca.awsPCA.arn`                    | `""`                    | AWS Private CA ARN (required for `aws-pca`); see [AWS Private CA](#aws-private-ca)                                    |
+| `server.ca.awsPCA.region`                 | `""`                    | Region of the API endpoint; empty takes it from the ARN                                                               |
+| `server.ca.awsPCA.endpoint`               | `""`                    | Endpoint override, e.g. a VPC interface endpoint (https)                                                              |
+| `server.ca.awsPCA.templateArn`            | `""`                    | Certificate template; empty uses `EndEntityCertificate_APIPassthrough/V1`                                             |
+| `server.ca.awsPCA.signingAlgorithm`       | `""`                    | Signing algorithm; empty infers it from the CA key                                                                    |
 | `csi.enabled`                             | `false`                 | Deploy the SPIFFE CSI driver so pods mount the Workload API with `csi.spiffe.io` (privileged, cluster-wide CSIDriver) |
 | `agent.nodeSelector`, `agent.tolerations` | `{}`, `[]`              | Where the agent runs; the CSI driver follows                                                                          |
 | `server.podLabels` | `{}` | Extra server pod labels, e.g. `azure.workload.identity/use: "true"` |
-| `server.ca.backend` | `disk` | `--ca-backend`; `disk` is for evaluation |
 | `server.ca.azureKeyVault.url` / `.key` / `.keyVersion` | `""` | Key Vault or Managed HSM URL and the EC P-256 key that signs as the CA (`backend: azure-keyvault`) |
 | `server.ca.azureKeyVault.caCertSecret` | `""` | Secret with `ca.crt`, the CA certificate for the key; set it with more than one replica |
 | `server.ca.azureKeyVault.credentialsSecret` | `""` | Secret loaded as `AZURE_*` environment variables for a service principal; leave empty for workload or managed identity, since a client secret takes precedence over both |
@@ -71,6 +76,18 @@ server:
 ```
 
 Without `caCertSecret` the server self-signs a CA certificate through Key Vault on first start and keeps it in its data volume (`ca/azure-keyvault-ca.crt`). With more than one replica, copy that file into a Secret and set `caCertSecret`, and pin `keyVersion`, so every replica serves the same CA and signs with the same key version; the chart refuses to render otherwise. See [docs/ca-azure-keyvault.md](../../docs/ca-azure-keyvault.md).
+
+## AWS Private CA
+
+With `server.ca.backend=aws-pca`, the server signs X.509-SVIDs with an AWS Private CA and the CA key never leaves AWS. JWT-SVIDs are still signed by a key under `server.dataDir`, so keep persistence enabled. The server authenticates with the pod's AWS identity, so no credentials go into values. With IRSA, annotate the service account with a role that may call `acm-pca:IssueCertificate`, `acm-pca:GetCertificate` and `acm-pca:GetCertificateAuthorityCertificate` on the CA:
+
+```bash
+helm install omega ./charts/omega \
+  --set server.trustDomain=example.com \
+  --set server.ca.backend=aws-pca \
+  --set server.ca.awsPCA.arn=arn:aws:acm-pca:us-east-1:111122223333:certificate-authority/EXAMPLE \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::111122223333:role/omega-pca
+```
 
 ## Verify
 

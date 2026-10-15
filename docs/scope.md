@@ -12,7 +12,7 @@
 ## In-scope today
 
 - Single binary `omega` with subcommands: `server`, `agent`, `operator`, `domain`, `group`, `policy`, `svid`.
-- Self-signed CA on first boot, or Vault PKI / step-ca / Google Cloud CAS, or identities consumed from an upstream SPIRE / Istio trust domain. X.509-SVID and JWT-SVID; 30-minute X.509 validity.
+- Self-signed CA on first boot, or Vault PKI / step-ca / AWS Private CA / Google Cloud CAS / Azure Key Vault, or identities consumed from an upstream SPIRE / Istio trust domain. X.509-SVID and JWT-SVID; 30-minute X.509 validity.
   SPIFFE ID format `spiffe://omega.local/<domain-path>/<service>`.
 - SPIFFE Workload API on `/tmp/omega-agent.sock`, UID-based attestation, and an opt-in Kubernetes workload attestor in the agent for development and evaluation; Kubernetes ServiceAccount attestation on the server.
 - Cedar engine embedded. OpenID AuthZEN 1.0 PDP API at `POST /access/v1/evaluation`, also served by the agent from a synced policy bundle.
@@ -27,7 +27,7 @@
 
 ## Out-of-scope today
 
-PQC (ML-DSA), HSM / KMS Authority plugins (AWS Private CA). See [ROADMAP.md](../ROADMAP.md) for what is queued next.
+PQC (ML-DSA). See [ROADMAP.md](../ROADMAP.md) for what is queued next.
 
 ## Definition of Done for the demo
 

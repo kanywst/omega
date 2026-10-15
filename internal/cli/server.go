@@ -127,6 +127,11 @@ func newServerCommand() *cobra.Command {
 		caStepCAProvisioner        string
 		caStepCAKeyFile            string
 		caStepCACACertFile         string
+		caAWSPCAARN                string
+		caAWSPCARegion             string
+		caAWSPCAEndpoint           string
+		caAWSPCATemplateARN        string
+		caAWSPCASigningAlgorithm   string
 		caGCPCASPool               string
 		caGCPCASEndpoint           string
 		caGCPCASIssuingCA          string
@@ -240,6 +245,13 @@ func newServerCommand() *cobra.Command {
 					caCfg.StepCAProvisionerKeyPEM = keyPEM
 					caCfg.StepCACACertFile = strings.TrimSpace(caStepCACACertFile)
 				}
+				if caCfg.Kind == identity.KindAWSPCA {
+					caCfg.AWSPCACAARN = strings.TrimSpace(caAWSPCAARN)
+					caCfg.AWSPCARegion = strings.TrimSpace(caAWSPCARegion)
+					caCfg.AWSPCAEndpoint = strings.TrimSpace(caAWSPCAEndpoint)
+					caCfg.AWSPCATemplateARN = strings.TrimSpace(caAWSPCATemplateARN)
+					caCfg.AWSPCASigningAlgorithm = strings.TrimSpace(caAWSPCASigningAlgorithm)
+				}
 				if caCfg.Kind == identity.KindGCPCAS {
 					if strings.TrimSpace(caGCPCASPool) == "" {
 						return errors.New("--ca-gcp-cas-pool is required when --ca-backend=gcp-cas")
@@ -262,7 +274,7 @@ func newServerCommand() *cobra.Command {
 				if caCfg.Kind == identity.KindDisk || caCfg.Kind == "" {
 					// identity.New treats an empty Kind as the disk default
 					// (case "", KindDisk), so the warning must cover both.
-					fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki, step-ca or gcp-cas for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
+					fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki, step-ca, aws-pca, gcp-cas or azure-keyvault for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
 				}
 			case identity.SourceSPIREUpstream:
 				// Omega consumes identities minted by an upstream SPIFFE
@@ -367,7 +379,7 @@ func newServerCommand() *cobra.Command {
 			// the previous material installed.
 			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
 			caReloader, _ := ca.(identity.CAReloader)
-			// Vault PKI and step-ca: every change to the CAs kept from a
+			// Vault PKI, step-ca and AWS Private CA: every change to the CAs kept from a
 			// rotation goes into the audit chain, and the operator's
 			// distrust list drops a kept CA without a restart.
 			keeper, _ := ca.(identity.UpstreamCAKeeper)
@@ -387,7 +399,7 @@ func newServerCommand() *cobra.Command {
 			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
 			if upstreamCADistrustFile != "" {
 				if keeper == nil {
-					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki or step-ca")
+					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki, step-ca or aws-pca")
 				}
 				if err := distrust.apply(ctx); err != nil {
 					return fmt.Errorf("upstream-ca-distrust: %w", err)
@@ -743,7 +755,7 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&identitySourceWLAPIJWT, "identity-source-workload-api-jwt", false,
 		"also follow the upstream JWT bundle over --identity-source-workload-api, serving those keys at /v1/jwt/bundle. Off by default because omega consumes only EC P-256 (ES256) signing keys: an upstream whose JWT key is RSA has no usable key and startup fails closed rather than serving an empty JWKS.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
-		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT; 'gcp-cas' delegates to a Google Cloud Certificate Authority Service CA pool; for these the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005). 'azure-keyvault' keeps the CA key in Azure Key Vault or Managed HSM and signs both X.509-SVIDs and JWT-SVIDs through it (see ADR 0021).")
+		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT; 'aws-pca' delegates to AWS Private CA; 'gcp-cas' delegates to a Google Cloud Certificate Authority Service CA pool; for these the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005). 'azure-keyvault' keeps the CA key in Azure Key Vault or Managed HSM and signs both X.509-SVIDs and JWT-SVIDs through it (see ADR 0021).")
 	cmd.Flags().StringVar(&caAzureKVURL, "ca-azure-keyvault-url", "",
 		"Key Vault or Managed HSM URL, e.g. https://myvault.vault.azure.net. Required when --ca-backend=azure-keyvault. Credentials come from AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET or AZURE_FEDERATED_TOKEN_FILE, else a managed identity.")
 	cmd.Flags().StringVar(&caAzureKVKey, "ca-azure-keyvault-key", "",
@@ -772,6 +784,16 @@ func newServerCommand() *cobra.Command {
 		"path to the PEM- or JSON-encoded private JWK that signs the one-time-token presented to step-ca on each /1.0/sign call. Required when --ca-backend=step-ca.")
 	cmd.Flags().StringVar(&caStepCACACertFile, "ca-step-ca-ca-cert", "",
 		"path to a PEM file with the step-ca server's TLS trust anchor(s). Empty falls back to the system trust store; production step-ca is almost always behind a private CA and must set this.")
+	cmd.Flags().StringVar(&caAWSPCAARN, "ca-aws-pca-arn", "",
+		"ARN of the AWS Private CA certificate authority that signs X.509-SVIDs. Required when --ca-backend=aws-pca. Credentials come from the standard AWS chain (environment, shared config, web identity / IRSA, ECS, instance metadata); omega needs acm-pca:IssueCertificate, acm-pca:GetCertificate and acm-pca:GetCertificateAuthorityCertificate on this CA.")
+	cmd.Flags().StringVar(&caAWSPCARegion, "ca-aws-pca-region", "",
+		"AWS region of the private CA. Empty takes the region from --ca-aws-pca-arn.")
+	cmd.Flags().StringVar(&caAWSPCAEndpoint, "ca-aws-pca-endpoint", "",
+		"override the ACM PCA API endpoint, e.g. a VPC interface endpoint URL; must be https (http only for a loopback host). Empty uses the SDK's regional default (AWS_USE_FIPS_ENDPOINT selects the FIPS endpoint).")
+	cmd.Flags().StringVar(&caAWSPCATemplateARN, "ca-aws-pca-template-arn", "",
+		"certificate template ARN. Empty uses EndEntityCertificate_APIPassthrough/V1 in the CA's partition. Any override must be an API-passthrough end-entity template, because the SPIFFE ID is passed as an API SAN.")
+	cmd.Flags().StringVar(&caAWSPCASigningAlgorithm, "ca-aws-pca-signing-algorithm", "",
+		"IssueCertificate signing algorithm, e.g. SHA256WITHECDSA or SHA256WITHRSA. Empty infers it from the CA certificate's key.")
 	cmd.Flags().StringVar(&caGCPCASPool, "ca-gcp-cas-pool", "",
 		"Certificate Authority Service CA pool, as projects/<project>/locations/<location>/caPools/<pool>. Required when --ca-backend=gcp-cas. Credentials come from Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS, GKE Workload Identity, or the metadata server); the identity needs roles/privateca.certificateRequester and roles/privateca.poolReader on the pool, and the pool's issuance policy must allow SAN passthrough.")
 	cmd.Flags().StringVar(&caGCPCASEndpoint, "ca-gcp-cas-endpoint", "",
@@ -836,9 +858,9 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&domainRootAdmins, "domain-root-admin", nil,
 		"SPIFFE ID allowed to create top-level domains and administer every domain (repeatable). Enforced only with --require-auth; below the top level, a domain's own admins (set at creation or through POST /v1/domains/{name}/admins) administer it and every domain under it.")
 	cmd.Flags().DurationVar(&upstreamCAGrace, "upstream-ca-grace", 0,
-		"with --ca-backend=vault-pki or step-ca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers through a rotation (never past the CA's expiry), e.g. 24h. Off by default: Omega cannot tell a rotation from a revocation, so a CA kept this way stays trusted even if the issuer withdrew it because it was compromised, until --upstream-ca-distrust drops it.")
+		"with --ca-backend=vault-pki, step-ca or aws-pca, how long a CA the issuer stops publishing stays in Omega's served bundle, so SVIDs it signed keep verifying for peers through a rotation (never past the CA's expiry), e.g. 24h. Off by default: Omega cannot tell a rotation from a revocation, so a CA kept this way stays trusted even if the issuer withdrew it because it was compromised, until --upstream-ca-distrust drops it.")
 	cmd.Flags().StringVar(&upstreamCADistrustFile, "upstream-ca-distrust", "",
-		"with --ca-backend=vault-pki or step-ca, a file of SHA-256 fingerprints (hex, one per line, '#' comments) of CAs never to keep after the issuer stops publishing them. Re-read on SIGHUP, so a CA kept from a rotation can be dropped at once, without a restart, after a compromise.")
+		"with --ca-backend=vault-pki, step-ca or aws-pca, a file of SHA-256 fingerprints (hex, one per line, '#' comments) of CAs never to keep after the issuer stops publishing them. Re-read on SIGHUP, so a CA kept from a rotation can be dropped at once, without a restart, after a compromise.")
 	cmd.Flags().StringVar(&bundleSigningKeyFile, "policy-bundle-signing-key", "",
 		"ECDSA P-256 private key (PEM) that signs every policy bundle served to node agents, so they can verify it with --policy-bundle-key independently of TLS. Every replica must use the same key.")
 	cmd.Flags().StringArrayVar(&decisionRecorders, "decision-recorder", nil,

@@ -44,10 +44,20 @@ server:
   podLabels: {}
   # The CA that signs X.509-SVIDs and JWT-SVIDs (--ca-backend). "disk"
   # keeps a self-signed CA under dataDir, for evaluation. The chart
-  # configures disk, gcp-cas and azure-keyvault; pass other backends'
-  # flags through extraArgs and leave this at disk.
+  # configures disk, aws-pca, gcp-cas and azure-keyvault; pass other
+  # backends' flags (vault-pki, step-ca) through extraArgs and leave this
+  # at disk.
   ca:
     backend: disk
+    # backend: aws-pca signs with AWS Private CA. Credentials come from the
+    # pod's AWS identity (IRSA via serviceAccount.annotations, or EKS Pod
+    # Identity), never from values.
+    awsPCA:
+      arn: ""              # required for aws-pca: certificate-authority ARN
+      region: ""           # empty takes the region from arn
+      endpoint: ""         # e.g. a VPC interface endpoint URL
+      templateArn: ""      # empty uses EndEntityCertificate_APIPassthrough/V1
+      signingAlgorithm: "" # empty infers it from the CA key
     # backend: gcp-cas signs through a Google Cloud Certificate Authority
     # Service CA pool. Credentials come from Application Default
     # Credentials: on GKE, bind the chart's ServiceAccount to a Google

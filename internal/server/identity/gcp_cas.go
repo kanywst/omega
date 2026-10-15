@@ -125,8 +125,12 @@ func newGCPCASAuthority(local *localAuthority, cfg Config) (*gcpCASAuthority, er
 		pool:           cfg.GCPCASPool,
 		issuingCA:      cfg.GCPCASIssuingCA,
 		template:       cfg.GCPCASCertificateTemplate,
-		httpClient:     &http.Client{Timeout: defaultGCPCASTimeout, Transport: transport},
-		bundleTTL:      bundleTTL,
+		// No redirects: the transport would re-attach the bearer token
+		// to every hop, including one to another host.
+		httpClient: &http.Client{Timeout: defaultGCPCASTimeout, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
+		bundleTTL: bundleTTL,
 	}
 	// Boot-time probe so a bad pool name, missing IAM grant, or
 	// unreachable endpoint fails at startup instead of at first IssueSVID.
@@ -245,8 +249,13 @@ func (a *gcpCASAuthority) refreshBundle(ctx context.Context) ([]byte, error) {
 			if block == nil || block.Type != "CERTIFICATE" {
 				return nil, errors.New("gcp-cas: fetchCaCerts returned a certificate that is not PEM")
 			}
-			if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+			ca, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
 				return nil, fmt.Errorf("gcp-cas: fetchCaCerts: parse certificate: %w", err)
+			}
+			// Every entry becomes a trust anchor: only CA certificates.
+			if !ca.BasicConstraintsValid || !ca.IsCA {
+				return nil, fmt.Errorf("gcp-cas: fetchCaCerts returned %q, which is not a CA certificate", ca.Subject)
 			}
 			if seen[string(block.Bytes)] {
 				continue
@@ -366,8 +375,13 @@ func (a *gcpCASAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 // the CSR's key, name exactly the requested SPIFFE ID and nothing else
 // (an X.509-SVID has one URI SAN), and live no longer than an SVID.
 func checkGCPCASLeaf(cert *x509.Certificate, id spiffeid.ID, csr *x509.CertificateRequest) error {
-	if cert.IsCA {
-		return errors.New("gcp-cas: issued certificate is a CA certificate")
+	if !cert.BasicConstraintsValid || cert.IsCA {
+		return errors.New("gcp-cas: issued certificate is not marked CA:FALSE")
+	}
+	// X.509-SVID: a leaf must assert digitalSignature and must not
+	// assert keyCertSign or cRLSign.
+	if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 || cert.KeyUsage&(x509.KeyUsageCertSign|x509.KeyUsageCRLSign) != 0 {
+		return fmt.Errorf("gcp-cas: issued certificate key usage %#x is not an X.509-SVID leaf's", cert.KeyUsage)
 	}
 	if !bytes.Equal(cert.RawSubjectPublicKeyInfo, csr.RawSubjectPublicKeyInfo) {
 		return errors.New("gcp-cas: issued certificate public key does not match CSR")
