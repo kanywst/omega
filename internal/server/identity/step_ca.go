@@ -376,24 +376,14 @@ func (a *stepCAAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateRequest
 	// misconfigured provisioner or a hostile upstream could otherwise
 	// return a cert that does not match the CSR's key or the
 	// requested SPIFFE ID.
-	if !bytes.Equal(cert.RawSubjectPublicKeyInfo, csr.RawSubjectPublicKeyInfo) {
-		return nil, errors.New("step-ca: issued certificate public key does not match CSR")
-	}
-	wantURI := id.URL().String()
-	var haveURI bool
-	for _, u := range cert.URIs {
-		if u.String() == wantURI {
-			haveURI = true
-			break
-		}
-	}
-	if !haveURI {
-		return nil, fmt.Errorf("step-ca: issued certificate URI SANs %v do not contain requested SPIFFE ID %q", cert.URIs, wantURI)
+	bundle := a.BundlePEM()
+	if err := checkUpstreamLeaf("step-ca", cert, id, csr, bundle); err != nil {
+		return nil, err
 	}
 	return &SVID{
 		SPIFFEID:  id,
 		CertPEM:   []byte(leafPEM),
-		BundlePEM: a.BundlePEM(),
+		BundlePEM: bundle,
 		NotBefore: cert.NotBefore,
 		NotAfter:  cert.NotAfter,
 	}, nil
