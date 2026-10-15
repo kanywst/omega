@@ -2,6 +2,30 @@ apiVersion: v1
 entries:
   omega:
   - apiVersion: v2
+    appVersion: 0.10.0
+    created: "2026-10-15T14:44:31.11114058Z"
+    description: 'Omega — SPIFFE-compatible Workload Identity + AuthZEN-compliant
+      Authorization + OIDC Federation + AI Agent Identity, single binary. '
+    digest: 2e40d1c7ede59b7a553edc0edb957f12b9db1c0e4f6b481af7bedc7dbbab99ed
+    home: https://github.com/kanywst/omega
+    keywords:
+    - spiffe
+    - authzen
+    - workload-identity
+    - cedar
+    - identity
+    kubeVersion: '>= 1.27.0-0'
+    maintainers:
+    - name: kanywst
+      url: https://github.com/kanywst
+    name: omega
+    sources:
+    - https://github.com/kanywst/omega
+    type: application
+    urls:
+    - https://github.com/kanywst/omega/releases/download/omega-0.10.0/omega-0.10.0.tgz
+    version: 0.10.0
+  - apiVersion: v2
     appVersion: 0.9.0
     created: "2026-10-14T17:20:25.286388796Z"
     description: 'Omega — SPIFFE-compatible Workload Identity + AuthZEN-compliant
@@ -313,4 +337,4 @@ entries:
     urls:
     - https://github.com/0-draft/omega/releases/download/omega-0.0.1/omega-0.0.1.tgz
     version: 0.0.1
-generated: "2026-10-14T17:20:25.286489177Z"
+generated: "2026-10-15T14:44:31.111223755Z"
