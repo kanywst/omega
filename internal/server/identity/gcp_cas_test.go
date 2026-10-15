@@ -251,6 +251,8 @@ func (f *casFixture) handleCreate(w http.ResponseWriter, r *http.Request) {
 		NotAfter:     time.Now().Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		// CA:FALSE, as CAS issues an end-entity certificate.
+		BasicConstraintsValid: true,
 	}
 	for _, s := range req.Config.SubjectConfig.SubjectAltName.URIs {
 		if u, err := url.Parse(s); err == nil {
@@ -414,7 +416,15 @@ func TestGCPCASRejectsMisissuedCertificates(t *testing.T) {
 		{name: "ca certificate", mutate: func(tpl *x509.Certificate, pub any) any {
 			tpl.IsCA, tpl.BasicConstraintsValid = true, true
 			return pub
-		}, wantErr: "is a CA certificate"},
+		}, wantErr: "not marked CA:FALSE"},
+		{name: "no basic constraints", mutate: func(tpl *x509.Certificate, pub any) any {
+			tpl.BasicConstraintsValid = false
+			return pub
+		}, wantErr: "not marked CA:FALSE"},
+		{name: "cert sign usage", mutate: func(tpl *x509.Certificate, pub any) any {
+			tpl.KeyUsage |= x509.KeyUsageCertSign
+			return pub
+		}, wantErr: "key usage"},
 		{name: "other public key", mutate: func(_ *x509.Certificate, _ any) any {
 			return &otherKey.PublicKey
 		}, wantErr: "public key does not match"},
