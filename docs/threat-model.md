@@ -57,6 +57,7 @@ Boundaries enforced today:
 3. Agent → server: HTTP/JSON, same listener as the operator API.
 4. Server → peer server: SPIFFE federation. Bundle exchange is a
    one-way `GET /v1/bundle` against the peer.
+5. Server → upstream CA, with a non-disk `--ca-backend`: Vault PKI and step-ca over HTTPS, AWS Private CA over the AWS API with SigV4 credentials from the standard AWS chain. The upstream signs every X.509-SVID, so anyone who can call it with omega's credentials, or any other principal the upstream lets issue from the same CA, can mint an SVID for any ID in the trust domain without passing omega's attestation, `--require-auth` or audit log. For AWS Private CA, scope `acm-pca:IssueCertificate` on the CA to omega's role alone (see [docs/ca-aws-pca.md](ca-aws-pca.md)); omega checks each returned leaf against the requested SPIFFE ID, the CSR's key and the configured CA, which catches a misconfigured template but not a principal issuing around omega. The AWS Private CA bundle includes the root above the issuing CA, so every other subordinate of that root is trusted too; give the trust domain a root of its own.
 
 What lives outside the trust boundary:
 
@@ -274,7 +275,7 @@ the JWT signing key.
   trust domain. Mitigation is at the filesystem / pod-security
   layer (host filesystem ACLs, Kubernetes `securityContext`,
   encrypted volumes). After a suspected disclosure, `omega ca prepare`, `activate` and `retire --force` replace the disk CA without a restart ([ADR 0019](adr/0019-runtime-ca-rotation.md)); credentials the old key signed stop verifying once it is retired.
-- Upstream mitigation: with `--ca-backend=vault-pki`, `step-ca` or `gcp-cas` the X.509 CA key lives upstream, off Omega's disk (the JWT key stays under `--data-dir`); with `--ca-backend=azure-keyvault` the one key that signs both X.509-SVIDs and JWT-SVIDs stays in Azure Key Vault and nothing under `--data-dir` is secret (see E7). AWS Private CA is tracked in `ROADMAP.md`. The credential Omega uses to reach the upstream (Vault token, step-ca provisioner key, Google service account, Entra identity) can mint any certificate the upstream allows, so its theft is close to a CA compromise: scope it to the pool, role or key Omega uses, and with `gcp-cas` restrict the pool's issuance policy to the trust domain's URI SANs ([docs/ca-gcp-cas.md](ca-gcp-cas.md)).
+- Upstream mitigation: with `--ca-backend=vault-pki`, `step-ca`, `aws-pca` or `gcp-cas` the X.509 CA key lives upstream (boundary 5), off Omega's disk (the JWT key stays under `--data-dir`); with `--ca-backend=azure-keyvault` the one key that signs both X.509-SVIDs and JWT-SVIDs stays in Azure Key Vault and nothing under `--data-dir` is secret (see E7). The credential Omega uses to reach the upstream (Vault token, step-ca provisioner key, AWS credentials, Google service account, Entra identity) can mint any certificate the upstream allows, so its theft is close to a CA compromise: scope it to the pool, role or key Omega uses, and with `gcp-cas` restrict the pool's issuance policy to the trust domain's URI SANs ([docs/ca-gcp-cas.md](ca-gcp-cas.md)).
 
 ### I2: Information disclosure via audit log content
 
@@ -392,7 +393,7 @@ has a recommended out-of-tree answer.
 | Caller authentication on `omega server` | OIDC IdP federation hub (tracked in `ROADMAP.md`); until that lands, terminate auth at the ingress |
 | Application secrets leak | Vault / OpenBao / cloud secrets manager - Omega's DB holds policy and audit, not application secrets |
 | Endpoint hardening of agent UDS | Pod / VM security context (own UID, no shared mount namespace) |
-| At-rest encryption of CA keys | `--ca-backend=azure-keyvault` (the key stays in Key Vault or Managed HSM); other KMS plugins tracked in `ROADMAP.md`; otherwise encrypted volumes |
+| At-rest encryption of CA keys | A non-disk `--ca-backend`: Vault PKI, step-ca, AWS Private CA or GCP CAS for the X.509 CA key, `azure-keyvault` for both keys (the key stays in Key Vault or Managed HSM); otherwise encrypted volumes for the JWT key and the disk CA |
 | Long-lived credential revocation (CRL / OCSP) | Short-lived rotation is the design, see [`docs/non-goals.md`](non-goals.md#omega-is-not-a-crl--ocsp-responder) |
 | Compromised host kernel | Out of any application-layer control plane's reach |
 

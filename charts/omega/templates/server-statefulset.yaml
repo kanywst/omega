@@ -71,8 +71,8 @@ spec:
             - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
             {{- end }}
             {{- $ca := .Values.server.ca }}
-            {{- if not (has $ca.backend (list "disk" "gcp-cas" "azure-keyvault")) }}
-            {{- fail (printf "server.ca.backend %q is not configurable through the chart (supported: disk, gcp-cas, azure-keyvault); use server.extraArgs for other backends" $ca.backend) }}
+            {{- if not (has $ca.backend (list "disk" "aws-pca" "gcp-cas" "azure-keyvault")) }}
+            {{- fail (printf "server.ca.backend %q is not configurable through the chart (supported: disk, aws-pca, gcp-cas, azure-keyvault); use server.extraArgs for other backends" $ca.backend) }}
             {{- end }}
             {{- if ne $ca.backend "disk" }}
             - --ca-backend={{ $ca.backend }}
@@ -88,6 +88,22 @@ spec:
             {{- end }}
             {{- if $ca.azureKeyVault.caCertSecret }}
             - --ca-azure-keyvault-ca-cert=/etc/omega/azure-keyvault/ca.crt
+            {{- end }}
+            {{- end }}
+            {{- if eq $ca.backend "aws-pca" }}
+            {{- $pca := $ca.awsPCA | default dict }}
+            - --ca-aws-pca-arn={{ required "server.ca.awsPCA.arn is required when server.ca.backend=aws-pca" $pca.arn }}
+            {{- if $pca.region }}
+            - --ca-aws-pca-region={{ $pca.region }}
+            {{- end }}
+            {{- if $pca.endpoint }}
+            - --ca-aws-pca-endpoint={{ $pca.endpoint }}
+            {{- end }}
+            {{- if $pca.templateArn }}
+            - --ca-aws-pca-template-arn={{ $pca.templateArn }}
+            {{- end }}
+            {{- if $pca.signingAlgorithm }}
+            - --ca-aws-pca-signing-algorithm={{ $pca.signingAlgorithm }}
             {{- end }}
             {{- end }}
             {{- range .Values.server.extraArgs }}
