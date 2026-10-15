@@ -25,8 +25,9 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `server.domainRootAdmins`                 | `[]`                    | `--domain-root-admin` SPIFFE IDs                                                                                      |
 | `server.decisionRecorders`                | `[]`                    | Node agents that may read the policy bundle and record local decisions                                                |
 | `server.scimProviders`                    | `[]`                    | SCIM providers: `name`, `domain`, `tokenSecret` (Secret with a `token` key), optional `template`                      |
-| `server.ca.backend`                       | `disk`                  | `--ca-backend`; `gcp-cas` reads `server.ca.gcpCas`                                                                    |
+| `server.ca.backend` | `disk` | `--ca-backend`: `disk` (evaluation), `aws-pca`, `gcp-cas` or `azure-keyvault`, each configured by its block below; other backends through `server.extraArgs` |
 | `server.ca.gcpCas.pool`                   | `""`                    | CAS CA pool `projects/<p>/locations/<l>/caPools/<pool>`; required for `gcp-cas`                                       |
+| `server.ca.gcpCas.endpoint` / `.issuingCA` / `.certificateTemplate` | `""` | API endpoint override (https), a CA id that pins issuance inside the pool, and a certificate template |
 | `server.ca.gcpCas.credentialsSecret`      | `""`                    | Secret with `credentials.json`; leave empty to use GKE Workload Identity                                              |
 | `policy.inline`                           | `{}`                    | Inline `*.cedar` files via ConfigMap                                                                                  |
 | `agent.uidMap`                            | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                                      |
@@ -38,7 +39,6 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `agent.localPDP.verifyBundle`             | `true`                  | Verify bundle signatures with `bundle.pub` from `agent.localPDP.tlsSecret`                                            |
 | `agent.localPDP.spool`                    | `false`                 | Spool decisions to an emptyDir                                                                                        |
 | `server.persistence.size`                 | `1Gi`                   | PVC for SQLite data dir                                                                                               |
-| `server.ca.backend`                       | `disk`                  | `--ca-backend`; `aws-pca` is configured below, other backends through `server.extraArgs`                              |
 | `server.ca.awsPCA.arn`                    | `""`                    | AWS Private CA ARN (required for `aws-pca`); see [AWS Private CA](#aws-private-ca)                                    |
 | `server.ca.awsPCA.region`                 | `""`                    | Region of the API endpoint; empty takes it from the ARN                                                               |
 | `server.ca.awsPCA.endpoint`               | `""`                    | Endpoint override, e.g. a VPC interface endpoint (https)                                                              |
@@ -47,7 +47,6 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `csi.enabled`                             | `false`                 | Deploy the SPIFFE CSI driver so pods mount the Workload API with `csi.spiffe.io` (privileged, cluster-wide CSIDriver) |
 | `agent.nodeSelector`, `agent.tolerations` | `{}`, `[]`              | Where the agent runs; the CSI driver follows                                                                          |
 | `server.podLabels` | `{}` | Extra server pod labels, e.g. `azure.workload.identity/use: "true"` |
-| `server.ca.backend` | `disk` | `--ca-backend`; `disk` is for evaluation |
 | `server.ca.azureKeyVault.url` / `.key` / `.keyVersion` | `""` | Key Vault or Managed HSM URL and the EC P-256 key that signs as the CA (`backend: azure-keyvault`) |
 | `server.ca.azureKeyVault.caCertSecret` | `""` | Secret with `ca.crt`, the CA certificate for the key; set it with more than one replica |
 | `server.ca.azureKeyVault.credentialsSecret` | `""` | Secret loaded as `AZURE_*` environment variables for a service principal; leave empty for workload or managed identity, since a client secret takes precedence over both |
