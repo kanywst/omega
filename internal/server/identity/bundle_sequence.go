@@ -27,7 +27,8 @@ type bundleMaterial interface {
 
 // DurableSequence backs spiffe_sequence with a store, so the sequence
 // never goes back across a restart: it advances whenever the trust
-// material changes, from the highest value any process stored. Replicas
+// material changes, from the highest value any process stored, and by
+// as many changes as the source counted when it counts them. Replicas
 // that serve the same material serve the same sequence. It implements
 // BundleSequencer for every identity source.
 type DurableSequence struct {
@@ -38,38 +39,54 @@ type DurableSequence struct {
 	mu     sync.Mutex
 	seq    int64
 	digest string
+	// srcSeq is the source's own count when seq was last set.
+	srcSeq int64
 }
 
 // NewDurableSequence returns the spiffe_sequence of src's trust material
-// in trustDomain, kept in store.
-func NewDurableSequence(src bundleMaterial, store BundleSequenceStore, trustDomain string) *DurableSequence {
-	return &DurableSequence{src: src, store: store, trustDomain: trustDomain}
+// in trustDomain, kept in store. It reads the store once to number the
+// current material, and fails if it cannot: starting from 1 instead
+// would serve a lower sequence than before the restart.
+func NewDurableSequence(src bundleMaterial, store BundleSequenceStore, trustDomain string) (*DurableSequence, error) {
+	d := &DurableSequence{src: src, store: store, trustDomain: trustDomain}
+	if _, err := d.next(); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // BundleSequence implements BundleSequencer. It reads the store only
 // when the trust material differs from what it last served, so an
-// unchanged bundle costs no I/O.
+// unchanged bundle costs no I/O. If the store cannot be read, it serves
+// the last sequence, which never goes back, and reads the store again
+// on the next call.
 func (d *DurableSequence) BundleSequence() int64 {
+	seq, err := d.next()
+	if err != nil {
+		slog.Warn("identity: could not read the stored spiffe_sequence; serving the last one", "err", err)
+	}
+	return seq
+}
+
+func (d *DurableSequence) next() (int64, error) {
+	var srcSeq int64
 	if s, ok := d.src.(BundleSequencer); ok {
 		// An external issuer refreshes its bundle here, so the digest
 		// below is of the bundle a caller reads next.
-		_ = s.BundleSequence()
+		srcSeq = s.BundleSequence()
 	}
 	digest := materialDigest(d.src)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if digest == d.digest {
-		return d.seq
+		return d.seq, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
 	stored, storedDigest, err := d.store.LoadBundleSequence(ctx, d.trustDomain)
 	if err != nil {
-		// Go on from this process's own count, which never goes back
-		// while the process runs; the next change reads the store again.
-		slog.Warn("identity: could not read the stored spiffe_sequence", "err", err)
-		d.seq, d.digest = d.seq+1, digest
-		return d.seq
+		// The digest is not recorded, so the next call tries again.
+		return d.seq, err
 	}
 	var seq int64
 	if storedDigest == digest && (stored > d.seq || d.seq == 0) {
@@ -77,15 +94,21 @@ func (d *DurableSequence) BundleSequence() int64 {
 		// numbered this material.
 		seq = stored
 	} else {
-		seq = max(d.seq, stored) + 1
+		// Two rotations between reads advance it by two, as the source
+		// counted them.
+		step := srcSeq - d.srcSeq
+		if d.seq == 0 || step < 1 {
+			step = 1
+		}
+		seq = max(d.seq, stored) + step
 	}
-	d.seq, d.digest = seq, digest
+	d.seq, d.digest, d.srcSeq = seq, digest, srcSeq
 	if seq != stored || storedDigest != digest {
 		if err := d.store.SaveBundleSequence(ctx, d.trustDomain, seq, digest); err != nil && !errors.Is(err, ErrStoreNotLeader) {
 			slog.Warn("identity: could not store the spiffe_sequence; a restart may serve it again for other trust material", "err", err)
 		}
 	}
-	return seq
+	return seq, nil
 }
 
 // materialDigest is the SHA-256 of the trust anchors and JWT keys.

@@ -2,10 +2,15 @@ package identity
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"strings"
 	"sync"
 	"testing"
@@ -189,8 +194,8 @@ func TestCAOverlapKeepsTheKeptSetAcrossARestart(t *testing.T) {
 	if got := o2.serve(now.Add(time.Hour)); certCount(got) != 2 {
 		t.Fatalf("restart lost the kept CA: %d certs", certCount(got))
 	}
-	if ev := log.take(); len(ev) != 0 {
-		t.Fatalf("restoring the kept set is not a new change: %v", ev)
+	if ev := log.take(); len(ev) != 1 || ev[0] != "kept:restored" {
+		t.Fatalf("a CA taken from the store is recorded as restored: %v", ev)
 	}
 	// It is dropped when the first process would have dropped it.
 	if got := o2.serve(now.Add(UpstreamCAGrace + 2*time.Minute)); string(got) != string(b) {
@@ -252,7 +257,7 @@ func TestCAOverlapRestoresWithinTheCurrentGrace(t *testing.T) {
 	if err := o.attachStore(store, "omega.local", "aws-pca", now); err != nil {
 		t.Fatal(err)
 	}
-	if ev := log.take(); len(ev) != 1 || ev[0] != "dropped:grace-ended" {
+	if ev := log.take(); len(ev) != 2 || ev[0] != "kept:restored" || ev[1] != "dropped:grace-ended" {
 		t.Fatalf("a CA whose grace ended while Omega was down is reported dropped: %v", ev)
 	}
 	kept, ok := keptRow(store.Rows("omega.local", "aws-pca"), derOf(t, a))
@@ -296,8 +301,8 @@ func TestCAOverlapReplicasShareTheKeptSet(t *testing.T) {
 	// keeps A until the time the leader stored.
 	_, _ = leader.update(b, now.Add(time.Minute))
 	_, _ = follower.update(b, now.Add(10*time.Minute))
-	if ev := log.take(); len(ev) != 0 {
-		t.Fatalf("the follower recorded a change the leader already stored: %v", ev)
+	if ev := log.take(); len(ev) != 1 || ev[0] != "kept:restored" {
+		t.Fatalf("the follower takes the leader's CA as restored, not as its own rotation: %v", ev)
 	}
 	until := now.Add(time.Minute + UpstreamCAGrace)
 	if got := follower.serve(until.Add(-time.Second)); certCount(got) != 2 {
@@ -389,6 +394,28 @@ func TestCAOverlapStoredRowsTheOperatorOrIssuerOverrode(t *testing.T) {
 		t.Fatal("a distrusted CA was restored")
 	}
 
+	// Not a CA, or kept past its own expiry: only the CA is taken, and
+	// only until it expires.
+	leaf := mustLeafDER(t)
+	short := testCAPEM(t, "short", now.Add(time.Hour))
+	store.Put("omega.local", "vault-pki", []UpstreamCA{{DER: derOf(t, b)},
+		{DER: leaf, KeptAt: now, Until: now.Add(time.Hour)},
+		{DER: derOf(t, short), KeptAt: now, Until: now.Add(10 * time.Hour)}})
+	o = newCAOverlap(UpstreamCAGrace)
+	_, _ = o.update(b, now)
+	if err := o.attachStore(store.Replica(true), "omega.local", "vault-pki", now); err != nil {
+		t.Fatal(err)
+	}
+	if len(o.retired) != 1 {
+		t.Fatalf("kept %d stored certificates, want only the CA", len(o.retired))
+	}
+	for _, r := range o.retired {
+		if !r.until.Equal(r.cert.NotAfter) {
+			t.Fatalf("restored past its expiry: until %v, NotAfter %v", r.until, r.cert.NotAfter)
+		}
+	}
+	store.Put("omega.local", "vault-pki", []UpstreamCA{{DER: derOf(t, b)}, row})
+
 	// Published again by the issuer: it is current, not kept.
 	o = newCAOverlap(UpstreamCAGrace)
 	both := append(append([]byte(nil), b...), a...)
@@ -399,4 +426,15 @@ func TestCAOverlapStoredRowsTheOperatorOrIssuerOverrode(t *testing.T) {
 	if got := o.serve(now); certCount(got) != 2 || len(o.retired) != 0 {
 		t.Fatal("a republished CA was restored as kept")
 	}
+}
+
+func mustLeafDER(t *testing.T) []byte {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(9), Subject: pkix.Name{CommonName: "leaf"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der
 }

@@ -383,7 +383,10 @@ func newServerCommand() *cobra.Command {
 			caReloader, _ := ca.(identity.CAReloader)
 			// spiffe_sequence is stored, so it never goes back across a
 			// restart and replicas serving the same bundle agree on it.
-			bundleSeq := identity.NewDurableSequence(ca, identityStore{store}, ca.TrustDomain().String())
+			bundleSeq, err := identity.NewDurableSequence(ca, identityStore{store}, ca.TrustDomain().String())
+			if err != nil {
+				return fmt.Errorf("load the stored spiffe_sequence: %w", err)
+			}
 			// Vault PKI, step-ca and AWS Private CA: every change to the CAs kept from a
 			// rotation goes into the audit chain, and the operator's
 			// distrust list drops a kept CA without a restart.

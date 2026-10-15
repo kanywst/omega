@@ -54,12 +54,16 @@ func TestIdentityStoreRoundTripsAndMarksFollowers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := identity.NewDurableSequence(ca, s, "omega.local").BundleSequence()
-	if first != 5 {
-		t.Fatalf("first sequence after a stored 4: %d", first)
-	}
-	if again := identity.NewDurableSequence(ca, s, "omega.local").BundleSequence(); again != first {
-		t.Fatalf("after a restart: %d, want %d", again, first)
+	for i := 0; i < 2; i++ {
+		seq, err := identity.NewDurableSequence(ca, s, "omega.local")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The first start numbers the CA after the stored 4; a restart
+		// with the same CA keeps it.
+		if got := seq.BundleSequence(); got != 5 {
+			t.Fatalf("start %d: spiffe_sequence %d, want 5", i+1, got)
+		}
 	}
 
 	store.SetLeaderForTest(true, false)
