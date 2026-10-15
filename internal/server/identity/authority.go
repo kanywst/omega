@@ -131,6 +131,10 @@ type Config struct {
 	// the CA key (e.g. SHA256WITHECDSA, SHA256WITHRSA).
 	AWSPCASigningAlgorithm string
 	AWSPCABundleTTL        time.Duration
+	// AWSPCABundle picks the served trust bundle: AWSPCABundleChain
+	// (empty, the default) serves the issuing CA and its chain to the
+	// root, AWSPCABundleIssuing the issuing CA alone.
+	AWSPCABundle string
 	// AWSPCATimeout bounds each AWS call, including the polling for
 	// an issued certificate. Zero means 30s.
 	AWSPCATimeout time.Duration

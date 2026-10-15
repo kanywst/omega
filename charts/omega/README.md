@@ -44,6 +44,7 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `server.ca.awsPCA.endpoint`               | `""`                    | Endpoint override, e.g. a VPC interface endpoint (https)                                                              |
 | `server.ca.awsPCA.templateArn`            | `""`                    | Certificate template; empty uses `EndEntityCertificate_APIPassthrough/V1`                                             |
 | `server.ca.awsPCA.signingAlgorithm`       | `""`                    | Signing algorithm; empty infers it from the CA key                                                                    |
+| `server.ca.awsPCA.bundle`                 | `chain`                 | Served trust bundle: `chain` (issuing CA and its chain to the root) or `issuing` (issuing CA alone); see [AWS Private CA](#aws-private-ca) |
 | `csi.enabled`                             | `false`                 | Deploy the SPIFFE CSI driver so pods mount the Workload API with `csi.spiffe.io` (privileged, cluster-wide CSIDriver) |
 | `agent.nodeSelector`, `agent.tolerations` | `{}`, `[]`              | Where the agent runs; the CSI driver follows                                                                          |
 | `server.podLabels` | `{}` | Extra server pod labels, e.g. `azure.workload.identity/use: "true"` |
@@ -88,6 +89,8 @@ helm install omega ./charts/omega \
   --set server.ca.awsPCA.arn=arn:aws:acm-pca:us-east-1:111122223333:certificate-authority/EXAMPLE \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::111122223333:role/omega-pca
 ```
+
+When the CA is a subordinate under a root that also has other subordinates, set `server.ca.awsPCA.bundle=issuing` so only the issuing CA is served as a trust anchor and certificates from the other subordinates are not trusted for the trust domain. Peers and federation partners must then accept that CA as an anchor even though it is not self-signed; see [docs/ca-aws-pca.md](../../docs/ca-aws-pca.md#trust-bundle).
 
 ## Verify
 
