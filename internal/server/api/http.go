@@ -68,6 +68,7 @@ type Server struct {
 	scimFault               func(storage.AuditEvent) error
 	scim                    map[string]SCIMConfig
 	spiffeBundleRefreshHint time.Duration
+	bundleSequence          identity.BundleSequencer
 	requireAuth             bool
 	entityStoreSearch       bool
 }
@@ -137,6 +138,15 @@ func (s *Server) WithK8sAttestor(a *attest.K8sAttestor, template string) *Server
 // that tells peers to poll continuously.
 func (s *Server) WithSPIFFEBundleRefreshHint(d time.Duration) *Server {
 	s.spiffeBundleRefreshHint = d
+	return s
+}
+
+// WithBundleSequencer sets what numbers `spiffe_sequence` at
+// `GET /v1/spiffe-bundle`, in place of the identity source's own count,
+// which starts at 1 in every process. The server passes one backed by
+// its store, so the sequence never goes back across a restart.
+func (s *Server) WithBundleSequencer(seq identity.BundleSequencer) *Server {
+	s.bundleSequence = seq
 	return s
 }
 
@@ -1525,18 +1535,19 @@ const defaultSPIFFEBundleRefreshHint = 5 * time.Minute
 // native consumers.
 //
 // `spiffe_sequence` tracks the identity source's trust-material
-// generation when the source can rotate at runtime (spire-upstream,
-// where a SIGHUP reload installs new upstream anchors). A source that
-// cannot change its material while the process runs stays fixed at 1,
-// which is accurate rather than merely a placeholder: the bundle really
-// is monotonic-at-one for that process's lifetime.
+// generation. With WithBundleSequencer it comes from the store and
+// survives restarts; otherwise it is the source's own count, which
+// advances when the source can rotate at runtime and stays fixed at 1
+// when it cannot.
 func (s *Server) getSPIFFEBundle(w http.ResponseWriter, _ *http.Request) {
 	hint := s.spiffeBundleRefreshHint
 	if hint <= 0 {
 		hint = defaultSPIFFEBundleRefreshHint
 	}
 	var seq int64 = 1
-	if seqr, ok := s.ca.(identity.BundleSequencer); ok {
+	if s.bundleSequence != nil {
+		seq = s.bundleSequence.BundleSequence()
+	} else if seqr, ok := s.ca.(identity.BundleSequencer); ok {
 		seq = seqr.BundleSequence()
 	}
 	raw, err := identity.BuildSPIFFEBundle(s.ca, identity.SPIFFEBundleOptions{

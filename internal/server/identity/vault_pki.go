@@ -325,6 +325,22 @@ func (a *vaultPKIAuthority) BundleSequence() int64 {
 // SetKeptCAHook implements UpstreamCAKeeper.
 func (a *vaultPKIAuthority) SetKeptCAHook(h func(KeptCAEvent)) { a.overlap.setHook(h) }
 
+// UseCAStore implements UpstreamCAKeeper. The cached bundle is replaced
+// at once with one that has the CAs kept before a restart.
+func (a *vaultPKIAuthority) UseCAStore(s UpstreamCAStore) error {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	if err := a.overlap.attachStore(s, a.trustDomain.String(), string(KindVaultPKI), time.Now()); err != nil {
+		return err
+	}
+	if served := a.overlap.serve(time.Now()); served != nil {
+		a.bundleMu.Lock()
+		a.bundle = served
+		a.bundleMu.Unlock()
+	}
+	return nil
+}
+
 // DistrustCAs implements UpstreamCAKeeper. The cached bundle is replaced
 // at once, so the next caller does not wait for its TTL. It holds
 // refreshMu so a refresh already in flight cannot cache the bundle from

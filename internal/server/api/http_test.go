@@ -1384,6 +1384,41 @@ func TestSPIFFEBundleSequenceIsFixedForBuiltInSource(t *testing.T) {
 	}
 }
 
+type fixedSequence int64
+
+func (f fixedSequence) BundleSequence() int64 { return int64(f) }
+
+// The server's own sequencer, backed by the store, numbers the bundle in
+// place of the source's per-process count.
+func TestSPIFFEBundleSequenceComesFromTheConfiguredSequencer(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatalf("ca: %v", err)
+	}
+	srv := httptest.NewServer(api.NewServer(store, ca, policy.New()).WithBundleSequencer(fixedSequence(7)).Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/v1/spiffe-bundle")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var doc struct {
+		Sequence int64 `json:"spiffe_sequence"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if doc.Sequence != 7 {
+		t.Fatalf("spiffe_sequence = %d, want the sequencer's 7", doc.Sequence)
+	}
+}
+
 func TestAuthzenDiscoveryReturns404WhenIssuerNotConfigured(t *testing.T) {
 	srv := newTestServer(t)
 	resp, err := http.Get(srv.URL + "/.well-known/authzen-configuration")

@@ -73,9 +73,12 @@ func (b builtinSource) BundleSequence() int64 {
 // --upstream-ca-grace. SetKeptCAHook reports every change to that kept
 // set; DistrustCAs replaces the operator's list of CAs never to keep,
 // dropping any kept one at once, and returns how many it dropped.
+// UseCAStore loads the kept set from a store shared across restarts and
+// replicas, and keeps the store up to date from then on.
 type UpstreamCAKeeper interface {
 	SetKeptCAHook(func(KeptCAEvent))
 	DistrustCAs([][32]byte) int
+	UseCAStore(UpstreamCAStore) error
 }
 
 // CAReloader is an issuing authority whose CAs can be rotated at runtime
