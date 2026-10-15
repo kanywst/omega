@@ -8,6 +8,12 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-15
+
+Adds three cloud CA backends (AWS Private CA, Google Cloud CAS and Azure Key Vault), an agent-side Kubernetes workload attestor for the self-issued path, and holds every external issuer's certificates to the X.509-SVID profile.
+
+No breaking changes for existing flags. A Vault PKI role or step-ca provisioner that adds SANs beyond the requested SPIFFE ID, or signs from a CA outside the served bundle, now fails issuance; see Fixed.
+
 ### Added
 
 - **Agent-side Kubernetes workload attestor.** `omega agent --k8s-workload-attestor` (Linux) identifies a Workload API peer that runs in a pod on the node by its pod: the peer PID's cgroup names the pod and container, kube-apiserver names the namespace, service account and pod, and `--k8s-workload-svid-template` renders the SPIFFE ID with the server's `--k8s-svid-template` placeholders. Host processes keep the `--map` UID mapping; a pod process never falls back to it. Off by default and meant for the self-issued development and evaluation path, not as a production substitute for SPIRE. Helm: `agent.k8sWorkloadAttestor` (turns on `hostPID` and runs the agent under its own ServiceAccount with `list` on pods). See [ADR 0020](docs/adr/0020-agent-side-kubernetes-workload-attestor.md) and `examples/k8s-workload-attestor/`.
@@ -935,7 +941,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/kanywst/omega/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kanywst/omega/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kanywst/omega/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kanywst/omega/compare/v0.6.0...v0.7.0

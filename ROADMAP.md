@@ -10,9 +10,9 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.9.0)
+## Now (next release, post-0.10.0)
 
-Nothing is committed yet. Runtime rotation of the built-in CA ([ADR 0019](docs/adr/0019-runtime-ca-rotation.md)), the opt-in overlap across Vault PKI and step-ca rotations, and the SPIFFE CSI driver in the Helm chart shipped in 0.9.0.
+Nothing is committed yet. The AWS Private CA, Google Cloud CAS and Azure Key Vault CA backends and the agent-side Kubernetes workload attestor ([ADR 0020](docs/adr/0020-agent-side-kubernetes-workload-attestor.md)) shipped in 0.10.0.
 
 ## Next (3-6 months)
 
