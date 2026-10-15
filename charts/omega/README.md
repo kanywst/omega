@@ -25,6 +25,9 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `server.domainRootAdmins`                 | `[]`                    | `--domain-root-admin` SPIFFE IDs                                                                                      |
 | `server.decisionRecorders`                | `[]`                    | Node agents that may read the policy bundle and record local decisions                                                |
 | `server.scimProviders`                    | `[]`                    | SCIM providers: `name`, `domain`, `tokenSecret` (Secret with a `token` key), optional `template`                      |
+| `server.ca.backend`                       | `disk`                  | `--ca-backend`; `gcp-cas` reads `server.ca.gcpCas`                                                                    |
+| `server.ca.gcpCas.pool`                   | `""`                    | CAS CA pool `projects/<p>/locations/<l>/caPools/<pool>`; required for `gcp-cas`                                       |
+| `server.ca.gcpCas.credentialsSecret`      | `""`                    | Secret with `credentials.json`; leave empty to use GKE Workload Identity                                              |
 | `policy.inline`                           | `{}`                    | Inline `*.cedar` files via ConfigMap                                                                                  |
 | `agent.uidMap`                            | `[]`                    | `uid=N,id=spiffe://...` mappings                                                                                      |
 | `agent.hostSocketPath`                    | `/run/omega`            | hostPath for the workload socket; must be under `/run/omega*` or `/var/run/omega*`                                    |

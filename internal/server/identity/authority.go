@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -63,6 +64,10 @@ const (
 	// Key Vault sign their digests, so both X.509-SVIDs and JWT-SVIDs
 	// are signed by a key that never leaves Key Vault (ADR 0021).
 	KindAzureKeyVault Kind = "azure-keyvault"
+	// KindGCPCAS signs X.509-SVIDs via a Google Cloud Certificate
+	// Authority Service CA pool; the CA keys stay in Google-managed
+	// HSMs. JWT-SVID signing stays local, as for KindVaultPKI.
+	KindGCPCAS Kind = "gcp-cas"
 )
 
 // Config is the disjoint-union-style argument to New. Fields are read
@@ -128,6 +133,17 @@ type Config struct {
 	// AzureKeyVaultGetenv reads the AZURE_* credential variables.
 	// Nil means os.Getenv; tests inject their own.
 	AzureKeyVaultGetenv func(string) string
+
+	// KindGCPCAS
+	GCPCASPool                string // projects/<project>/locations/<location>/caPools/<pool>
+	GCPCASEndpoint            string // API base URL, default https://privateca.googleapis.com
+	GCPCASIssuingCA           string // optional CA id pinning issuance to one CA in the pool
+	GCPCASCertificateTemplate string // optional projects/<p>/locations/<l>/certificateTemplates/<t>
+	GCPCASBundleTTL           time.Duration
+	// GCPCASTokenSource overrides Application Default Credentials as the
+	// source of the OAuth 2.0 bearer token. Nil (the default) uses ADC;
+	// tests set it to talk to a fake CAS.
+	GCPCASTokenSource oauth2.TokenSource
 }
 
 // Authority is the signing + bundle interface every Omega CA backend
@@ -225,6 +241,19 @@ func New(cfg Config) (Authority, error) {
 		}
 		local.issuerURL = issuer
 		return newStepCAAuthority(local, cfg)
+	case KindGCPCAS:
+		if cfg.Dir == "" {
+			return nil, errors.New("identity: gcp-cas backend still needs --data-dir for the local JWT signing key")
+		}
+		if cfg.GCPCASPool == "" {
+			return nil, errors.New("identity: gcp-cas backend requires GCPCASPool")
+		}
+		local, err := loadOrCreateDisk(cfg.Dir, cfg.TrustDomain)
+		if err != nil {
+			return nil, err
+		}
+		local.issuerURL = issuer
+		return newGCPCASAuthority(local, cfg)
 	case KindAzureKeyVault:
 		if cfg.AzureKeyVaultURL == "" {
 			return nil, errors.New("identity: azure-keyvault backend requires AzureKeyVaultURL")
@@ -238,7 +267,7 @@ func New(cfg Config) (Authority, error) {
 		}
 		return newAzureKeyVaultAuthority(td, issuer, cfg)
 	default:
-		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA, KindAzureKeyVault)
+		return nil, fmt.Errorf("identity: unknown kind %q (supported: %q, %q, %q, %q, %q)", cfg.Kind, KindDisk, KindVaultPKI, KindStepCA, KindGCPCAS, KindAzureKeyVault)
 	}
 }
 

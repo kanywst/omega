@@ -127,6 +127,10 @@ func newServerCommand() *cobra.Command {
 		caStepCAProvisioner        string
 		caStepCAKeyFile            string
 		caStepCACACertFile         string
+		caGCPCASPool               string
+		caGCPCASEndpoint           string
+		caGCPCASIssuingCA          string
+		caGCPCASTemplate           string
 		caAzureKVURL               string
 		caAzureKVKey               string
 		caAzureKVKeyVersion        string
@@ -236,6 +240,15 @@ func newServerCommand() *cobra.Command {
 					caCfg.StepCAProvisionerKeyPEM = keyPEM
 					caCfg.StepCACACertFile = strings.TrimSpace(caStepCACACertFile)
 				}
+				if caCfg.Kind == identity.KindGCPCAS {
+					if strings.TrimSpace(caGCPCASPool) == "" {
+						return errors.New("--ca-gcp-cas-pool is required when --ca-backend=gcp-cas")
+					}
+					caCfg.GCPCASPool = strings.TrimSpace(caGCPCASPool)
+					caCfg.GCPCASEndpoint = strings.TrimSpace(caGCPCASEndpoint)
+					caCfg.GCPCASIssuingCA = strings.TrimSpace(caGCPCASIssuingCA)
+					caCfg.GCPCASCertificateTemplate = strings.TrimSpace(caGCPCASTemplate)
+				}
 				if caCfg.Kind == identity.KindAzureKeyVault {
 					caCfg.AzureKeyVaultURL = strings.TrimSpace(caAzureKVURL)
 					caCfg.AzureKeyVaultKeyName = strings.TrimSpace(caAzureKVKey)
@@ -249,7 +262,7 @@ func newServerCommand() *cobra.Command {
 				if caCfg.Kind == identity.KindDisk || caCfg.Kind == "" {
 					// identity.New treats an empty Kind as the disk default
 					// (case "", KindDisk), so the warning must cover both.
-					fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki or step-ca for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
+					fmt.Fprintf(os.Stderr, "omega server: WARNING ca-backend=disk is a self-signed root for dev/eval only and is not recommended for production. Use --ca-backend=vault-pki, step-ca or gcp-cas for a managed CA (consuming an upstream SPIFFE issuer is tracked via --identity-source).\n")
 				}
 			case identity.SourceSPIREUpstream:
 				// Omega consumes identities minted by an upstream SPIFFE
@@ -730,7 +743,7 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&identitySourceWLAPIJWT, "identity-source-workload-api-jwt", false,
 		"also follow the upstream JWT bundle over --identity-source-workload-api, serving those keys at /v1/jwt/bundle. Off by default because omega consumes only EC P-256 (ES256) signing keys: an upstream whose JWT key is RSA has no usable key and startup fails closed rather than serving an empty JWKS.")
 	cmd.Flags().StringVar(&caBackend, "ca-backend", "disk",
-		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT; for both the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005). 'azure-keyvault' keeps the CA key in Azure Key Vault or Managed HSM and signs both X.509-SVIDs and JWT-SVIDs through it (see ADR 0021).")
+		"CA backend Kind. 'disk' (default) generates a self-signed root under --data-dir. 'vault-pki' delegates X.509-SVID signing to a Vault PKI engine; 'step-ca' delegates to Smallstep step-ca's /1.0/sign endpoint with a JWK provisioner OTT; 'gcp-cas' delegates to a Google Cloud Certificate Authority Service CA pool; for these the root key never sits on omega's disk while JWT-SVID signing stays local (see ADR 0005). 'azure-keyvault' keeps the CA key in Azure Key Vault or Managed HSM and signs both X.509-SVIDs and JWT-SVIDs through it (see ADR 0021).")
 	cmd.Flags().StringVar(&caAzureKVURL, "ca-azure-keyvault-url", "",
 		"Key Vault or Managed HSM URL, e.g. https://myvault.vault.azure.net. Required when --ca-backend=azure-keyvault. Credentials come from AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET or AZURE_FEDERATED_TOKEN_FILE, else a managed identity.")
 	cmd.Flags().StringVar(&caAzureKVKey, "ca-azure-keyvault-key", "",
@@ -759,6 +772,14 @@ func newServerCommand() *cobra.Command {
 		"path to the PEM- or JSON-encoded private JWK that signs the one-time-token presented to step-ca on each /1.0/sign call. Required when --ca-backend=step-ca.")
 	cmd.Flags().StringVar(&caStepCACACertFile, "ca-step-ca-ca-cert", "",
 		"path to a PEM file with the step-ca server's TLS trust anchor(s). Empty falls back to the system trust store; production step-ca is almost always behind a private CA and must set this.")
+	cmd.Flags().StringVar(&caGCPCASPool, "ca-gcp-cas-pool", "",
+		"Certificate Authority Service CA pool, as projects/<project>/locations/<location>/caPools/<pool>. Required when --ca-backend=gcp-cas. Credentials come from Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS, GKE Workload Identity, or the metadata server); the identity needs roles/privateca.certificateRequester and roles/privateca.poolReader on the pool, and the pool's issuance policy must allow SAN passthrough.")
+	cmd.Flags().StringVar(&caGCPCASEndpoint, "ca-gcp-cas-endpoint", "",
+		"Certificate Authority Service API base URL. Empty uses https://privateca.googleapis.com; set it for a Private Service Connect or regional endpoint. Must be https except for a loopback host.")
+	cmd.Flags().StringVar(&caGCPCASIssuingCA, "ca-gcp-cas-issuing-ca", "",
+		"optional CA id inside the pool that signs every SVID, overriding the pool's load balancing across its CAs.")
+	cmd.Flags().StringVar(&caGCPCASTemplate, "ca-gcp-cas-certificate-template", "",
+		"optional certificate template applied to every SVID, as projects/<project>/locations/<location>/certificateTemplates/<template>.")
 
 	cmd.Flags().StringArrayVar(&oidcIDPs, "oidc-idp", nil,
 		"register an upstream OIDC IdP (repeatable). Format: 'name=corp,issuer=https://keycloak/realms/x,audience=omega-clients,template=spiffe://<td>/humans/{idp}/{preferred_username}'. The audience= key is required and takes one or more values separated by ';'; it is the set of `aud` values an incoming ID token must match, so tokens minted for other relying parties at the same issuer are rejected. Workloads call POST /v1/oidc/exchange with {idp, id_token, audience} to swap an external ID token for an omega JWT-SVID under the rendered SPIFFE ID.")

@@ -17,7 +17,7 @@ Cedar joined the CNCF Sandbox on 2025-10-08 and runs in production at Cloudflare
 
 | Area | What you get | Docs |
 | --- | --- | --- |
-| Identity | X.509-SVID and JWT-SVID over the SPIFFE Workload API, from the built-in CA, Vault PKI or step-ca, or consumed from an upstream SPIRE / Istio trust domain (`--identity-source=spire-upstream`) | [conformance-spiffe.md](docs/conformance-spiffe.md) |
+| Identity | X.509-SVID and JWT-SVID over the SPIFFE Workload API, from the built-in CA, Vault PKI, step-ca or Google Cloud CAS, or consumed from an upstream SPIRE / Istio trust domain (`--identity-source=spire-upstream`) | [conformance-spiffe.md](docs/conformance-spiffe.md) |
 | Authorization | AuthZEN 1.0 PDP with Cedar policies | [conformance-authzen.md](docs/conformance-authzen.md) |
 | Domains | A tree of namespaces (`media` → `media.news`) whose admins run their own subtree; policies use `principal in Domain::"media"` | [domains.md](docs/domains.md) |
 | Groups | Groups owned by a domain, with memberships that can expire; policies use `principal in Group::"media:oncall"` | [groups.md](docs/groups.md) |
@@ -128,7 +128,7 @@ Section-by-section audits live at [docs/conformance-spiffe.md](docs/conformance-
 | Layer                 | Standard                                                       | Status      |
 | --------------------- | -------------------------------------------------------------- | ----------- |
 | Workload identity     | SPIFFE / SPIRE compatible (X.509-SVID, JWT-SVID, Workload API) | implemented |
-| CA backend (Plugin)   | disk default + Vault PKI + step-ca + Azure Key Vault; AWS PCA / GCP CAS via the same `identity.Authority` seam | partial: disk + vault-pki + step-ca + azure-keyvault shipped |
+| CA backend (Plugin)   | disk default + Vault PKI + step-ca + GCP CAS + Azure Key Vault; AWS PCA via the same `identity.Authority` seam | partial: disk + vault-pki + step-ca + gcp-cas + azure-keyvault shipped |
 | Authorization         | OpenID AuthZEN 1.0                                             | implemented |
 | Federation            | SPIFFE federation (trust bundle exchange)                      | implemented |
 | Token binding         | RFC 8705 (mTLS-bound)                                          | implemented |

@@ -44,10 +44,23 @@ server:
   podLabels: {}
   # The CA that signs X.509-SVIDs and JWT-SVIDs (--ca-backend). "disk"
   # keeps a self-signed CA under dataDir, for evaluation. The chart
-  # configures disk and azure-keyvault; pass other backends' flags
-  # through extraArgs and leave this at disk.
+  # configures disk, gcp-cas and azure-keyvault; pass other backends'
+  # flags through extraArgs and leave this at disk.
   ca:
     backend: disk
+    # backend: gcp-cas signs through a Google Cloud Certificate Authority
+    # Service CA pool. Credentials come from Application Default
+    # Credentials: on GKE, bind the chart's ServiceAccount to a Google
+    # service account with Workload Identity (serviceAccount.annotations,
+    # iam.gke.io/gcp-service-account); elsewhere, set credentialsSecret to
+    # a Secret whose "credentials.json" key holds a credentials file. The
+    # pool's issuance policy must allow SAN passthrough.
+    gcpCas:
+      pool: ""                 # projects/<project>/locations/<location>/caPools/<pool>
+      endpoint: ""             # empty: https://privateca.googleapis.com
+      issuingCA: ""            # optional CA id inside the pool
+      certificateTemplate: ""  # optional projects/<p>/locations/<l>/certificateTemplates/<t>
+      credentialsSecret: ""
     # backend: azure-keyvault keeps the CA private key in Azure Key Vault
     # or Managed HSM; Omega signs through it. Credentials: Azure workload
     # identity (annotate the service account with

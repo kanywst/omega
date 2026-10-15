@@ -41,6 +41,20 @@ spec:
             - --http-addr={{ .Values.server.httpAddr }}
             - --trust-domain={{ .Values.server.trustDomain }}
             - --data-dir={{ .Values.server.dataDir }}
+            {{- if eq .Values.server.ca.backend "gcp-cas" }}
+            {{- with .Values.server.ca.gcpCas }}
+            - --ca-gcp-cas-pool={{ required "server.ca.gcpCas.pool is required when server.ca.backend is gcp-cas" .pool }}
+            {{- if .endpoint }}
+            - --ca-gcp-cas-endpoint={{ .endpoint }}
+            {{- end }}
+            {{- if .issuingCA }}
+            - --ca-gcp-cas-issuing-ca={{ .issuingCA }}
+            {{- end }}
+            {{- if .certificateTemplate }}
+            - --ca-gcp-cas-certificate-template={{ .certificateTemplate }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.server.policyDir }}
             - --policy-dir={{ .Values.server.policyDir }}
             {{- end }}
@@ -57,8 +71,8 @@ spec:
             - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
             {{- end }}
             {{- $ca := .Values.server.ca }}
-            {{- if not (has $ca.backend (list "disk" "azure-keyvault")) }}
-            {{- fail (printf "server.ca.backend %q is not configurable through the chart (supported: disk, azure-keyvault); use server.extraArgs for other backends" $ca.backend) }}
+            {{- if not (has $ca.backend (list "disk" "gcp-cas" "azure-keyvault")) }}
+            {{- fail (printf "server.ca.backend %q is not configurable through the chart (supported: disk, gcp-cas, azure-keyvault); use server.extraArgs for other backends" $ca.backend) }}
             {{- end }}
             {{- if ne $ca.backend "disk" }}
             - --ca-backend={{ $ca.backend }}
@@ -79,6 +93,11 @@ spec:
             {{- range .Values.server.extraArgs }}
             - {{ . | quote }}
             {{- end }}
+          {{- if and (eq .Values.server.ca.backend "gcp-cas") .Values.server.ca.gcpCas.credentialsSecret }}
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /etc/omega/gcp-cas/credentials.json
+          {{- end }}
           {{- if and (eq .Values.server.ca.backend "azure-keyvault") .Values.server.ca.azureKeyVault.credentialsSecret }}
           envFrom:
             - secretRef:
@@ -115,6 +134,11 @@ spec:
               mountPath: /etc/omega/bundle-signing
               readOnly: true
             {{- end }}
+            {{- if and (eq .Values.server.ca.backend "gcp-cas") .Values.server.ca.gcpCas.credentialsSecret }}
+            - name: gcp-cas-credentials
+              mountPath: /etc/omega/gcp-cas
+              readOnly: true
+            {{- end }}
             {{- range $i, $p := .Values.server.scimProviders }}
             - name: scim-{{ $i }}
               mountPath: /etc/omega/scim/{{ $p.name }}
@@ -129,8 +153,9 @@ spec:
       {{- $hasEmpty := not .Values.server.persistence.enabled -}}
       {{- $hasSCIM := gt (len .Values.server.scimProviders) 0 -}}
       {{- $hasSigning := .Values.server.policyBundleSigningKeySecret -}}
+      {{- $hasGCPCAS := and (eq .Values.server.ca.backend "gcp-cas") .Values.server.ca.gcpCas.credentialsSecret -}}
       {{- $hasAzureCA := and (eq .Values.server.ca.backend "azure-keyvault") .Values.server.ca.azureKeyVault.caCertSecret -}}
-      {{- if or $hasPolicy $hasEmpty $hasSCIM $hasSigning $hasAzureCA }}
+      {{- if or $hasPolicy $hasEmpty $hasSCIM $hasSigning $hasGCPCAS $hasAzureCA }}
       volumes:
         {{- if $hasPolicy }}
         - name: policy
@@ -148,6 +173,14 @@ spec:
             items:
               - key: bundle.key
                 path: bundle.key
+        {{- end }}
+        {{- if $hasGCPCAS }}
+        - name: gcp-cas-credentials
+          secret:
+            secretName: {{ .Values.server.ca.gcpCas.credentialsSecret }}
+            items:
+              - key: credentials.json
+                path: credentials.json
         {{- end }}
         {{- range $i, $p := .Values.server.scimProviders }}
         - name: scim-{{ $i }}
