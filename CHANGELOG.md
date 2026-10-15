@@ -14,6 +14,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 - **Google Cloud CAS backend.** `--ca-backend=gcp-cas` signs X.509-SVIDs through a Certificate Authority Service CA pool (`--ca-gcp-cas-pool`, plus optional `--ca-gcp-cas-endpoint`, `--ca-gcp-cas-issuing-ca` and `--ca-gcp-cas-certificate-template`), authenticating with Application Default Credentials; the bundle comes from the pool's CA certificates and JWT-SVIDs stay locally signed. The Helm chart gains `server.ca.backend` and `server.ca.gcpCas`. See [docs/ca-gcp-cas.md](docs/ca-gcp-cas.md).
 - **CA key in Azure Key Vault.** `--ca-backend=azure-keyvault` (`--ca-azure-keyvault-url`, `-key`, `-key-version`, `-ca-cert`) keeps the CA private key in Azure Key Vault or Managed HSM: Omega builds X.509-SVIDs and JWT-SVIDs itself and signs both through the key's `sign` operation (EC P-256), one round trip per SVID. The CA certificate is self-signed through Key Vault at first start or supplied as a file; credentials come from a service principal, workload identity or a managed identity. The Helm chart gains `server.ca` and `server.podLabels`. See [ADR 0021](docs/adr/0021-azure-key-vault-remote-signer.md) and [docs/ca-azure-keyvault.md](docs/ca-azure-keyvault.md).
 
+### Fixed
+
+- **Stricter checks on certificates from Vault PKI and step-ca.** An issued leaf must now carry exactly the requested SPIFFE ID as its only SAN, not be a CA, assert `digitalSignature` without `keyCertSign` or `cRLSign`, and chain to the bundle Omega serves, as the AWS Private CA and GCP CAS backends already require. A role or provisioner that adds other SANs now fails issuance instead of handing them to the workload.
+
 ## [0.9.0] - 2026-10-15
 
 Rotates the built-in CA at runtime, carries trust across Vault PKI and step-ca rotations on request, adds the SPIFFE CSI driver to the Helm chart, and makes the local PDP verify policy bundle signatures by default.

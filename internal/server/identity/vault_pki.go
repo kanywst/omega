@@ -244,24 +244,14 @@ func (a *vaultPKIAuthority) IssueSVID(id spiffeid.ID, csr *x509.CertificateReque
 	// upstream) could return a certificate whose SAN or public key
 	// is not what omega asked for. Reject mismatches before handing
 	// the SVID back to the workload.
-	if !bytes.Equal(cert.RawSubjectPublicKeyInfo, csr.RawSubjectPublicKeyInfo) {
-		return nil, errors.New("vault-pki: issued certificate public key does not match CSR")
-	}
-	wantURI := id.URL().String()
-	var haveURI bool
-	for _, u := range cert.URIs {
-		if u.String() == wantURI {
-			haveURI = true
-			break
-		}
-	}
-	if !haveURI {
-		return nil, fmt.Errorf("vault-pki: issued certificate URI SANs %v do not contain requested SPIFFE ID %q", cert.URIs, wantURI)
+	bundle := a.BundlePEM()
+	if err := checkUpstreamLeaf("vault-pki", cert, id, csr, bundle); err != nil {
+		return nil, err
 	}
 	return &SVID{
 		SPIFFEID:  id,
 		CertPEM:   []byte(out.Data.Certificate),
-		BundlePEM: a.BundlePEM(),
+		BundlePEM: bundle,
 		NotBefore: cert.NotBefore,
 		NotAfter:  cert.NotAfter,
 	}, nil
