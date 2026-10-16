@@ -266,3 +266,47 @@ func TestRequestIDIsOnTheServerSpan(t *testing.T) {
 		t.Error("the evaluation span is not in the request's trace")
 	}
 }
+
+// A PEP learns which policies Cedar skipped, but not Cedar's error
+// text, which can name what the policy reads; the audit row keeps it.
+func TestEvaluationErrorsReachThePEPAsPolicyIDsOnly(t *testing.T) {
+	pdp := policy.New()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.cedar"), []byte(`@id("all") permit (principal, action, resource);
+@id("needs-clearance") forbid (principal, action, resource) when { principal.clearance < 3 };
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := pdp.LoadDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	srv, store := newTestServerWithStore(t, pdp)
+
+	_, raw := postWithRequestID(t, srv.URL+"/access/v1/evaluation", accessCalls[0].body, "err-1")
+	var single map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &single); err != nil {
+		t.Fatal(err)
+	}
+	if string(single["context"]) != `{"reasons":["all"],"errors":[{"policy":"needs-clearance"}]}` {
+		t.Errorf("single evaluation context: %s", single["context"])
+	}
+	_, raw = postWithRequestID(t, srv.URL+"/access/v1/evaluations", accessCalls[1].body)
+	if !strings.Contains(string(raw), `"errors":[{"policy":"needs-clearance"}]`) || strings.Contains(string(raw), "message") {
+		t.Errorf("batch response: %s", raw)
+	}
+
+	events, err := store.ListAudit(t.Context(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		RequestID string              `json:"request_id"`
+		Response  policy.EvalResponse `json:"response"`
+	}
+	if err := json.Unmarshal(events[0].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.RequestID != "err-1" || p.Response.Context == nil || len(p.Response.Context.Errors) != 1 || p.Response.Context.Errors[0].Message == "" {
+		t.Errorf("audit row keeps the error message: %s", events[0].Payload)
+	}
+}

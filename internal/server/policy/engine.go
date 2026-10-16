@@ -228,14 +228,35 @@ type DecisionContext struct {
 	Reasons []string `json:"reasons,omitempty"`
 	// Errors are the policies Cedar skipped because evaluating them
 	// failed, for example on a missing attribute. A skipped forbid can
-	// turn a deny into an allow, so a PEP may want to see them.
+	// turn a deny into an allow, so a PEP may want to see them; it sees
+	// the policy ids only (see ForCaller).
 	Errors []PolicyError `json:"errors,omitempty"`
 }
 
 // PolicyError is one policy Cedar could not evaluate for a request.
+// Message is Cedar's error text, which can name entities and
+// attributes the policy reads; it is kept for the audit log and
+// stripped by ForCaller before a decision goes to a PEP.
 type PolicyError struct {
 	Policy  string `json:"policy"`
-	Message string `json:"message"`
+	Message string `json:"message,omitempty"`
+}
+
+// ForCaller is the response as a PEP sees it: the same decision and
+// policy ids, without Cedar's error messages, which would disclose
+// what a policy reads to callers that cannot read the policy. The
+// receiver is not modified, so the full response can still be audited.
+func (r EvalResponse) ForCaller() EvalResponse {
+	if r.Context == nil || len(r.Context.Errors) == 0 {
+		return r
+	}
+	c := *r.Context
+	c.Errors = make([]PolicyError, len(r.Context.Errors))
+	for i, e := range r.Context.Errors {
+		c.Errors[i] = PolicyError{Policy: e.Policy}
+	}
+	r.Context = &c
+	return r
 }
 
 // ActionEntityType is the Cedar entity type reserved for actions. An

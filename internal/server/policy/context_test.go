@@ -75,3 +75,29 @@ forbid (principal, action == Action::"PUT", resource) when { principal.level > 3
 		t.Errorf("default deny on the wire: got %s", raw)
 	}
 }
+
+func TestForCallerStripsMessagesOnly(t *testing.T) {
+	full := policy.EvalResponse{
+		Decision: true,
+		Reasons:  []string{"a"},
+		Context: &policy.DecisionContext{
+			Reasons: []string{"a"},
+			Errors:  []policy.PolicyError{{Policy: "b", Message: "entity does not have attribute clearance"}},
+		},
+	}
+	out := full.ForCaller()
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"decision":true,"context":{"reasons":["a"],"errors":[{"policy":"b"}]},"reasons":["a"]}` {
+		t.Errorf("for caller: %s", raw)
+	}
+	if full.Context.Errors[0].Message == "" {
+		t.Error("ForCaller must not modify the response it was called on, which is still audited")
+	}
+	none := policy.EvalResponse{Decision: false}
+	if got := none.ForCaller(); got.Context != nil {
+		t.Errorf("no context: %+v", got)
+	}
+}

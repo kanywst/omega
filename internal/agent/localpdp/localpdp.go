@@ -435,6 +435,8 @@ func (p *PDP) Sync(ctx context.Context) error {
 var ErrUnavailable = errors.New("local pdp unavailable")
 
 // Evaluate decides locally and queues the decision for the audit chain.
+// The response is the full one that is audited; pass it through
+// ForCaller before handing it to a PEP.
 func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 	return p.evaluate(req, "")
 }
@@ -690,7 +692,10 @@ func (p *PDP) Handler() http.Handler {
 			slog.Error("local pdp: evaluation failed", "err", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "evaluation failed"})
 		default:
-			writeJSON(w, http.StatusOK, resp)
+			// The full response, Cedar's error messages included, went
+			// to the audit chain with the decision; the PEP gets the
+			// policy ids only.
+			writeJSON(w, http.StatusOK, resp.ForCaller())
 		}
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

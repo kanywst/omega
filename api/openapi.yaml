@@ -2548,15 +2548,14 @@ components:
           description: |
             Policies Cedar skipped because evaluating them failed, for
             example on a missing attribute. A skipped `forbid` can turn
-            a deny into an allow.
+            a deny into an allow. Only the policy id is returned; the
+            error message is recorded in the decision's audit row.
           items:
             type: object
             additionalProperties: false
-            required: [policy, message]
+            required: [policy]
             properties:
               policy:
-                type: string
-              message:
                 type: string
 
     BatchEvalSubrequest:

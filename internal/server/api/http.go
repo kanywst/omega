@@ -817,7 +817,7 @@ func (s *Server) evaluateAccess(w http.ResponseWriter, r *http.Request) {
 			"response": resp,
 		})),
 	})
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, resp.ForCaller())
 }
 
 // BatchEvalSubrequest is one entry in a POST /access/v1/evaluations
@@ -986,7 +986,7 @@ func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
 				"batch": map[string]any{"index": i, "size": len(req.Evaluations), "semantic": semantic},
 			})),
 		})
-		out.Evaluations = append(out.Evaluations, resp)
+		out.Evaluations = append(out.Evaluations, resp.ForCaller())
 		if (semantic == SemanticDenyOnFirstDeny && !resp.Decision) ||
 			(semantic == SemanticPermitOnFirstPermit && resp.Decision) {
 			batchSpan.SetAttributes(attribute.Int("authzen.batch.evaluated", i+1))

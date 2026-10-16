@@ -10,7 +10,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ### Added
 
-- **AuthZEN request identification and decision context.** Every `/access/v1/*` endpoint, on the server and on the agent's local PDP, echoes the `X-Request-ID` header (AuthZEN 1.0 §10.1.3) and records it as `request_id` in the audit row of each decision; it is also set on the server span. An id that is not one value of 1 to 128 bytes of letters, digits and `-._~:/+=@;` is a `400`. Decisions, including each entry of a batch, now carry the optional response `context` (§5.5.1, §6.2): `reasons` lists the policies that determined the decision and `errors` the policies Cedar skipped because evaluating them failed. The top-level `reasons` stays. See [docs/conformance-authzen.md](docs/conformance-authzen.md).
+- **AuthZEN request identification and decision context.** Every `/access/v1/*` endpoint, on the server and on the agent's local PDP, echoes the `X-Request-ID` header (AuthZEN 1.0 §10.1.3) and records it as `request_id` in the audit row of each decision; it is also set on the server span. An id that is not one value of 1 to 128 bytes of letters, digits and `-._~:/+=@;` is a `400`. Decisions, including each entry of a batch, now carry the optional response `context` (§5.5.1, §6.2): `reasons` lists the policies that determined the decision and `errors` the ids of the policies Cedar skipped because evaluating them failed; Cedar's error messages are recorded in the audit row only. The top-level `reasons` stays. See [docs/conformance-authzen.md](docs/conformance-authzen.md).
 
 ## [0.11.0] - 2026-10-16
 
