@@ -208,11 +208,55 @@ type EvalRequest struct {
 	Context  map[string]any `json:"context,omitempty"`
 }
 
-// EvalResponse is the AuthZEN decision response. The optional
-// `context` field defined by AuthZEN is intentionally omitted.
+// EvalResponse is the AuthZEN decision response. Reasons predates the
+// response context and is kept at the top level for existing callers;
+// Context carries the same policy ids where AuthZEN 1.0 §5.5.1 puts
+// PDP-defined data, plus any policy that failed to evaluate.
 type EvalResponse struct {
-	Decision bool     `json:"decision"`
-	Reasons  []string `json:"reasons,omitempty"`
+	Decision bool             `json:"decision"`
+	Context  *DecisionContext `json:"context,omitempty"`
+	Reasons  []string         `json:"reasons,omitempty"`
+}
+
+// DecisionContext is the `context` object of an AuthZEN decision
+// (§5.5.1). Its shape is omega's own: the spec leaves the keys to the
+// PDP. It is nil when there is nothing to say, which is a deny that no
+// policy matched and no policy errored on.
+type DecisionContext struct {
+	// Reasons are the ids of the policies that determined the decision:
+	// the permits for an allow, the forbids for a deny.
+	Reasons []string `json:"reasons,omitempty"`
+	// Errors are the policies Cedar skipped because evaluating them
+	// failed, for example on a missing attribute. A skipped forbid can
+	// turn a deny into an allow, so a PEP may want to see them; it sees
+	// the policy ids only (see ForCaller).
+	Errors []PolicyError `json:"errors,omitempty"`
+}
+
+// PolicyError is one policy Cedar could not evaluate for a request.
+// Message is Cedar's error text, which can name entities and
+// attributes the policy reads; it is kept for the audit log and
+// stripped by ForCaller before a decision goes to a PEP.
+type PolicyError struct {
+	Policy  string `json:"policy"`
+	Message string `json:"message,omitempty"`
+}
+
+// ForCaller is the response as a PEP sees it: the same decision and
+// policy ids, without Cedar's error messages, which would disclose
+// what a policy reads to callers that cannot read the policy. The
+// receiver is not modified, so the full response can still be audited.
+func (r EvalResponse) ForCaller() EvalResponse {
+	if r.Context == nil || len(r.Context.Errors) == 0 {
+		return r
+	}
+	c := *r.Context
+	c.Errors = make([]PolicyError, len(r.Context.Errors))
+	for i, e := range r.Context.Errors {
+		c.Errors[i] = PolicyError{Policy: e.Policy}
+	}
+	r.Context = &c
+	return r
 }
 
 // ActionEntityType is the Cedar entity type reserved for actions. An
@@ -304,6 +348,12 @@ func (e *Engine) EvaluateRevision(req EvalRequest) (EvalResponse, string, error)
 	resp := EvalResponse{Decision: bool(ok)}
 	for _, r := range diag.Reasons {
 		resp.Reasons = append(resp.Reasons, string(r.PolicyID))
+	}
+	if len(diag.Reasons) > 0 || len(diag.Errors) > 0 {
+		resp.Context = &DecisionContext{Reasons: resp.Reasons}
+		for _, e := range diag.Errors {
+			resp.Context.Errors = append(resp.Context.Errors, PolicyError{Policy: string(e.PolicyID), Message: e.Message})
+		}
 	}
 	return resp, rev, nil
 }

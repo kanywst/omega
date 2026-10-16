@@ -249,10 +249,13 @@ func (p *PDP) rewriteSpoolLocked() error {
 }
 
 type decision struct {
-	ID        string              `json:"id"`
-	DecidedAt time.Time           `json:"decided_at"`
-	Request   policy.EvalRequest  `json:"request"`
-	Response  policy.EvalResponse `json:"response"`
+	ID        string    `json:"id"`
+	DecidedAt time.Time `json:"decided_at"`
+	// The PEP's request id in policy.RequestIDForAudit's form.
+	RequestID       string              `json:"request_id,omitempty"`
+	RequestIDSHA256 string              `json:"request_id_sha256,omitempty"`
+	Request         policy.EvalRequest  `json:"request"`
+	Response        policy.EvalResponse `json:"response"`
 }
 
 // queued is a decision encoded for shipping, with the bundle revision
@@ -434,7 +437,15 @@ func (p *PDP) Sync(ctx context.Context) error {
 var ErrUnavailable = errors.New("local pdp unavailable")
 
 // Evaluate decides locally and queues the decision for the audit chain.
+// The response is the full one that is audited; pass it through
+// ForCaller before handing it to a PEP.
 func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
+	return p.evaluate(req, "")
+}
+
+// evaluate is Evaluate with the caller's AuthZEN request id, which is
+// recorded with the decision so the audit row carries it.
+func (p *PDP) evaluate(req policy.EvalRequest, requestID string) (policy.EvalResponse, error) {
 	// Check freshness and take a buffer slot in one step, so concurrent
 	// callers cannot all pass the check and overrun the buffer.
 	p.mu.Lock()
@@ -464,7 +475,8 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 		return policy.EvalResponse{}, err
 	}
 	id := newID()
-	raw, err := json.Marshal(decision{ID: id, DecidedAt: time.Now().UTC(), Request: req, Response: resp})
+	plainID, digestID := policy.RequestIDForAudit(requestID)
+	raw, err := json.Marshal(decision{ID: id, DecidedAt: time.Now().UTC(), RequestID: plainID, RequestIDSHA256: digestID, Request: req, Response: resp})
 	if err != nil {
 		return policy.EvalResponse{}, err
 	}
@@ -646,6 +658,13 @@ func (p *PDP) Status() (revision string, synced time.Time, pending int) {
 func (p *PDP) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /access/v1/evaluation", func(w http.ResponseWriter, r *http.Request) {
+		// AuthZEN 1.0 §10.1.3, as on the control plane: the id is
+		// echoed unchanged on every response and recorded with the
+		// decision in policy.RequestIDForAudit's form.
+		requestID := policy.RequestIDFrom(r.Header)
+		if requestID != "" {
+			w.Header().Set(policy.RequestIDHeader, requestID)
+		}
 		var req policy.EvalRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxRequestBytes)).Decode(&req); err != nil {
 			code := http.StatusBadRequest
@@ -661,7 +680,7 @@ func (p *PDP) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		resp, err := p.Evaluate(req)
+		resp, err := p.evaluate(req, requestID)
 		switch {
 		case errors.Is(err, ErrUnavailable):
 			w.Header().Set("Retry-After", "5")
@@ -670,7 +689,10 @@ func (p *PDP) Handler() http.Handler {
 			slog.Error("local pdp: evaluation failed", "err", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "evaluation failed"})
 		default:
-			writeJSON(w, http.StatusOK, resp)
+			// The full response, Cedar's error messages included, went
+			// to the audit chain with the decision; the PEP gets the
+			// policy ids only.
+			writeJSON(w, http.StatusOK, resp.ForCaller())
 		}
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
