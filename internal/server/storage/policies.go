@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -174,4 +175,35 @@ func (s *Store) ChangePolicy(ctx context.Context, id string, change PolicyChange
 	}
 	s.auditCommitted()
 	return next, ev, nil
+}
+
+// PolicyAuditDigests returns, for every policy id the audit chain has
+// recorded a change for, the digest of the text its latest change left
+// in place ("" after a delete). Comparing it with the stored rows shows
+// a policy edited, added or removed in the database behind the API.
+func (s *Store) PolicyAuditDigests(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT subject, payload FROM audit_log
+		WHERE kind IN ('policy.create', 'policy.update', 'policy.delete') AND decision = 'ok' ORDER BY seq`)
+	if err != nil {
+		return nil, fmt.Errorf("query policy audit: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var (
+			id      string
+			payload []byte
+		)
+		if err := rows.Scan(&id, &payload); err != nil {
+			return nil, fmt.Errorf("scan policy audit: %w", err)
+		}
+		var p struct {
+			NewDigest string `json:"new_digest"`
+		}
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return nil, fmt.Errorf("policy audit row for %q: %w", id, err)
+		}
+		out[id] = p.NewDigest
+	}
+	return out, rows.Err()
 }

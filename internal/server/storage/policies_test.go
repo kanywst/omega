@@ -110,3 +110,26 @@ func TestPolicyWritesNeedLeader(t *testing.T) {
 		t.Fatalf("follower: %v", err)
 	}
 }
+
+func TestPolicyAuditDigests(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	for _, ev := range []storage.AuditEvent{
+		{Kind: "policy.create", Subject: "a", Decision: "ok", Payload: []byte(`{"new_digest":"d1"}`)},
+		{Kind: "policy.update", Subject: "a", Decision: "ok", Payload: []byte(`{"new_digest":"d2"}`)},
+		{Kind: "policy.create", Subject: "b", Decision: "deny", Payload: []byte(`{"reason":"no"}`)},
+		{Kind: "policy.create", Subject: "c", Decision: "ok", Payload: []byte(`{"new_digest":"d3"}`)},
+		{Kind: "policy.delete", Subject: "c", Decision: "ok", Payload: []byte(`{"new_digest":""}`)},
+	} {
+		if _, err := s.AppendAudit(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.PolicyAuditDigests(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["a"] != "d2" || got["c"] != "" {
+		t.Fatalf("digests %v", got)
+	}
+}

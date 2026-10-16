@@ -388,3 +388,40 @@ func TestStoredPoliciesReachAnotherReplica(t *testing.T) {
 		t.Fatal("the replica must drop the deleted policy on its next sync")
 	}
 }
+
+func TestStoredPoliciesMustMatchTheAuditChain(t *testing.T) {
+	behind := func(t *testing.T, env *domainEnv, id, text string) {
+		t.Helper()
+		if _, _, err := env.store.ChangePolicy(t.Context(), id, func(*storage.Policy) (*storage.Policy, storage.AuditEvent, error) {
+			if text == "" {
+				return nil, storage.AuditEvent{Kind: "test"}, nil
+			}
+			return &storage.Policy{Text: text}, storage.AuditEvent{Kind: "test"}, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, tamper := range map[string]func(*testing.T, *domainEnv){
+		"edited":  func(t *testing.T, env *domainEnv) { behind(t, env, "x", alicePermit2) },
+		"removed": func(t *testing.T, env *domainEnv) { behind(t, env, "x", "") },
+		"added":   func(t *testing.T, env *domainEnv) { behind(t, env, "y", alicePermit2) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newDomainEnv(t, "")
+			root := env.as(t, rootAdmin)
+			if code, body := call(t, root, "POST", env.srv.URL+"/v1/policies", api.PolicyRequest{ID: "x", Text: alicePermit}); code != http.StatusCreated {
+				t.Fatalf("create: %d %s", code, body)
+			}
+			if err := env.api.RefreshDirectory(t.Context()); err != nil {
+				t.Fatalf("an untouched set must load: %v", err)
+			}
+			tamper(t, env)
+			if err := env.api.RefreshDirectory(t.Context()); !errors.Is(err, api.ErrStoredPolicySet) {
+				t.Fatalf("a set the audit chain does not account for must not load: %v", err)
+			}
+			if r := evalAs(t, env, root, alice, "read"); !r.Decision || evalAs(t, env, root, alice, "write").Decision {
+				t.Fatal("the last set that loaded must stay in force")
+			}
+		})
+	}
+}

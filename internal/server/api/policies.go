@@ -89,9 +89,18 @@ func (s *Server) loadStoredPolicies(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	recorded, err := s.store.PolicyAuditDigests(ctx)
+	if err != nil {
+		return err
+	}
 	set := make(map[string]string, len(items))
 	for _, p := range items {
 		set[p.ID] = p.Text
+	}
+	if err := matchAuditChain(items, recorded); err != nil {
+		metrics.StoredPolicySetLoadFailures.Inc()
+		slog.Error("stored policies differ from the audit chain; keeping the last set that loaded", "err", err)
+		return fmt.Errorf("%w: %v", ErrStoredPolicySet, err)
 	}
 	if err := s.policy.SetStoredPolicies(set); err != nil {
 		metrics.StoredPolicySetLoadFailures.Inc()
@@ -99,6 +108,25 @@ func (s *Server) loadStoredPolicies(ctx context.Context) error {
 		return fmt.Errorf("%w: %v", ErrStoredPolicySet, err)
 	}
 	metrics.StoredPolicies.Set(float64(len(set)))
+	return nil
+}
+
+// matchAuditChain checks the stored policies against what the audit
+// chain says the API last wrote, so a policy edited, added or removed in
+// the database behind the API is not enforced.
+func matchAuditChain(items []storage.Policy, recorded map[string]string) error {
+	stored := make(map[string]bool, len(items))
+	for _, p := range items {
+		stored[p.ID] = true
+		if want := recorded[p.ID]; want != p.Digest {
+			return fmt.Errorf("policy %q has digest %s, but the audit chain last recorded %q", p.ID, p.Digest, want)
+		}
+	}
+	for id, digest := range recorded {
+		if digest != "" && !stored[id] {
+			return fmt.Errorf("policy %q is in the audit chain but not in the database", id)
+		}
+	}
 	return nil
 }
 

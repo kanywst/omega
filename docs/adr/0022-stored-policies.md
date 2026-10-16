@@ -15,7 +15,8 @@ Until now Cedar policies came only from `--policy-dir`, a directory of files eac
 3. **Only root admins write, only with authentication.** Writes need `--require-auth` and a caller listed with `--domain-root-admin`. A Cedar policy is not scoped to a domain, so a domain admin's grant does not extend to it. Writes are leader-only. Reads need an authenticated caller under `--require-auth` and are served by followers.
 4. **Change and record commit together.** Each write and its audit row (`policy.create`, `policy.update`, `policy.delete`, with the old and new digests) are written in one transaction, as SCIM changes are (ADR 0017). Updates need `If-Match` with the policy's ETag, so concurrent edits fail with `412` instead of overwriting each other.
 5. **Replicas and nodes follow the database.** Every replica reloads the stored set with the domain tree every five seconds, and the leader right after a write. The policy bundle carries stored policies, so node agents' local PDPs (ADR 0016) see them on their next sync.
-6. **A set that does not load keeps the last one and fails closed.** The leader validates before it stores, so a set that fails to load on a replica means it disagrees with the database. The replica keeps the last set that loaded, logs, counts the failure in a metric, and lets the projected directory go stale, so evaluation fails closed after fifteen seconds as it does for an unreadable domain tree. Keeping the last set forever would silently ignore every later change, a new `forbid` included. A server whose first load fails still starts, so the API can fix the policy.
+6. **The stored set must match the audit chain.** On every load a replica compares each stored policy's digest with the `new_digest` of the latest change the chain records for its id, and checks that no policy the chain says is in place is missing. A policy edited, added or removed in the database behind the API does not load.
+7. **A set that does not load keeps the last one and fails closed.** The leader validates before it stores, so a set that fails to load on a replica means it disagrees with the database or the chain. The replica keeps the last set that loaded, logs, counts the failure in a metric, and lets the projected directory go stale, so evaluation fails closed after fifteen seconds as it does for an unreadable domain tree. Keeping the last set forever would silently ignore every later change, a new `forbid` included. A server whose first load fails still starts, so the API can fix the policy.
 
 ## Consequences
 
@@ -27,7 +28,7 @@ Easier:
 
 Harder:
 
-- Policy text now lives in the database, so database write access reaches the policy set directly, bypassing the API and its audit row (T2). The residual risk is the same as for domains and groups.
+- Policy text now lives in the database. An edit made there behind the API does not load, because it no longer matches the audit chain, but it does make every replica fail closed until an admin restores or deletes the policy through the API (T2). An attacker who can also append a matching row to the chain is stopped only by the audit HMAC keyring and `GET /v1/audit/verify`.
 - Delegating policy authorship to domain admins would need proof that a policy only governs the admin's subtree. That is not attempted; root admins write every stored policy.
 - Validation is syntactic plus id collisions. There is no Cedar schema in Omega, so a policy that names an attribute no entity has is accepted and simply never matches.
 - One stored policy that fails to load on a replica makes that replica fail closed until the policy is fixed or deleted.

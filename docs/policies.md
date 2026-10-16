@@ -33,7 +33,7 @@ Each stored policy has a `version` that starts at 1 and grows by one per update,
 
 ## Audit
 
-Every write and its audit row commit in one database transaction, so a change is never kept without its record. The row has the kind `policy.create`, `policy.update` or `policy.delete`, the caller as actor, the policy id as subject, and a payload with the id, `old_digest`, `new_digest` (empty on create and delete respectively), the new `version`, and the Cedar policy ids the text defines. The text itself is not in the row; the digests identify which text was in force, and the API serves the current text.
+Every write and its audit row commit in one database transaction, so a change is never kept without its record. Each time a replica loads the stored set it checks it against the chain: every stored policy's digest must equal the `new_digest` of the latest change the chain records for its id, and every id whose latest change left a policy in place must still be stored. A policy edited, added or removed in the database behind the API therefore does not load (see below). The row has the kind `policy.create`, `policy.update` or `policy.delete`, the caller as actor, the policy id as subject, and a payload with the id, `old_digest`, `new_digest` (empty on create and delete respectively), the new `version`, and the Cedar policy ids the text defines. The text itself is not in the row; the digests identify which text was in force, and the API serves the current text.
 
 ## Reaching every replica and node
 
@@ -58,7 +58,7 @@ The leader reloads the stored set right after a write. Every replica reloads it 
 
 ## When the stored set does not load
 
-The leader only stores a policy that loads, but the stored set can still fail to load on a replica: a row written to the database outside the API, a replica whose `--policy-dir` defines an id a stored policy also defines, or a server older than the row. Then the replica keeps the last set that loaded, logs the error, increments `omega_stored_policy_set_load_failures_total`, and does not mark the projected directory fresh. Evaluation keeps the last good set for up to fifteen seconds and then fails closed with `503`, as it does when the domain tree cannot be reloaded; a failed reload right after a write fails closed at once. When the first load at startup fails, the server still starts, with evaluation failing closed, so that an admin can fix or delete the policy through the API. `omega_stored_policies` reports how many stored policies the engine last loaded.
+The leader only stores a policy that loads, but the stored set can still fail to load on a replica: a row written, changed or removed in the database outside the API (it no longer matches the audit chain), a replica whose `--policy-dir` defines an id a stored policy also defines, or a server older than the row. Then the replica keeps the last set that loaded, logs the error, increments `omega_stored_policy_set_load_failures_total`, and does not mark the projected directory fresh. Evaluation keeps the last good set for up to fifteen seconds and then fails closed with `503`, as it does when the domain tree cannot be reloaded; a failed reload right after a write fails closed at once. When the first load at startup fails, the server still starts, with evaluation failing closed, so that an admin can fix or delete the policy through the API. `omega_stored_policies` reports how many stored policies the engine last loaded.
 
 ## Walkthrough
 
