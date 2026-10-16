@@ -8,6 +8,12 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-16
+
+Makes the upstream CA overlap durable: the CAs kept from a Vault PKI, step-ca or AWS Private CA rotation survive restarts and are shared by replicas, each stored row authenticated under the audit HMAC key, and `spiffe_sequence` never goes back after a restart for any backend. Adds an issuing-CA-only trust bundle for AWS Private CA.
+
+No breaking changes. The overlap is stored only with `--audit-hmac-key-file`; without it the kept set stays in memory as before and the server warns at start when `--upstream-ca-grace` is set. The server now refuses to start if it cannot read the stored `spiffe_sequence`, rather than restarting it at 1.
+
 ### Added
 
 - **Issuing-CA-only bundle for AWS Private CA.** `--ca-aws-pca-bundle=issuing` (Helm: `server.ca.awsPCA.bundle`) serves only the issuing CA as the trust anchor, instead of the issuing CA plus the chain to the root, so certificates from other subordinates of the same root no longer verify for the trust domain. Peers and federation partners must accept a CA that is not self-signed as an anchor. The default, `chain`, keeps the current behavior. See [docs/ca-aws-pca.md](docs/ca-aws-pca.md#trust-bundle).
@@ -949,7 +955,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/kanywst/omega/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/kanywst/omega/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kanywst/omega/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kanywst/omega/compare/v0.7.0...v0.8.0
