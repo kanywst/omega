@@ -1,7 +1,10 @@
 package identity
 
 import (
+	"context"
 	"errors"
+	"math"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -201,5 +204,15 @@ func TestDurableSequenceStoreFailures(t *testing.T) {
 	src.jwtErr = errors.New("no keys")
 	if _, err := NewDurableSequence(src, store, "omega.local"); err == nil {
 		t.Fatal("started without numbering the trust bundle")
+	}
+}
+
+func TestDurableSequenceRefusesAnOutOfRangeStoredValue(t *testing.T) {
+	store := NewMemCAStore()
+	if err := store.SaveBundleSequence(context.Background(), "omega.local", math.MaxInt64-1, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewDurableSequence(newFakeMaterial("A"), store, "omega.local"); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("continued from a stored sequence near overflow: %v", err)
 	}
 }

@@ -76,6 +76,7 @@ type caOverlap struct {
 	grace      time.Duration
 	mu         sync.Mutex
 	deliverMu  sync.Mutex
+	saveMu     sync.Mutex
 	loaded     bool
 	fetched    []*x509.Certificate
 	current    map[[32]byte]*x509.Certificate
@@ -145,28 +146,44 @@ func (o *caOverlap) unlock() {
 	}
 	o.deliverMu.Lock()
 	o.mu.Unlock()
-	defer o.deliverMu.Unlock()
 	if hook != nil {
 		for _, e := range events {
 			hook(e)
 		}
 	}
+	o.deliverMu.Unlock()
+	if save {
+		o.save(st, snapshot, version)
+	}
+}
+
+// save writes one snapshot. It runs outside every lock a bundle read
+// takes; one save at a time, and a caller that finds one in flight
+// skips, since the version left unsaved makes the next change or
+// refresh try again. A snapshot older than the one already saved is
+// never written over it.
+func (o *caOverlap) save(st *caStore, snapshot []UpstreamCA, version int64) {
+	if !o.saveMu.TryLock() {
+		return
+	}
+	defer o.saveMu.Unlock()
+	if version <= o.saved.Load() {
+		return
+	}
 	// A follower's store refuses the write before any I/O; trying again
 	// on each change is what lets a replica that becomes the leader
 	// store its state.
-	if save {
-		ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
-		err := st.store.SaveUpstreamCAs(ctx, st.trustDomain, st.backend, snapshot)
-		cancel()
-		switch {
-		case err == nil:
-			o.saved.Store(version)
-		case errors.Is(err, ErrStoreNotLeader):
-			// The leader stores the set; this replica reads it.
-		default:
-			// Not marked saved, so the next change or refresh tries again.
-			slog.Warn("identity: could not store the upstream CAs; a restart before the next save loses the latest change", "err", err)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	err := st.store.SaveUpstreamCAs(ctx, st.trustDomain, st.backend, snapshot)
+	cancel()
+	switch {
+	case err == nil:
+		o.saved.Store(version)
+	case errors.Is(err, ErrStoreNotLeader):
+		// The leader stores the set; this replica reads it.
+	default:
+		// Not marked saved, so the next change or refresh tries again.
+		slog.Warn("identity: could not store the upstream CAs; a restart before the next save loses the latest change", "err", err)
 	}
 }
 

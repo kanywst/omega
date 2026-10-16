@@ -61,6 +61,10 @@ type DurableSequence struct {
 // sequence.
 const sequenceRecheck = 30 * time.Second
 
+// maxStoredSequence bounds a stored spiffe_sequence Omega will continue
+// from.
+const maxStoredSequence = 1 << 48
+
 // NewDurableSequence returns the spiffe_sequence of src's trust material
 // in trustDomain, kept in store. It reads the store once to number the
 // current material, and fails if it cannot: starting from 1 instead
@@ -118,6 +122,12 @@ func (d *DurableSequence) number(digest string, srcSeq int64) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
 	stored, storedDigest, err := d.store.LoadBundleSequence(ctx, d.trustDomain)
+	if err == nil && (stored < 0 || stored > maxStoredSequence) {
+		// No run of trust material changes gets near this; a value
+		// beyond it was written by something other than Omega, and
+		// adding to it could overflow.
+		err = fmt.Errorf("stored spiffe_sequence %d is out of range", stored)
+	}
 	d.mu.Lock()
 	if err != nil {
 		d.retryAt = d.now().Add(sequenceRecheck)
