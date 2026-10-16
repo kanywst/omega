@@ -85,8 +85,11 @@ func (s *Server) getPolicyBundle(w http.ResponseWriter, r *http.Request) {
 
 // LocalDecision is one decision a local evaluator made.
 type LocalDecision struct {
-	ID        string              `json:"id"`
-	DecidedAt time.Time           `json:"decided_at"`
+	ID        string    `json:"id"`
+	DecidedAt time.Time `json:"decided_at"`
+	// RequestID is the AuthZEN request id the PEP sent the local PDP,
+	// if any; held to the same rules as one sent to this server.
+	RequestID string              `json:"request_id,omitempty"`
 	Request   policy.EvalRequest  `json:"request"`
 	Response  policy.EvalResponse `json:"response"`
 }
@@ -147,6 +150,10 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d needs an id of at most 128 bytes and decided_at", i))
 			return
 		}
+		if d.RequestID != "" && !policy.ValidRequestID(d.RequestID) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d: request_id must be 1 to %d bytes of letters, digits and -._~:/+=@;", i, policy.MaxRequestIDBytes))
+			return
+		}
 		if err := policy.Validate(d.Request); err != nil {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d: %w", i, err))
 			return
@@ -166,14 +173,18 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 		if d.Response.Decision {
 			decision = "allow"
 		}
-		payload, err := json.Marshal(map[string]any{
+		fields := map[string]any{
 			"request":         d.Request,
 			"response":        d.Response,
 			"source":          "local",
 			"decision_id":     d.ID,
 			"decided_at":      d.DecidedAt.UTC(),
 			"bundle_revision": batch.BundleRevision,
-		})
+		}
+		if d.RequestID != "" {
+			fields["request_id"] = d.RequestID
+		}
+		payload, err := json.Marshal(fields)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return

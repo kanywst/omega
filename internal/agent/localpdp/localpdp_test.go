@@ -882,3 +882,66 @@ func TestLocalPDPSpoolDropsShippedDecisionsEvenWhenThePendingCountIsUnchanged(t 
 		t.Fatal("the decision made during the flush must stay in the spool")
 	}
 }
+
+// The local PDP serves the same AuthZEN 1.0 §10.1.3 contract as the
+// control plane, and the id reaches the central audit row.
+func TestLocalPDPEchoesAndRecordsTheRequestID(t *testing.T) {
+	cp := newControlPlane(t, `@id("all") permit (principal, action, resource);`)
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.client})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h := httptest.NewServer(p.Handler())
+	t.Cleanup(h.Close)
+	body, _ := json.Marshal(evalReq("spiffe://omega.local/media/web", "read"))
+	post := func(ids ...string) (*http.Response, map[string]json.RawMessage) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, h.URL+"/access/v1/evaluation", bytes.NewReader(body))
+		for _, id := range ids {
+			req.Header.Add(policy.RequestIDHeader, id)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]json.RawMessage
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp, out
+	}
+
+	resp, out := post("pep-42")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get(policy.RequestIDHeader) != "pep-42" {
+		t.Fatalf("valid id: %d, echoed %q", resp.StatusCode, resp.Header.Get(policy.RequestIDHeader))
+	}
+	if string(out["context"]) != `{"reasons":["all"]}` {
+		t.Errorf("local decision context: %s", out["context"])
+	}
+	for _, bad := range [][]string{{"no spaces"}, {"a", "b"}, {strings.Repeat("x", policy.MaxRequestIDBytes+1)}} {
+		resp, _ := post(bad...)
+		if resp.StatusCode != http.StatusBadRequest || len(resp.Header.Values(policy.RequestIDHeader)) != 0 {
+			t.Errorf("id %q: %d, echoed %q; want 400 without an echo", bad, resp.StatusCode, resp.Header.Values(policy.RequestIDHeader))
+		}
+	}
+	if _, _, pending := p.Status(); pending != 1 {
+		t.Fatalf("pending: %d, want only the accepted request", pending)
+	}
+
+	if err := p.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	events, err := cp.store.ListAudit(ctx, 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == "access.evaluate.local" && strings.Contains(string(ev.Payload), `"request_id":"pep-42"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the central audit row of a local decision carries the PEP's request id")
+	}
+}

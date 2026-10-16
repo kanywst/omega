@@ -25,7 +25,7 @@ Section numbers below are the Final Specification's own. Earlier revisions of th
 | 5.2 | Resource is `{type, id, properties?}` | implemented | `policy.EvalRequest.Resource` |
 | 5.3 | Action is `{name, properties?}` | implemented | `policy.EvalRequest.Action`; maps to Cedar's `Action::"name"` |
 | 5.4 | Context is a free-form JSON object | implemented | `policy.EvalRequest.Context map[string]any`. Values are bridged to Cedar primitives; a fractional number is rejected rather than truncated, because Cedar has no float type |
-| 5.5 | Decision is a boolean, with optional decision context | partial | `policy.EvalResponse.Decision` is the boolean. omega emits `reasons` (the policy ids that produced the decision) but not the free-form response `context` |
+| 5.5 | Decision is a boolean, with optional decision context | implemented | `policy.EvalResponse.Decision` is the boolean; `context` is `policy.DecisionContext`, described under §6.2 |
 
 ## §6: Access Evaluation API (`POST /access/v1/evaluation`)
 
@@ -34,7 +34,7 @@ Section numbers below are the Final Specification's own. Earlier revisions of th
 | 6.1 | Request carries exactly one subject, one action, one resource | implemented | enforced by the JSON schema in `api/openapi.yaml`; handler is `evaluateAccess` in `internal/server/api/http.go` |
 | 6.2 | Response is `{decision, context?, reasons?}` with a boolean `decision` | implemented | `policy.EvalResponse`; Cedar is the default PDP |
 | 6.2 | `reasons` (optional) lists policy identifiers | implemented | `policy.EvalResponse.Reasons`, stable ids resolved from `@id(...)` or a filename-stem prefix |
-| 6.2 | `context` (optional) carries PDP-defined data on the response | partial | not emitted; `reasons` covers the explainability use case |
+| 6.2 | `context` (optional) carries PDP-defined data on the response | implemented | `context.reasons` lists the ids of the policies that determined the decision (the permits for an allow, the forbids for a deny) and `context.errors` lists `{policy, message}` for each policy Cedar skipped because evaluating it failed, since a skipped `forbid` can turn a deny into an allow. A default deny with no matching or failing policy has nothing to explain and omits `context`, so it is the minimal §5.5 Decision. The local PDP emits the same object |
 
 ## §7: Access Evaluations API (`POST /access/v1/evaluations`)
 
@@ -43,7 +43,8 @@ Section numbers below are the Final Specification's own. Earlier revisions of th
 | 7.1 | Endpoint accepts a batch request, returns an ordered list of decisions | implemented | `evaluateAccessBatch` |
 | 7.1.1 | Top-level subject / action / resource / context act as defaults | implemented | merged in `mergeBatchEval`; per-evaluation override wins, and a required field still missing after the merge is a 400 |
 | 7.1.2 | Evaluations options | implemented | `options.evaluations_semantic` accepts `execute_all` (default), `deny_on_first_deny` and `permit_on_first_permit`; a short circuit truncates the response after the stopping decision, as in the spec's examples. Other `options` keys are ignored; an unknown semantic is a 400 rather than a silent `execute_all`. Every entry is merged and validated before the first is evaluated, so whether a malformed entry fails the batch does not depend on where it would have stopped |
-| 7.2 | Response is a parallel array under `evaluations` | implemented | `BatchEvalResponse.Evaluations` preserves request order |
+| 7.2 | Response is a parallel array under `evaluations` | implemented | `BatchEvalResponse.Evaluations` preserves request order. Each entry is a full Decision, so it carries its own `context` as in §6.2 |
+| 7.2.1 | Errors pertaining to the whole payload are transport errors; errors in one evaluation go in that entry's `context` | implemented | every entry is merged and validated before any is evaluated, so a malformed entry is a `400` for the whole payload and no entry is decided. An entry that evaluates carries the policies Cedar could not evaluate for it in its own `context.errors`, in omega's `{policy, message}` shape (the spec's `{status, message}` example is non-normative) |
 | 7.2 | Maximum batch size is implementation-defined | implemented | capped at 100 per `MaxBatchEvaluations`; `maxItems: 100` reflected in the OpenAPI schema |
 | n/a | Per-decision audit (implementation-defined) | implemented | one `access.evaluate` audit row per merged sub-request; payload carries `{request, response, batch:{index,size,semantic}}`; a short-circuited batch writes rows only for the entries it evaluated |
 
@@ -58,6 +59,7 @@ Section numbers below are the Final Specification's own. Earlier revisions of th
 | 8.2.2 | `next_token` is REQUIRED and MUST be empty on the last page | implemented | `SearchPageResponse.NextToken` has no `omitempty` |
 | 8.2.2 | `total` (optional) | not applicable | never emitted; see the deviation note |
 | 8.3 | Response carries `results` | implemented | `SubjectSearchResponse` / `ResourceSearchResponse` / `ActionSearchResponse` |
+| 8.3 | `context` (optional) on a search response | not applicable | not emitted. §8.3 defines one `context` for the whole response and none per result, and the per-candidate decisions it would summarize are in the audit log, each with its `request_id` |
 | 8.4 | `POST /access/v1/search/subject` | implemented | pattern shape (`subject: {type}`) under `--authzen-search-entity-store`; candidate list (`subjects: [...]`) always |
 | 8.4.1 | Subject `id` SHOULD be omitted and MUST be ignored if present | implemented | only `subject.type` is read |
 | 8.5 | `POST /access/v1/search/resource` | implemented | same two shapes, on `resource` / `resources` |
@@ -79,7 +81,7 @@ Section numbers below are the Final Specification's own. Earlier revisions of th
 | 10.1.1 | JSON serialization over HTTPS | implemented | `writeJSON` sets `application/json`; TLS termination is the deployment's responsibility |
 | 10.1.2 | Errors use the defined HTTP status codes | implemented | `writeErr` returns `{"error":"..."}` with a 4xx/5xx code: 400 for malformed input, missing required fields and invalid SPIFFE IDs |
 | 10.1.2 | A denial is `200` with `{"decision": false}`, not an HTTP error | implemented | evaluation handlers only return non-200 for transport / validation failures |
-| 10.1.3 | Request identification | deferred | omega does not read or echo a request id header; correlation is via the OTel trace context it already propagates |
+| 10.1.3 | Request identification | implemented | every `/access/v1/*` endpoint, on the server and on the agent's local PDP, reads `X-Request-ID` and returns the same value on the response, including a `401` or `503` answered before the request is decided. The id is recorded as `request_id` in the audit row of each decision the request produces (one per batch entry and per search candidate; the `access.evaluate.local` row for the local PDP) and set as `authzen.request_id` on the server span, so a PEP's id leads to the trace. See the deviation note on the ids omega refuses |
 | n/a | `503 Service Unavailable` for transient unavailability | implemented | non-leader replicas return 503 + `Retry-After: 1` on every leader-gated surface, the same gate that protects audit append |
 
 ## §11: Security Considerations
@@ -97,7 +99,8 @@ Section numbers below are the Final Specification's own. Earlier revisions of th
 - **Search needs an enumerable search space, and omega's is the Cedar entity store.** The spec leaves candidate enumeration to the PDP and says nothing about what to do when the search space cannot be resolved; earlier revisions of this page claimed §5.3.2 required an error there, which is not in the Final text. Cedar has no global directory, so omega offers two ways to name the space: an explicit candidate list (an omega extension, always available), or `--authzen-search-entity-store`, which resolves the spec's pattern shape against the entities declared in `--policy-dir/entities.json`. The flag is off by default because turning it on makes `entities.json` the definition of who exists: an identity it does not declare is invisible to enumeration, and that is a claim an operator should make deliberately.
 - **Enumerating a type the store does not declare is a 400, not an empty `results`.** The spec permits an empty result set, but "this PDP has never heard of type `user`" and "you may act on none of them" are different answers, and a PEP cannot tell them apart from `[]`.
 - **A page is a window of the search space, not of the matches.** Candidates are evaluated only inside the requested window, which is what bounds PDP work and audit rows per request. The consequence is that a page MAY come back with fewer results than its `limit`, or with none at all, while later pages still hold results, which is exactly the loop `next_token` is specified to drive. It also means `total` cannot be reported honestly (the number of matches across all pages is unknown until they have all been evaluated), so omega omits it rather than emitting the size of the search space under a key the spec defines as the number of matching results.
-- **Response `context` field.** omega emits `reasons` (the policy identifiers that produced the decision). The free-form `context` field is reserved for future explainability work; no caller has needed it yet.
+- **Response `context` keeps a top-level `reasons` beside it.** `reasons` is not a key the spec defines, but omega emitted it before `context` existed and existing PEPs read it, so it stays, with the same list as `context.reasons`. §5.5 lets a PEP reject an allow whose `context` it does not understand; a strict PEP integrating with omega should treat `reasons` and `errors` as informational.
+- **A request id omega will not store is refused, not echoed.** §10.1.3 calls the id an arbitrary string, but omega writes it into the audit chain and logs, so it accepts one header of 1 to 128 bytes of letters, digits and `-._~:/+=@;`, which covers UUIDs, ULIDs, base64 and the common proxy formats. Anything else, or more than one `X-Request-ID` header, is `400` before anything is evaluated, and the value is not echoed: repeating a value refused as unsafe would hand it back unchecked, and there is no decision for it to identify.
 
 ## How this page is maintained
 

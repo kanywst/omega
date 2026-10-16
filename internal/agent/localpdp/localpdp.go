@@ -251,6 +251,7 @@ func (p *PDP) rewriteSpoolLocked() error {
 type decision struct {
 	ID        string              `json:"id"`
 	DecidedAt time.Time           `json:"decided_at"`
+	RequestID string              `json:"request_id,omitempty"`
 	Request   policy.EvalRequest  `json:"request"`
 	Response  policy.EvalResponse `json:"response"`
 }
@@ -435,6 +436,12 @@ var ErrUnavailable = errors.New("local pdp unavailable")
 
 // Evaluate decides locally and queues the decision for the audit chain.
 func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
+	return p.evaluate(req, "")
+}
+
+// evaluate is Evaluate with the caller's AuthZEN request id, which is
+// recorded with the decision so the audit row carries it.
+func (p *PDP) evaluate(req policy.EvalRequest, requestID string) (policy.EvalResponse, error) {
 	// Check freshness and take a buffer slot in one step, so concurrent
 	// callers cannot all pass the check and overrun the buffer.
 	p.mu.Lock()
@@ -464,7 +471,7 @@ func (p *PDP) Evaluate(req policy.EvalRequest) (policy.EvalResponse, error) {
 		return policy.EvalResponse{}, err
 	}
 	id := newID()
-	raw, err := json.Marshal(decision{ID: id, DecidedAt: time.Now().UTC(), Request: req, Response: resp})
+	raw, err := json.Marshal(decision{ID: id, DecidedAt: time.Now().UTC(), RequestID: requestID, Request: req, Response: resp})
 	if err != nil {
 		return policy.EvalResponse{}, err
 	}
@@ -646,6 +653,19 @@ func (p *PDP) Status() (revision string, synced time.Time, pending int) {
 func (p *PDP) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /access/v1/evaluation", func(w http.ResponseWriter, r *http.Request) {
+		// AuthZEN 1.0 §10.1.3, with the same rules as the control
+		// plane: an acceptable id is echoed on every response and
+		// recorded with the decision; one omega will not store is a 400
+		// without an echo.
+		requestID, ok := policy.RequestIDFrom(r.Header)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid %s header: send one value of 1 to %d bytes of letters, digits and -._~:/+=@;",
+				policy.RequestIDHeader, policy.MaxRequestIDBytes)})
+			return
+		}
+		if requestID != "" {
+			w.Header().Set(policy.RequestIDHeader, requestID)
+		}
 		var req policy.EvalRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxRequestBytes)).Decode(&req); err != nil {
 			code := http.StatusBadRequest
@@ -661,7 +681,7 @@ func (p *PDP) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		resp, err := p.Evaluate(req)
+		resp, err := p.evaluate(req, requestID)
 		switch {
 		case errors.Is(err, ErrUnavailable):
 			w.Header().Set("Retry-After", "5")
