@@ -1529,7 +1529,7 @@ func (a identityStore) LoadUpstreamCAs(ctx context.Context, trustDomain, backend
 	}
 	out := make([]identity.UpstreamCA, len(rows))
 	for i, r := range rows {
-		out[i] = identity.UpstreamCA{DER: r.DER, KeptAt: r.KeptAt, Until: r.KeptUntil}
+		out[i] = identity.UpstreamCA{DER: r.DER, KeptAt: r.KeptAt, Until: r.KeptUntil, SavedAt: r.SavedAt}
 	}
 	return out, nil
 }

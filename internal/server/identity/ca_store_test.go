@@ -60,11 +60,22 @@ func (m *MemCAStore) Rows(trustDomain, backend string) []UpstreamCA {
 	return append([]UpstreamCA(nil), m.cas[trustDomain+"/"+backend]...)
 }
 
-// Put stores rows directly, as another process would have.
+// Put stores rows directly, as another process would have just now; a
+// row with a SavedAt keeps it, as a replayed old row would.
 func (m *MemCAStore) Put(trustDomain, backend string, rows []UpstreamCA) {
 	m.mu.Lock()
-	m.cas[trustDomain+"/"+backend] = rows
+	m.cas[trustDomain+"/"+backend] = stamp(rows)
 	m.mu.Unlock()
+}
+
+func stamp(rows []UpstreamCA) []UpstreamCA {
+	out := append([]UpstreamCA(nil), rows...)
+	for i := range out {
+		if out[i].SavedAt.IsZero() {
+			out[i].SavedAt = time.Now()
+		}
+	}
+	return out
 }
 
 // Counts returns how many loads and saves reached the store.
@@ -94,7 +105,11 @@ func (m *MemCAStore) SaveUpstreamCAs(_ context.Context, trustDomain, backend str
 		return m.saveErr
 	}
 	m.saves++
-	m.cas[trustDomain+"/"+backend] = append([]UpstreamCA(nil), cas...)
+	rows := append([]UpstreamCA(nil), cas...)
+	for i := range rows {
+		rows[i].SavedAt = time.Now()
+	}
+	m.cas[trustDomain+"/"+backend] = rows
 	return nil
 }
 
@@ -206,6 +221,39 @@ func TestCAOverlapKeepsTheKeptSetAcrossARestart(t *testing.T) {
 	}
 	if _, ok := keptRow(store.Rows("omega.local", "vault-pki"), derOf(t, a)); ok {
 		t.Fatal("the dropped CA is still stored")
+	}
+}
+
+func TestCAOverlapIgnoresAReplayedOldIssuerRow(t *testing.T) {
+	now := time.Now()
+	a := testCAPEM(t, "A", now.Add(365*24*time.Hour))
+	b := testCAPEM(t, "B", now.Add(365*24*time.Hour))
+	store := NewMemCAStore()
+	// A valid row for A, saved two grace periods ago, replayed into the
+	// database after the issuer stopped publishing A.
+	store.Put("omega.local", "step-ca", []UpstreamCA{{DER: derOf(t, a), SavedAt: now.Add(-2 * UpstreamCAGrace)}})
+	o := newCAOverlap(UpstreamCAGrace)
+	_, _ = o.update(b, now)
+	if err := o.attachStore(store, "omega.local", "step-ca", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.serve(now); string(got) != string(b) {
+		t.Fatal("a replayed row older than the grace made A trusted again")
+	}
+	// Saved half a grace ago: kept, but only until save time plus grace.
+	store2 := NewMemCAStore()
+	savedAt := now.Add(-UpstreamCAGrace / 2)
+	store2.Put("omega.local", "step-ca", []UpstreamCA{{DER: derOf(t, a), SavedAt: savedAt}})
+	o2 := newCAOverlap(UpstreamCAGrace)
+	_, _ = o2.update(b, now)
+	if err := o2.attachStore(store2, "omega.local", "step-ca", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := o2.serve(now); certCount(got) != 2 {
+		t.Fatal("a recent row lost the CA")
+	}
+	if got := o2.serve(savedAt.Add(UpstreamCAGrace + time.Minute)); string(got) != string(b) {
+		t.Fatal("a restored CA outlived its row's save time plus the grace")
 	}
 }
 

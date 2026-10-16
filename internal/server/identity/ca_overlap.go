@@ -49,6 +49,8 @@ type UpstreamCA struct {
 	DER    []byte
 	KeptAt time.Time
 	Until  time.Time
+	// SavedAt is when the store last wrote the row (zero when saving).
+	SavedAt time.Time
 }
 
 // UpstreamCAStore keeps the issuer's CAs and the ones kept from a
@@ -79,6 +81,9 @@ type caOverlap struct {
 	current    map[[32]byte]*x509.Certificate
 	retired    map[[32]byte]retiredCA
 	distrusted map[[32]byte]bool
+	// restoreCap bounds the keep time of a CA restored as published,
+	// to its row's save time plus the grace.
+	restoreCap map[[32]byte]time.Time
 	served     []byte
 	seq        atomic.Int64
 	hook       func(KeptCAEvent)
@@ -110,7 +115,7 @@ type retiredCA struct {
 
 // newCAOverlap keeps dropped CAs for grace; zero keeps none.
 func newCAOverlap(grace time.Duration) *caOverlap {
-	o := &caOverlap{grace: grace, current: map[[32]byte]*x509.Certificate{}, retired: map[[32]byte]retiredCA{}, distrusted: map[[32]byte]bool{}}
+	o := &caOverlap{grace: grace, current: map[[32]byte]*x509.Certificate{}, retired: map[[32]byte]retiredCA{}, distrusted: map[[32]byte]bool{}, restoreCap: map[[32]byte]time.Time{}}
 	o.seq.Store(1)
 	return o
 }
@@ -254,8 +259,13 @@ func (o *caOverlap) mergeStoredLocked(stored []UpstreamCA, next map[[32]byte]*x5
 			continue
 		}
 		if r.Until.IsZero() {
-			if first {
+			// A CA the issuer published when the row was saved. If the
+			// issuer no longer does, it is kept, but never past the save
+			// time plus the grace: a row replayed from long ago grants
+			// no more than keeping it back then would have.
+			if first && !r.SavedAt.IsZero() && now.Before(r.SavedAt.Add(o.grace)) {
 				prev[fp] = c
+				o.restoreCap[fp] = r.SavedAt.Add(o.grace)
 			}
 			continue
 		}
@@ -308,6 +318,9 @@ func (o *caOverlap) retireLocked(prev, next map[[32]byte]*x509.Certificate, now 
 			continue
 		}
 		until := now.Add(o.grace)
+		if limit, ok := o.restoreCap[fp]; ok && limit.Before(until) {
+			until = limit
+		}
 		if c.NotAfter.Before(until) {
 			until = c.NotAfter
 		}
@@ -342,6 +355,7 @@ func (o *caOverlap) update(fetched []byte, now time.Time) ([]byte, error) {
 		prev = o.mergeStoredLocked(stored, next, now)
 	}
 	o.retireLocked(prev, next, now)
+	clear(o.restoreCap)
 	for fp := range o.retired {
 		if _, back := next[fp]; back {
 			o.drop(fp, "republished")

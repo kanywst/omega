@@ -5,11 +5,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 )
 
@@ -21,6 +21,9 @@ type UpstreamCA struct {
 	DER       []byte
 	KeptAt    time.Time
 	KeptUntil time.Time
+	// SavedAt is when the row was last written. It is covered by the
+	// MAC, so a replayed old row carries its old time.
+	SavedAt time.Time
 }
 
 // Fingerprint is the hex SHA-256 of the DER certificate.
@@ -32,19 +35,15 @@ func (c UpstreamCA) Fingerprint() string {
 // upstreamCAMAC authenticates one stored row: a row becomes a trust
 // anchor, so a database writer without the audit HMAC key must not be
 // able to add or extend one.
-func upstreamCAMAC(secret []byte, trustDomain, backend string, der []byte, keptAt, until int64) string {
+func upstreamCAMAC(secret []byte, trustDomain, backend string, der []byte, keptAt, until, savedAt int64) string {
 	m := hmac.New(sha256.New, secret)
 	m.Write([]byte("omega-upstream-ca-v1"))
-	for _, f := range [][]byte{[]byte(trustDomain), []byte(backend), der} {
-		var n [8]byte
-		binary.BigEndian.PutUint64(n[:], uint64(len(f)))
-		m.Write(n[:])
+	for _, f := range [][]byte{[]byte(trustDomain), []byte(backend), der,
+		[]byte(strconv.FormatInt(keptAt, 10)), []byte(strconv.FormatInt(until, 10)), []byte(strconv.FormatInt(savedAt, 10))} {
+		m.Write([]byte(strconv.Itoa(len(f))))
+		m.Write([]byte{':'})
 		m.Write(f)
 	}
-	var t [16]byte
-	binary.BigEndian.PutUint64(t[:8], uint64(keptAt))
-	binary.BigEndian.PutUint64(t[8:], uint64(until))
-	m.Write(t[:])
 	return hex.EncodeToString(m.Sum(nil))
 }
 
@@ -59,7 +58,7 @@ func (s *Store) UpstreamCAs(ctx context.Context, trustDomain, backend string) ([
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
-		s.rebind(`SELECT der, kept_at, kept_until, key_id, mac FROM upstream_cas WHERE trust_domain = ? AND backend = ? ORDER BY fingerprint`),
+		s.rebind(`SELECT der, kept_at, kept_until, saved_at, key_id, mac FROM upstream_cas WHERE trust_domain = ? AND backend = ? ORDER BY fingerprint`),
 		trustDomain, backend)
 	if err != nil {
 		return nil, fmt.Errorf("query upstream cas: %w", err)
@@ -68,16 +67,16 @@ func (s *Store) UpstreamCAs(ctx context.Context, trustDomain, backend string) ([
 	var out []UpstreamCA
 	for rows.Next() {
 		var (
-			der           []byte
-			keptAt, until int64
-			keyID, mac    string
+			der                    []byte
+			keptAt, until, savedAt int64
+			keyID, mac             string
 		)
-		if err := rows.Scan(&der, &keptAt, &until, &keyID, &mac); err != nil {
+		if err := rows.Scan(&der, &keptAt, &until, &savedAt, &keyID, &mac); err != nil {
 			return nil, fmt.Errorf("scan upstream ca: %w", err)
 		}
-		c := UpstreamCA{DER: der}
+		c := UpstreamCA{DER: der, SavedAt: time.Unix(0, savedAt).UTC()}
 		secret, ok := s.auditKeyring.lookup(keyID)
-		if !ok || !hmac.Equal([]byte(mac), []byte(upstreamCAMAC(secret, trustDomain, backend, der, keptAt, until))) {
+		if !ok || !hmac.Equal([]byte(mac), []byte(upstreamCAMAC(secret, trustDomain, backend, der, keptAt, until, savedAt))) {
 			slog.Warn("storage: skipping a stored upstream CA whose MAC does not verify", "trust_domain", trustDomain, "backend", backend, "fingerprint", c.Fingerprint(), "key_id", keyID)
 			continue
 		}
@@ -107,6 +106,7 @@ func (s *Store) ReplaceUpstreamCAs(ctx context.Context, trustDomain, backend str
 		return ErrNoUpstreamCAKey
 	}
 	keyID, secret := s.auditKeyring.active()
+	savedAt := time.Now().UnixNano()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -124,8 +124,8 @@ func (s *Store) ReplaceUpstreamCAs(ctx context.Context, trustDomain, backend str
 			keptAt, until = c.KeptAt.UnixNano(), c.KeptUntil.UnixNano()
 		}
 		if _, err := tx.ExecContext(ctx,
-			s.rebind(`INSERT INTO upstream_cas(trust_domain, backend, fingerprint, der, kept_at, kept_until, key_id, mac) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-			trustDomain, backend, c.Fingerprint(), c.DER, keptAt, until, keyID, upstreamCAMAC(secret, trustDomain, backend, c.DER, keptAt, until),
+			s.rebind(`INSERT INTO upstream_cas(trust_domain, backend, fingerprint, der, kept_at, kept_until, saved_at, key_id, mac) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			trustDomain, backend, c.Fingerprint(), c.DER, keptAt, until, savedAt, keyID, upstreamCAMAC(secret, trustDomain, backend, c.DER, keptAt, until, savedAt),
 		); err != nil {
 			return fmt.Errorf("insert upstream ca: %w", err)
 		}
