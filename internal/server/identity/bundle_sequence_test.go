@@ -142,10 +142,22 @@ func TestDurableSequenceStoreFailures(t *testing.T) {
 	if got := d.BundleSequence(); got != 3 {
 		t.Fatalf("with saves failing: %d", got)
 	}
-	// A JWT bundle that cannot be read still numbers the anchors.
-	src.jwtErr = errors.New("no keys")
+	// A JWT bundle that cannot be read is not a change: the last
+	// sequence stays, and nothing moves once it can be read again.
 	store.Fail(nil, nil)
-	if got := d.BundleSequence(); got != 4 {
+	src.jwtErr = errors.New("no keys")
+	if got := d.BundleSequence(); got != 3 {
 		t.Fatalf("without JWT keys: %d", got)
+	}
+	src.jwtErr = nil
+	if got := d.BundleSequence(); got != 3 {
+		t.Fatalf("after the JWT keys are back: %d", got)
+	}
+	if seq, _, _ := store.LoadBundleSequence(t.Context(), "omega.local"); seq > 3 {
+		t.Fatalf("stored sequence moved: %d", seq)
+	}
+	src.jwtErr = errors.New("no keys")
+	if _, err := NewDurableSequence(src, store, "omega.local"); err == nil {
+		t.Fatal("started without numbering the trust bundle")
 	}
 }

@@ -381,12 +381,6 @@ func newServerCommand() *cobra.Command {
 			// the previous material installed.
 			reloadUpstream := upstreamReloader(ca, fed, upstreamBundlePath, upstreamJWTBundlePath)
 			caReloader, _ := ca.(identity.CAReloader)
-			// spiffe_sequence is stored, so it never goes back across a
-			// restart and replicas serving the same bundle agree on it.
-			bundleSeq, err := identity.NewDurableSequence(ca, identityStore{store}, ca.TrustDomain().String())
-			if err != nil {
-				return fmt.Errorf("load the stored spiffe_sequence: %w", err)
-			}
 			// Vault PKI, step-ca and AWS Private CA: every change to the CAs kept from a
 			// rotation goes into the audit chain, and the operator's
 			// distrust list drops a kept CA without a restart.
@@ -408,6 +402,14 @@ func newServerCommand() *cobra.Command {
 				// The kept set changes on its own, so peers read the
 				// bundle live rather than a copy refreshed on SIGHUP.
 				fed.SetOwnBundleSource(ca.BundlePEM)
+			}
+			// spiffe_sequence is stored, so it never goes back across a
+			// restart and replicas serving the same bundle agree on it.
+			// It is numbered after the kept CAs are restored, so an
+			// unchanged trust set keeps its sequence across a restart.
+			bundleSeq, err := identity.NewDurableSequence(ca, identityStore{store}, ca.TrustDomain().String())
+			if err != nil {
+				return fmt.Errorf("number the trust bundle from the stored spiffe_sequence: %w", err)
 			}
 			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
 			if upstreamCADistrustFile != "" {

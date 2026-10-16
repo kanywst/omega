@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 )
@@ -59,11 +60,12 @@ func NewDurableSequence(src bundleMaterial, store BundleSequenceStore, trustDoma
 // when the trust material differs from what it last served, so an
 // unchanged bundle costs no I/O. If the store cannot be read, it serves
 // the last sequence, which never goes back, and reads the store again
-// on the next call.
+// on the next call. The same holds while the trust material cannot be
+// read.
 func (d *DurableSequence) BundleSequence() int64 {
 	seq, err := d.next()
 	if err != nil {
-		slog.Warn("identity: could not read the stored spiffe_sequence; serving the last one", "err", err)
+		slog.Warn("identity: could not number the trust bundle; serving the last spiffe_sequence", "err", err)
 	}
 	return seq
 }
@@ -75,7 +77,14 @@ func (d *DurableSequence) next() (int64, error) {
 		// below is of the bundle a caller reads next.
 		srcSeq = s.BundleSequence()
 	}
-	digest := materialDigest(d.src)
+	digest, err := materialDigest(d.src)
+	if err != nil {
+		// A partial digest would look like a change and move the
+		// stored sequence for good.
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.seq, err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if digest == d.digest {
@@ -112,12 +121,14 @@ func (d *DurableSequence) next() (int64, error) {
 }
 
 // materialDigest is the SHA-256 of the trust anchors and JWT keys.
-func materialDigest(src bundleMaterial) string {
+func materialDigest(src bundleMaterial) (string, error) {
+	jwks, err := src.JWTBundle()
+	if err != nil {
+		return "", fmt.Errorf("jwt bundle: %w", err)
+	}
 	h := sha256.New()
 	h.Write(src.BundlePEM())
 	h.Write([]byte{0})
-	if jwks, err := src.JWTBundle(); err == nil {
-		h.Write(jwks)
-	}
-	return hex.EncodeToString(h.Sum(nil))
+	h.Write(jwks)
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
