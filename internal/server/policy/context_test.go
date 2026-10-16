@@ -101,3 +101,31 @@ func TestForCallerStripsMessagesOnly(t *testing.T) {
 		t.Errorf("no context: %+v", got)
 	}
 }
+
+// Pins the current behaviour for a forbid that fails to evaluate next
+// to a matching permit: Cedar skips the erroring policy, so the permit
+// stands and the decision is an allow, with the skipped forbid named in
+// context.errors. Changing this to deny is a policy-semantics change
+// and must flip this test deliberately.
+func TestErroringForbidBesideAMatchingPermitAllows(t *testing.T) {
+	dir := writePolicies(t, map[string]string{
+		"p.cedar": `@id("permit-all") permit (principal, action, resource);
+@id("forbid-low") forbid (principal, action, resource) when { principal.clearance < 3 };
+`,
+	})
+	e := policy.New()
+	if err := e.LoadDir(dir); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	resp, err := e.Evaluate(policy.EvalRequest{
+		Subject:  policy.Entity{Type: "User", ID: "u", Attrs: map[string]any{"team": "x"}},
+		Action:   policy.Action{Name: "read"},
+		Resource: policy.Entity{Type: "Doc", ID: "d"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Decision || resp.Context == nil || len(resp.Context.Errors) != 1 || resp.Context.Errors[0].Policy != "forbid-low" {
+		t.Fatalf("got %+v, want an allow naming forbid-low in context.errors", resp)
+	}
+}
