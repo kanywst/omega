@@ -218,6 +218,10 @@ set to permit an action that should be denied.
   trust anchors, so each row carries an HMAC under the audit keyring
   and is ignored unless it verifies; without `--audit-hmac-key-file`
   they are not stored at all.
+- The stored `spiffe_sequence` is not MAC'd: it carries no trust
+  material. A database writer can move it forward, which makes peers
+  refetch, or set it out of range, which stops the server from
+  starting rather than letting the sequence overflow.
 - Recommended: run Postgres with row-level access control or a
   least-privileged role for the omega-server process; the
   `--policy-dir` flag also lets policies be sourced from a file
