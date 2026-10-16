@@ -72,6 +72,8 @@ func TestRecordDecisionsValidation(t *testing.T) {
 		{"missing id", api.DecisionBatch{Decisions: []api.LocalDecision{{DecidedAt: time.Now(), Request: ok.Request}}}, http.StatusBadRequest},
 		{"malformed request", api.DecisionBatch{Decisions: []api.LocalDecision{{ID: "x", DecidedAt: time.Now()}}}, http.StatusBadRequest},
 		{"unsafe request id", api.DecisionBatch{Decisions: []api.LocalDecision{{ID: "x", DecidedAt: time.Now(), RequestID: "a\"b", Request: ok.Request}}}, http.StatusBadRequest},
+		{"request id digest not hex", api.DecisionBatch{Decisions: []api.LocalDecision{{ID: "x", DecidedAt: time.Now(), RequestIDSHA256: "zz", Request: ok.Request}}}, http.StatusBadRequest},
+		{"request id and digest", api.DecisionBatch{Decisions: []api.LocalDecision{{ID: "x", DecidedAt: time.Now(), RequestID: "a", RequestIDSHA256: strings.Repeat("a", 64), Request: ok.Request}}}, http.StatusBadRequest},
 		{"valid", api.DecisionBatch{BundleRevision: "r1", Decisions: []api.LocalDecision{ok}}, http.StatusOK},
 	}
 	for _, tc := range cases {

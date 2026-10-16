@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -14,45 +13,39 @@ import (
 type requestIDKey struct{}
 
 // withRequestID implements AuthZEN 1.0 §10.1.3 for an /access/v1 route.
-// It is the outermost wrapper, so the identifier is echoed on every
-// response to the request, including a 503 from the leader gate or a
-// 401 from caller authentication. The id is also put on the request
-// context, for the audit row, and on the otelhttp server span, so a
-// PEP-side id and the trace id can be joined.
-//
-// An id omega will not accept (see policy.RequestIDFrom) is a 400
-// without an echo: repeating a value refused because it is not safe to
-// store or log would hand it back unchecked, and the request is not
-// evaluated, so there is no decision for the id to identify.
+// It is the outermost wrapper, so the identifier is echoed unchanged on
+// every response to the request, including a 503 from the leader gate
+// or a 401 from caller authentication. The id is also put on the
+// request context, for the audit row, and on the otelhttp server span,
+// so a PEP-side id and the trace id can be joined. What is stored is
+// policy.RequestIDForAudit's form: the id itself when it is short and
+// plain, otherwise its SHA-256.
 func withRequestID(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := policy.RequestIDFrom(r.Header)
-		if !ok {
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid %s header: send one value of 1 to %d bytes of letters, digits and -._~:/+=@;",
-				policy.RequestIDHeader, policy.MaxRequestIDBytes))
-			return
-		}
-		if id != "" {
+		if id := policy.RequestIDFrom(r.Header); id != "" {
 			w.Header().Set(policy.RequestIDHeader, id)
-			trace.SpanFromContext(r.Context()).SetAttributes(attribute.String("authzen.request_id", id))
+			span := trace.SpanFromContext(r.Context())
+			if plain, digest := policy.RequestIDForAudit(id); plain != "" {
+				span.SetAttributes(attribute.String("authzen.request_id", plain))
+			} else {
+				span.SetAttributes(attribute.String("authzen.request_id_sha256", digest))
+			}
 			r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
 		}
 		h(w, r)
 	}
 }
 
-// requestIDOf returns the AuthZEN request id withRequestID accepted for
-// this request, or "" when the caller sent none.
-func requestIDOf(ctx context.Context) string {
-	id, _ := ctx.Value(requestIDKey{}).(string)
-	return id
-}
-
 // withRequestIDPayload adds the request id to an audit payload when the
 // caller sent one, so the row can be found from the PEP's own logs.
 func withRequestIDPayload(ctx context.Context, payload map[string]any) map[string]any {
-	if id := requestIDOf(ctx); id != "" {
-		payload["request_id"] = id
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	plain, digest := policy.RequestIDForAudit(id)
+	if plain != "" {
+		payload["request_id"] = plain
+	}
+	if digest != "" {
+		payload["request_id_sha256"] = digest
 	}
 	return payload
 }

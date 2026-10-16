@@ -918,15 +918,13 @@ func TestLocalPDPEchoesAndRecordsTheRequestID(t *testing.T) {
 	if string(out["context"]) != `{"reasons":["all"]}` {
 		t.Errorf("local decision context: %s", out["context"])
 	}
-	for _, bad := range [][]string{{"no spaces"}, {"a", "b"}, {strings.Repeat("x", policy.MaxRequestIDBytes+1)}} {
-		resp, _ := post(bad...)
-		if resp.StatusCode != http.StatusBadRequest || len(resp.Header.Values(policy.RequestIDHeader)) != 0 {
-			t.Errorf("id %q: %d, echoed %q; want 400 without an echo", bad, resp.StatusCode, resp.Header.Values(policy.RequestIDHeader))
-		}
+	// Any id is echoed; one with characters unsafe to store is recorded
+	// as its digest.
+	resp, _ = post("has", "spaces")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get(policy.RequestIDHeader) != "has, spaces" {
+		t.Fatalf("unsafe id: %d, echoed %q", resp.StatusCode, resp.Header.Get(policy.RequestIDHeader))
 	}
-	if _, _, pending := p.Status(); pending != 1 {
-		t.Fatalf("pending: %d, want only the accepted request", pending)
-	}
+	_, digest := policy.RequestIDForAudit("has, spaces")
 
 	if err := p.Flush(ctx); err != nil {
 		t.Fatal(err)
@@ -935,13 +933,18 @@ func TestLocalPDPEchoesAndRecordsTheRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found bool
+	var plain, hashed bool
 	for _, ev := range events {
-		if ev.Kind == "access.evaluate.local" && strings.Contains(string(ev.Payload), `"request_id":"pep-42"`) {
-			found = true
+		if ev.Kind != "access.evaluate.local" {
+			continue
+		}
+		plain = plain || strings.Contains(string(ev.Payload), `"request_id":"pep-42"`)
+		hashed = hashed || strings.Contains(string(ev.Payload), `"request_id_sha256":"`+digest+`"`)
+		if strings.Contains(string(ev.Payload), "has, spaces") {
+			t.Errorf("an unsafe id reached the audit chain verbatim: %s", ev.Payload)
 		}
 	}
-	if !found {
-		t.Error("the central audit row of a local decision carries the PEP's request id")
+	if !plain || !hashed {
+		t.Errorf("central audit rows of local decisions: request_id %v, request_id_sha256 %v", plain, hashed)
 	}
 }

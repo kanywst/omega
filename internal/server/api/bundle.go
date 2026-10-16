@@ -87,11 +87,13 @@ func (s *Server) getPolicyBundle(w http.ResponseWriter, r *http.Request) {
 type LocalDecision struct {
 	ID        string    `json:"id"`
 	DecidedAt time.Time `json:"decided_at"`
-	// RequestID is the AuthZEN request id the PEP sent the local PDP,
-	// if any; held to the same rules as one sent to this server.
-	RequestID string              `json:"request_id,omitempty"`
-	Request   policy.EvalRequest  `json:"request"`
-	Response  policy.EvalResponse `json:"response"`
+	// RequestID and RequestIDSHA256 are the AuthZEN request id the PEP
+	// sent the local PDP, if any, in policy.RequestIDForAudit's form:
+	// at most one is set, as it would be for a request to this server.
+	RequestID       string              `json:"request_id,omitempty"`
+	RequestIDSHA256 string              `json:"request_id_sha256,omitempty"`
+	Request         policy.EvalRequest  `json:"request"`
+	Response        policy.EvalResponse `json:"response"`
 }
 
 // DecisionBatch is the body of POST /v1/audit/decisions.
@@ -150,8 +152,8 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d needs an id of at most 128 bytes and decided_at", i))
 			return
 		}
-		if d.RequestID != "" && !policy.ValidRequestID(d.RequestID) {
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d: request_id must be 1 to %d bytes of letters, digits and -._~:/+=@;", i, policy.MaxRequestIDBytes))
+		if (d.RequestID != "" && !policy.ValidRequestID(d.RequestID)) || (d.RequestIDSHA256 != "" && (d.RequestID != "" || !isHexSHA256(d.RequestIDSHA256))) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("decision %d: request_id must be 1 to %d bytes of letters, digits and -._~:/+=@;, or request_id_sha256 a hex SHA-256, not both", i, policy.MaxRequestIDBytes))
 			return
 		}
 		if err := policy.Validate(d.Request); err != nil {
@@ -183,6 +185,9 @@ func (s *Server) recordDecisions(w http.ResponseWriter, r *http.Request) {
 		}
 		if d.RequestID != "" {
 			fields["request_id"] = d.RequestID
+		}
+		if d.RequestIDSHA256 != "" {
+			fields["request_id_sha256"] = d.RequestIDSHA256
 		}
 		payload, err := json.Marshal(fields)
 		if err != nil {
@@ -222,6 +227,20 @@ func validLossEntries(b DecisionBatch) bool {
 			return false
 		}
 		if d, err := hex.DecodeString(b.DroppedDigests[i]); err != nil || len(d) != sha256.Size {
+			return false
+		}
+	}
+	return true
+}
+
+// isHexSHA256 reports whether s is a lowercase hex SHA-256, the form
+// policy.RequestIDForAudit produces.
+func isHexSHA256(s string) bool {
+	if len(s) != 2*sha256.Size {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

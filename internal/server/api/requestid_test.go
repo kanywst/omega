@@ -137,40 +137,55 @@ func TestAccessEndpointsEchoTheRequestID(t *testing.T) {
 	}
 }
 
-// An id omega will not store is refused before anything is evaluated or
-// audited, and is not echoed.
-func TestAccessEndpointsRejectAnUnsafeRequestID(t *testing.T) {
+// §10.1.3 calls the id an arbitrary string, so any value is echoed
+// unchanged and decided on. One omega will not store verbatim (too
+// long, or with characters unsafe in logs) is recorded as its SHA-256.
+func TestAccessEndpointsEchoAnyRequestIDAndHashUnsafeOnes(t *testing.T) {
 	srv, store := newReqIDServer(t)
-	bad := [][]string{
-		{strings.Repeat("a", policy.MaxRequestIDBytes+1)},
-		{"has space"},
-		{`with"quote`},
-		{"one", "two"},
+	cases := []struct {
+		sent []string
+		echo string
+	}{
+		{[]string{strings.Repeat("a", policy.MaxRequestIDBytes+1)}, strings.Repeat("a", policy.MaxRequestIDBytes+1)},
+		{[]string{"has space"}, "has space"},
+		{[]string{`with"quote`}, `with"quote`},
+		{[]string{"one", "two"}, "one, two"},
 	}
 	for _, c := range accessCalls {
-		for _, ids := range bad {
-			resp, raw := postWithRequestID(t, srv.URL+c.path, c.body, ids...)
-			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(raw), policy.RequestIDHeader) {
-				t.Errorf("%s %q: %d %s, want 400 naming the header", c.path, ids, resp.StatusCode, raw)
+		for _, tc := range cases {
+			resp, raw := postWithRequestID(t, srv.URL+c.path, c.body, tc.sent...)
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("%s %q: %d %s, want 200", c.path, tc.sent, resp.StatusCode, raw)
 			}
-			if got := resp.Header.Values(policy.RequestIDHeader); len(got) != 0 {
-				t.Errorf("%s %q: echoed %q", c.path, ids, got)
+			if got := resp.Header.Values(policy.RequestIDHeader); len(got) != 1 || got[0] != tc.echo {
+				t.Errorf("%s %q: echoed %q, want %q", c.path, tc.sent, got, tc.echo)
 			}
 		}
 	}
-	events, err := store.ListAudit(t.Context(), 0, 100)
+	events, err := store.ListAudit(t.Context(), 0, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 0 {
-		t.Errorf("a refused request id left %d audit rows", len(events))
+	digests := map[string]bool{}
+	for _, tc := range cases {
+		_, d := policy.RequestIDForAudit(tc.echo)
+		digests[d] = true
 	}
-
-	// The full 128 bytes are accepted.
-	id := strings.Repeat("a", policy.MaxRequestIDBytes)
-	resp, raw := postWithRequestID(t, srv.URL+accessCalls[0].path, accessCalls[0].body, id)
-	if resp.StatusCode != http.StatusOK || resp.Header.Get(policy.RequestIDHeader) != id {
-		t.Errorf("a %d-byte id: %d %s", len(id), resp.StatusCode, raw)
+	for _, ev := range events {
+		var p map[string]any
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := p["request_id"]; ok {
+			t.Errorf("an unsafe id was stored verbatim: %s", ev.Payload)
+		}
+		d, _ := p["request_id_sha256"].(string)
+		if !digests[d] {
+			t.Errorf("audit row without the id's digest: %s", ev.Payload)
+		}
+	}
+	if len(events) != 4*6 {
+		t.Errorf("audit rows: %d, want %d (6 decisions per round of endpoints)", len(events), 4*6)
 	}
 }
 
@@ -286,6 +301,11 @@ func TestEvaluationErrorsReachThePEPAsPolicyIDsOnly(t *testing.T) {
 	var single map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &single); err != nil {
 		t.Fatal(err)
+	}
+	// Cedar skips the erroring forbid, so the permit stands; pinned
+	// here at the HTTP layer as well as in the policy package.
+	if string(single["decision"]) != "true" {
+		t.Errorf("decision with a skipped forbid: %s", single["decision"])
 	}
 	if string(single["context"]) != `{"reasons":["all"],"errors":[{"policy":"needs-clearance"}]}` {
 		t.Errorf("single evaluation context: %s", single["context"])

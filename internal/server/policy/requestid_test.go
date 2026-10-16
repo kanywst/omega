@@ -1,6 +1,8 @@
 package policy_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"testing"
@@ -37,20 +39,29 @@ func TestValidRequestID(t *testing.T) {
 
 func TestRequestIDFrom(t *testing.T) {
 	h := http.Header{}
-	if id, ok := policy.RequestIDFrom(h); id != "" || !ok {
-		t.Fatalf("no header: got (%q, %v), want (\"\", true)", id, ok)
+	if id := policy.RequestIDFrom(h); id != "" {
+		t.Fatalf("no header: got %q", id)
 	}
 	h.Set(policy.RequestIDHeader, "abc-123")
-	if id, ok := policy.RequestIDFrom(h); id != "abc-123" || !ok {
-		t.Fatalf("one valid header: got (%q, %v)", id, ok)
+	if id := policy.RequestIDFrom(h); id != "abc-123" {
+		t.Fatalf("one header: got %q", id)
 	}
 	h.Add(policy.RequestIDHeader, "def-456")
-	if _, ok := policy.RequestIDFrom(h); ok {
-		t.Fatal("two headers must be refused: there is no single id to echo")
+	if id := policy.RequestIDFrom(h); id != "abc-123, def-456" {
+		t.Fatalf("two header lines are one field: got %q", id)
 	}
-	h = http.Header{}
-	h.Set(policy.RequestIDHeader, "not ok")
-	if _, ok := policy.RequestIDFrom(h); ok {
-		t.Fatal("an id outside the charset must be refused")
+}
+
+func TestRequestIDForAudit(t *testing.T) {
+	if p, d := policy.RequestIDForAudit(""); p != "" || d != "" {
+		t.Errorf("empty: (%q, %q)", p, d)
+	}
+	if p, d := policy.RequestIDForAudit("abc-123"); p != "abc-123" || d != "" {
+		t.Errorf("valid: (%q, %q)", p, d)
+	}
+	unsafe := `id with "quotes" and spaces`
+	sum := sha256.Sum256([]byte(unsafe))
+	if p, d := policy.RequestIDForAudit(unsafe); p != "" || d != hex.EncodeToString(sum[:]) {
+		t.Errorf("unsafe: (%q, %q), want only its digest", p, d)
 	}
 }

@@ -249,11 +249,13 @@ func (p *PDP) rewriteSpoolLocked() error {
 }
 
 type decision struct {
-	ID        string              `json:"id"`
-	DecidedAt time.Time           `json:"decided_at"`
-	RequestID string              `json:"request_id,omitempty"`
-	Request   policy.EvalRequest  `json:"request"`
-	Response  policy.EvalResponse `json:"response"`
+	ID        string    `json:"id"`
+	DecidedAt time.Time `json:"decided_at"`
+	// The PEP's request id in policy.RequestIDForAudit's form.
+	RequestID       string              `json:"request_id,omitempty"`
+	RequestIDSHA256 string              `json:"request_id_sha256,omitempty"`
+	Request         policy.EvalRequest  `json:"request"`
+	Response        policy.EvalResponse `json:"response"`
 }
 
 // queued is a decision encoded for shipping, with the bundle revision
@@ -473,7 +475,8 @@ func (p *PDP) evaluate(req policy.EvalRequest, requestID string) (policy.EvalRes
 		return policy.EvalResponse{}, err
 	}
 	id := newID()
-	raw, err := json.Marshal(decision{ID: id, DecidedAt: time.Now().UTC(), RequestID: requestID, Request: req, Response: resp})
+	plainID, digestID := policy.RequestIDForAudit(requestID)
+	raw, err := json.Marshal(decision{ID: id, DecidedAt: time.Now().UTC(), RequestID: plainID, RequestIDSHA256: digestID, Request: req, Response: resp})
 	if err != nil {
 		return policy.EvalResponse{}, err
 	}
@@ -655,16 +658,10 @@ func (p *PDP) Status() (revision string, synced time.Time, pending int) {
 func (p *PDP) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /access/v1/evaluation", func(w http.ResponseWriter, r *http.Request) {
-		// AuthZEN 1.0 §10.1.3, with the same rules as the control
-		// plane: an acceptable id is echoed on every response and
-		// recorded with the decision; one omega will not store is a 400
-		// without an echo.
-		requestID, ok := policy.RequestIDFrom(r.Header)
-		if !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid %s header: send one value of 1 to %d bytes of letters, digits and -._~:/+=@;",
-				policy.RequestIDHeader, policy.MaxRequestIDBytes)})
-			return
-		}
+		// AuthZEN 1.0 §10.1.3, as on the control plane: the id is
+		// echoed unchanged on every response and recorded with the
+		// decision in policy.RequestIDForAudit's form.
+		requestID := policy.RequestIDFrom(r.Header)
 		if requestID != "" {
 			w.Header().Set(policy.RequestIDHeader, requestID)
 		}
