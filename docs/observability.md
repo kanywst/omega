@@ -48,6 +48,7 @@ at the network layer from external clients.
 | `omega_access_decisions_total` | `decision` (`allow` / `deny`) | Total AuthZEN access decisions.                           |
 | `omega_audit_appended_total`   | `kind`                        | Total audit log entries appended (per event kind).        |
 | `omega_domains_created_total`  | (none)                        | Total domains created via the admin API.                  |
+| `omega_stored_policy_set_load_failures_total` | (none) | Times the stored Cedar policies failed to load; see [policies.md](policies.md#when-the-stored-set-does-not-load). |
 
 ### Histograms
 
@@ -61,6 +62,7 @@ at the network layer from external clients.
 | Name               | Labels    | Meaning                                                            |
 | ------------------ | --------- | ------------------------------------------------------------------ |
 | `omega_build_info` | `version` | Always `1`. Use the `version` label to track rollout/canary state. |
+| `omega_stored_policies` | (none) | Stored Cedar policies in the set the policy engine last loaded. |
 
 ### Standard collectors
 

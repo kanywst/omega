@@ -19,6 +19,7 @@ Cedar joined the CNCF Sandbox on 2025-10-08 and runs in production at Cloudflare
 | --- | --- | --- |
 | Identity | X.509-SVID and JWT-SVID over the SPIFFE Workload API, from the built-in CA, Vault PKI, step-ca, AWS Private CA, Google Cloud CAS or Azure Key Vault, or consumed from an upstream SPIRE / Istio trust domain (`--identity-source=spire-upstream`) | [conformance-spiffe.md](docs/conformance-spiffe.md) |
 | Authorization | AuthZEN 1.0 PDP with Cedar policies | [conformance-authzen.md](docs/conformance-authzen.md) |
+| Policies | Cedar policies from `--policy-dir` files, or stored in the control plane through `/v1/policies` (`omega policy apply`) with ETags and an audit row per change, reaching every replica and node agent | [policies.md](docs/policies.md) |
 | Domains | A tree of namespaces (`media` → `media.news`) whose admins run their own subtree; policies use `principal in Domain::"media"` | [domains.md](docs/domains.md) |
 | Groups | Groups owned by a domain, with memberships that can expire; policies use `principal in Group::"media:oncall"` | [groups.md](docs/groups.md) |
 | People | OIDC IdP federation, and users and groups pushed from an identity provider over SCIM 2.0 | [scim.md](docs/scim.md) |
@@ -71,7 +72,7 @@ curl -sS -X POST http://127.0.0.1:8080/access/v1/evaluation \
 # -> {"decision":true,"reasons":["policy0"]}   (or {"decision":false} when no policy permits)
 ```
 
-Pass `--policy-dir DIR` to `omega server` to load `*.cedar` files at startup.
+Pass `--policy-dir DIR` to `omega server` to load `*.cedar` files at startup, or store policies through the API with `omega policy apply -f FILE.cedar` (see [docs/policies.md](docs/policies.md)).
 
 ### Other entry points
 
@@ -112,6 +113,7 @@ The server, agent and operator run independently, so each can be scaled or repla
 | POST | `/v1/token/exchange` | RFC 8693 token exchange |
 | POST | `/oauth2/token` | ID-JAG grant |
 | POST | `/access/v1/evaluation`, `/access/v1/evaluations` | AuthZEN evaluation, single and batch |
+| GET, POST, PUT, DELETE | `/v1/policies`, `/v1/policies/{id}` | Stored Cedar policies |
 | GET | `/v1/policy/bundle` | Policy bundle for node agents |
 | GET, POST | `/v1/audit`, `/v1/audit/decisions` | Read the audit log; record local decisions |
 | various | `/scim/v2/{idp}/...` | SCIM 2.0 Users and Groups |

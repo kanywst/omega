@@ -673,9 +673,15 @@ func newServerCommand() *cobra.Command {
 			// so no request is evaluated without it (a forbid on a Domain
 			// would otherwise not apply), then keep it current so
 			// `principal in Domain::"..."` reflects domains created through
-			// any replica.
+			// any replica. Stored policies that do not load do not stop the
+			// server: evaluation fails closed, and the policy API that can
+			// fix them stays up.
 			if err := apiServer.RefreshDirectory(ctx); err != nil {
-				return fmt.Errorf("load domain tree: %w", err)
+				if !errors.Is(err, api.ErrStoredPolicySet) {
+					return fmt.Errorf("load domain tree: %w", err)
+				}
+				apiServer.MarkDirectoryStale()
+				fmt.Fprintf(os.Stderr, "omega server: WARN %v; policy evaluation fails closed until the stored policies load (fix or delete them through /v1/policies)\n", err)
 			}
 			go apiServer.RunDirectorySync(ctx, 5*time.Second)
 

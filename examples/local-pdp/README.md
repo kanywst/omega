@@ -1,6 +1,6 @@
 # Local policy decisions on the node
 
-A control plane (mTLS, `--require-auth`) and a node agent whose local PDP decides from the synced policy bundle. The demo shows that local decisions match the policy, land in the control plane's audit chain, follow a policy change after a `SIGHUP`, and stop with a `503` once the node has been cut off for longer than `--policy-max-age`.
+A control plane (mTLS, `--require-auth`) and a node agent whose local PDP decides from the synced policy bundle. The demo shows that local decisions match the policy, land in the control plane's audit chain, follow a policy stored and deleted through the policy API and a file change after a `SIGHUP`, and stop with a `503` once the node has been cut off for longer than `--policy-max-age`.
 
 See [docs/local-pdp.md](../../docs/local-pdp.md) for how it works and [ADR 0016](../../docs/adr/0016-local-policy-decisions.md) for the design decision.
 
@@ -15,6 +15,7 @@ make demo
 | `spiffe://omega.local/media/web` reads | allow (it is in `Domain::"media"`) |
 | `spiffe://omega.local/sports/web` reads | deny |
 | control plane `GET /v1/audit` | both decisions, as `access.evaluate.local` by `spiffe://omega.local/nodes/n1` |
+| `omega policy apply` a forbid on `media/web`, then `omega policy delete` | deny centrally and on the node, then allow again; `policy.create` and `policy.delete` in the audit chain; an invalid policy is refused |
 | policy file replaced, server `SIGHUP` | the node denies after its next sync |
 | control plane stopped | the node keeps answering, then `503` after `--policy-max-age` |
 

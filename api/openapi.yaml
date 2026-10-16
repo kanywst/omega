@@ -57,6 +57,8 @@ tags:
     description: Tamper-evident audit log readout and verification.
   - name: oidc
     description: OIDC discovery for external relying parties (AWS IAM OIDC, GCP WIF, Kubernetes ServiceAccount issuer trust).
+  - name: policies
+    description: Cedar policies stored in the control plane, alongside the read-only `--policy-dir` files. See docs/policies.md.
   - name: scim
     description: SCIM 2.0 provisioning of users and groups by an identity provider (RFC 7643, RFC 7644). See docs/scim.md.
   - name: leader-only
@@ -1292,6 +1294,189 @@ paths:
               schema:
                 type: object
 
+  /v1/policies:
+    get:
+      tags: [policies]
+      operationId: listPolicies
+      summary: List stored policies and the read-only --policy-dir files.
+      description: |
+        Items carry no `text`; read one with `GET /v1/policies/{id}`.
+        Files come first (`source: file`, id = file name), then stored
+        policies (`source: api`) by id. Under `--require-auth` the
+        caller must be authenticated. Served by followers.
+      responses:
+        "200":
+          description: Policy list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyListResponse"
+    post:
+      tags: [policies, leader-only]
+      operationId: createPolicy
+      summary: Store a new Cedar policy.
+      description: |
+        Needs `--require-auth` and a caller listed with
+        `--domain-root-admin`. The text is parsed and checked against
+        the policy ids the `--policy-dir` files define; an invalid
+        policy is rejected with 400 and never stored. The change and its
+        `policy.create` audit row commit in one transaction. Every Cedar
+        policy id the text defines is prefixed with `api/<id>::`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyRequest"
+      responses:
+        "201":
+          description: Policy stored.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
+  /v1/policies/validate:
+    post:
+      tags: [policies]
+      operationId: validatePolicy
+      summary: Check a policy without storing it.
+      description: |
+        Runs the same checks as create and update and changes nothing.
+        `id` defaults to `draft`. Under `--require-auth` the caller must
+        be authenticated. Served by followers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyRequest"
+      responses:
+        "200":
+          description: The policy is valid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyValidation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/policies/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: A stored policy id, or the file name of a --policy-dir file.
+        schema:
+          type: string
+    get:
+      tags: [policies]
+      operationId: getPolicy
+      summary: Show one policy with its Cedar text.
+      description: Under `--require-auth` the caller must be authenticated. Served by followers.
+      responses:
+        "200":
+          description: Policy. A stored policy carries its ETag.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [policies, leader-only]
+      operationId: updatePolicy
+      summary: Replace a stored policy's Cedar text.
+      description: |
+        Needs `If-Match` with the policy's current ETag (or `*`), plus
+        the same authorization and checks as create. Records a
+        `policy.update` audit row with the old and new digests in the
+        same transaction. A `--policy-dir` file answers 409.
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyRequest"
+      responses:
+        "200":
+          description: Policy updated.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionFailed"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+    delete:
+      tags: [policies, leader-only]
+      operationId: deletePolicy
+      summary: Delete a stored policy.
+      description: |
+        Needs `If-Match` with the policy's current ETag (or `*`). Records
+        a `policy.delete` audit row in the same transaction. A
+        `--policy-dir` file answers 409.
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionFailed"
+        "503":
+          $ref: "#/components/responses/NotLeader"
+
   /v1/policy/bundle:
     get:
       tags: [authzen]
@@ -1826,6 +2011,74 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Group"
+
+    Policy:
+      type: object
+      required: [id, source, digest]
+      properties:
+        id:
+          type: string
+          description: Stored policy id (1-63 of `a-z0-9_-`), or a --policy-dir file name.
+        source:
+          type: string
+          enum: [api, file]
+          description: "`api` for a stored policy, `file` for a read-only --policy-dir file."
+        text:
+          type: string
+          description: The Cedar text. Omitted in lists.
+        digest:
+          type: string
+          description: Hex SHA-256 of the text.
+        version:
+          type: integer
+          format: int64
+          description: Starts at 1 and grows by one per update. Stored policies only.
+        etag:
+          type: string
+          description: The ETag to send as If-Match. Stored policies only.
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_by:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    PolicyListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Policy"
+
+    PolicyRequest:
+      type: object
+      required: [text]
+      properties:
+        id:
+          type: string
+          description: Required on create; optional on update, where it must match the path.
+        text:
+          type: string
+          maxLength: 65536
+          description: Cedar policy text holding one or more policies.
+
+    PolicyValidation:
+      type: object
+      required: [valid, policy_ids]
+      properties:
+        valid:
+          type: boolean
+        policy_ids:
+          type: array
+          items:
+            type: string
+          description: The Cedar policy ids the text defines once stored.
 
     PolicyBundle:
       type: object
@@ -2731,6 +2984,13 @@ components:
 
     Conflict:
       description: Resource already exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    PreconditionFailed:
+      description: If-Match is missing (428) or does not match the current ETag (412).
       content:
         application/json:
           schema:
