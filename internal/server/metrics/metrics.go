@@ -61,6 +61,16 @@ var (
 		Help: "Stored domains left out of policy evaluation because their names are invalid; a forbid on them matches nothing.",
 	})
 
+	StoredPolicySetLoadFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "omega_stored_policy_set_load_failures_total",
+		Help: "Times the stored Cedar policies failed to load; the last set that loaded stays in force and evaluation fails closed once the directory goes stale.",
+	})
+
+	StoredPolicies = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "omega_stored_policies",
+		Help: "Stored Cedar policies in the set the policy engine last loaded.",
+	})
+
 	DomainsCreated = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "omega_domains_created_total",
 		Help: "Total domains created via the admin API.",
@@ -71,6 +81,7 @@ func init() {
 	Registry.MustRegister(
 		BuildInfo, HTTPRequests, HTTPLatency,
 		SVIDIssued, Decisions, DecisionLatency, AuditAppended, DomainsCreated, DomainsUnprojected,
+		StoredPolicySetLoadFailures, StoredPolicies,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
