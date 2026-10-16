@@ -256,6 +256,8 @@ func (s *Store) schemaDDL() []string {
 			   der          BYTEA  NOT NULL,
 			   kept_at      BIGINT NOT NULL DEFAULT 0,
 			   kept_until   BIGINT NOT NULL DEFAULT 0,
+			   key_id       TEXT   NOT NULL DEFAULT '',
+			   mac          TEXT   NOT NULL DEFAULT '',
 			   PRIMARY KEY (trust_domain, backend, fingerprint)
 			 )`,
 			`CREATE TABLE IF NOT EXISTS bundle_sequence (
@@ -361,6 +363,8 @@ func (s *Store) schemaDDL() []string {
 		   der          BLOB    NOT NULL,
 		   kept_at      INTEGER NOT NULL DEFAULT 0,
 		   kept_until   INTEGER NOT NULL DEFAULT 0,
+		   key_id       TEXT    NOT NULL DEFAULT '',
+		   mac          TEXT    NOT NULL DEFAULT '',
 		   PRIMARY KEY (trust_domain, backend, fingerprint)
 		 )`,
 		`CREATE TABLE IF NOT EXISTS bundle_sequence (

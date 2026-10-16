@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -24,6 +25,11 @@ func TestIdentityStoreRoundTripsAndMarksFollowers(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	kr, err := storage.NewAuditKeyring("k1", map[string][]byte{"k1": bytes.Repeat([]byte{1}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.UseAuditKeyring(kr)
 	ctx := context.Background()
 	s := identityStore{store}
 

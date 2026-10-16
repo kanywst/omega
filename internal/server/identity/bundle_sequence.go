@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // BundleSequenceStore keeps a trust domain's spiffe_sequence across
@@ -29,27 +30,43 @@ type bundleMaterial interface {
 // DurableSequence backs spiffe_sequence with a store, so the sequence
 // never goes back across a restart: it advances whenever the trust
 // material changes, from the highest value any process stored, and by
-// as many changes as the source counted when it counts them. Replicas
-// that serve the same material serve the same sequence. It implements
-// BundleSequencer for every identity source.
+// as many changes as the source counted when it counts them. A replica
+// whose store refuses writes re-reads the stored sequence now and then,
+// so it takes up the leader's number for the same material. It
+// implements BundleSequencer for every identity source.
 type DurableSequence struct {
 	src         bundleMaterial
 	store       BundleSequenceStore
 	trustDomain string
+	now         func() time.Time
+
+	// ioMu is held by the one caller reading or writing the store; the
+	// others serve the last sequence meanwhile instead of waiting.
+	ioMu sync.Mutex
 
 	mu     sync.Mutex
 	seq    int64
 	digest string
 	// srcSeq is the source's own count when seq was last set.
 	srcSeq int64
+	// retryAt holds off store reads after a failed one.
+	retryAt time.Time
+	// resyncAt, set on a replica that may not write, is when it next
+	// re-reads the stored sequence for unchanged material.
+	resyncAt time.Time
 }
+
+// sequenceRecheck is how long a failed store read holds off the next
+// one, and how often a replica that may not write re-reads the stored
+// sequence.
+const sequenceRecheck = 30 * time.Second
 
 // NewDurableSequence returns the spiffe_sequence of src's trust material
 // in trustDomain, kept in store. It reads the store once to number the
 // current material, and fails if it cannot: starting from 1 instead
 // would serve a lower sequence than before the restart.
 func NewDurableSequence(src bundleMaterial, store BundleSequenceStore, trustDomain string) (*DurableSequence, error) {
-	d := &DurableSequence{src: src, store: store, trustDomain: trustDomain}
+	d := &DurableSequence{src: src, store: store, trustDomain: trustDomain, now: time.Now}
 	if _, err := d.next(); err != nil {
 		return nil, err
 	}
@@ -58,10 +75,9 @@ func NewDurableSequence(src bundleMaterial, store BundleSequenceStore, trustDoma
 
 // BundleSequence implements BundleSequencer. It reads the store only
 // when the trust material differs from what it last served, so an
-// unchanged bundle costs no I/O. If the store cannot be read, it serves
-// the last sequence, which never goes back, and reads the store again
-// on the next call. The same holds while the trust material cannot be
-// read.
+// unchanged bundle costs no I/O. If the store or the trust material
+// cannot be read, it serves the last sequence, which never goes back,
+// and tries again later.
 func (d *DurableSequence) BundleSequence() int64 {
 	seq, err := d.next()
 	if err != nil {
@@ -77,25 +93,48 @@ func (d *DurableSequence) next() (int64, error) {
 		// below is of the bundle a caller reads next.
 		srcSeq = s.BundleSequence()
 	}
+	// A partial digest would look like a change and move the stored
+	// sequence for good, so an error leaves everything as it is.
 	digest, err := materialDigest(d.src)
-	if err != nil {
-		// A partial digest would look like a change and move the
-		// stored sequence for good.
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return d.seq, err
-	}
+	now := d.now()
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if digest == d.digest {
-		return d.seq, nil
+	last := d.seq
+	current := digest == d.digest && (d.resyncAt.IsZero() || now.Before(d.resyncAt))
+	holdOff := now.Before(d.retryAt)
+	d.mu.Unlock()
+	if err != nil {
+		return last, err
 	}
+	if current || holdOff || !d.ioMu.TryLock() {
+		return last, nil
+	}
+	defer d.ioMu.Unlock()
+	return d.number(digest, srcSeq)
+}
+
+// number reads the stored sequence and numbers digest. It runs under
+// ioMu, never under mu, so a slow store holds up no other caller.
+func (d *DurableSequence) number(digest string, srcSeq int64) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
 	stored, storedDigest, err := d.store.LoadBundleSequence(ctx, d.trustDomain)
+	d.mu.Lock()
 	if err != nil {
-		// The digest is not recorded, so the next call tries again.
-		return d.seq, err
+		d.retryAt = d.now().Add(sequenceRecheck)
+		last := d.seq
+		d.mu.Unlock()
+		return last, err
+	}
+	if digest == d.digest {
+		// A replica that may not write, checking for the leader's
+		// number for the material it already serves.
+		if storedDigest == digest && stored > d.seq {
+			d.seq = stored
+		}
+		d.resyncAt = d.now().Add(sequenceRecheck)
+		last := d.seq
+		d.mu.Unlock()
+		return last, nil
 	}
 	var seq int64
 	if storedDigest == digest && (stored > d.seq || d.seq == 0) {
@@ -112,11 +151,21 @@ func (d *DurableSequence) next() (int64, error) {
 		seq = max(d.seq, stored) + step
 	}
 	d.seq, d.digest, d.srcSeq = seq, digest, srcSeq
-	if seq != stored || storedDigest != digest {
-		if err := d.store.SaveBundleSequence(ctx, d.trustDomain, seq, digest); err != nil && !errors.Is(err, ErrStoreNotLeader) {
-			slog.Warn("identity: could not store the spiffe_sequence; a restart may serve it again for other trust material", "err", err)
-		}
+	d.mu.Unlock()
+	if seq == stored && storedDigest == digest {
+		return seq, nil
 	}
+	err = d.store.SaveBundleSequence(ctx, d.trustDomain, seq, digest)
+	var resyncAt time.Time
+	switch {
+	case errors.Is(err, ErrStoreNotLeader):
+		resyncAt = d.now().Add(sequenceRecheck)
+	case err != nil:
+		slog.Warn("identity: could not store the spiffe_sequence; a restart may serve it again for other trust material", "err", err)
+	}
+	d.mu.Lock()
+	d.resyncAt = resyncAt
+	d.mu.Unlock()
 	return seq, nil
 }
 

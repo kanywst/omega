@@ -2,11 +2,14 @@ package storage
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -26,12 +29,37 @@ func (c UpstreamCA) Fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
+// upstreamCAMAC authenticates one stored row: a row becomes a trust
+// anchor, so a database writer without the audit HMAC key must not be
+// able to add or extend one.
+func upstreamCAMAC(secret []byte, trustDomain, backend string, der []byte, keptAt, until int64) string {
+	m := hmac.New(sha256.New, secret)
+	m.Write([]byte("omega-upstream-ca-v1"))
+	for _, f := range [][]byte{[]byte(trustDomain), []byte(backend), der} {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(f)))
+		m.Write(n[:])
+		m.Write(f)
+	}
+	var t [16]byte
+	binary.BigEndian.PutUint64(t[:8], uint64(keptAt))
+	binary.BigEndian.PutUint64(t[8:], uint64(until))
+	m.Write(t[:])
+	return hex.EncodeToString(m.Sum(nil))
+}
+
 // UpstreamCAs returns the CAs stored for one trust domain and issuer
 // backend, in fingerprint order. Every replica reads them, so all of
 // them serve the CAs one replica kept through an issuer's rotation.
+// Only rows MAC'd under a key in the audit keyring are returned: with no
+// keyring nothing is, since an unauthenticated row would let whoever can
+// write the database add a trust anchor.
 func (s *Store) UpstreamCAs(ctx context.Context, trustDomain, backend string) ([]UpstreamCA, error) {
+	if s.auditKeyring == nil {
+		return nil, nil
+	}
 	rows, err := s.db.QueryContext(ctx,
-		s.rebind(`SELECT der, kept_at, kept_until FROM upstream_cas WHERE trust_domain = ? AND backend = ? ORDER BY fingerprint`),
+		s.rebind(`SELECT der, kept_at, kept_until, key_id, mac FROM upstream_cas WHERE trust_domain = ? AND backend = ? ORDER BY fingerprint`),
 		trustDomain, backend)
 	if err != nil {
 		return nil, fmt.Errorf("query upstream cas: %w", err)
@@ -42,11 +70,17 @@ func (s *Store) UpstreamCAs(ctx context.Context, trustDomain, backend string) ([
 		var (
 			der           []byte
 			keptAt, until int64
+			keyID, mac    string
 		)
-		if err := rows.Scan(&der, &keptAt, &until); err != nil {
+		if err := rows.Scan(&der, &keptAt, &until, &keyID, &mac); err != nil {
 			return nil, fmt.Errorf("scan upstream ca: %w", err)
 		}
 		c := UpstreamCA{DER: der}
+		secret, ok := s.auditKeyring.lookup(keyID)
+		if !ok || !hmac.Equal([]byte(mac), []byte(upstreamCAMAC(secret, trustDomain, backend, der, keptAt, until))) {
+			slog.Warn("storage: skipping a stored upstream CA whose MAC does not verify", "trust_domain", trustDomain, "backend", backend, "fingerprint", c.Fingerprint(), "key_id", keyID)
+			continue
+		}
 		if keptAt != 0 {
 			c.KeptAt = time.Unix(0, keptAt).UTC()
 		}
@@ -58,6 +92,10 @@ func (s *Store) UpstreamCAs(ctx context.Context, trustDomain, backend string) ([
 	return out, rows.Err()
 }
 
+// ErrNoUpstreamCAKey is returned when the upstream CA set is saved on a
+// store without an audit HMAC keyring: rows could not be authenticated.
+var ErrNoUpstreamCAKey = errors.New("storing upstream CAs needs --audit-hmac-key-file")
+
 // ReplaceUpstreamCAs replaces the CAs stored for one trust domain and
 // issuer backend with cas, in one transaction. Like every write, it is
 // refused with ErrNotLeader on a replica that is not the leader.
@@ -65,6 +103,10 @@ func (s *Store) ReplaceUpstreamCAs(ctx context.Context, trustDomain, backend str
 	if !s.IsLeader() {
 		return ErrNotLeader
 	}
+	if s.auditKeyring == nil {
+		return ErrNoUpstreamCAKey
+	}
+	keyID, secret := s.auditKeyring.active()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -82,8 +124,8 @@ func (s *Store) ReplaceUpstreamCAs(ctx context.Context, trustDomain, backend str
 			keptAt, until = c.KeptAt.UnixNano(), c.KeptUntil.UnixNano()
 		}
 		if _, err := tx.ExecContext(ctx,
-			s.rebind(`INSERT INTO upstream_cas(trust_domain, backend, fingerprint, der, kept_at, kept_until) VALUES (?, ?, ?, ?, ?, ?)`),
-			trustDomain, backend, c.Fingerprint(), c.DER, keptAt, until,
+			s.rebind(`INSERT INTO upstream_cas(trust_domain, backend, fingerprint, der, kept_at, kept_until, key_id, mac) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+			trustDomain, backend, c.Fingerprint(), c.DER, keptAt, until, keyID, upstreamCAMAC(secret, trustDomain, backend, c.DER, keptAt, until),
 		); err != nil {
 			return fmt.Errorf("insert upstream ca: %w", err)
 		}

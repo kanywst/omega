@@ -394,10 +394,29 @@ func newServerCommand() *cobra.Command {
 				go kept.run(ctx, func(c context.Context, e identity.KeptCAEvent) { recordKeptCA(c, store, e) })
 				keptQueue = kept
 				keeper.SetKeptCAHook(kept.push)
+			}
+			// The distrust list is in force before anything stored is
+			// restored, so a distrusted CA is never restored or served.
+			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
+			if upstreamCADistrustFile != "" {
+				if keeper == nil {
+					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki, step-ca or aws-pca")
+				}
+				if err := distrust.apply(ctx); err != nil {
+					return fmt.Errorf("upstream-ca-distrust: %w", err)
+				}
+			}
+			if keeper != nil {
 				// The kept set is stored, so a restart does not end the
-				// grace early and every replica serves the same set.
-				if err := keeper.UseCAStore(identityStore{store}); err != nil {
-					return fmt.Errorf("load the stored upstream CAs: %w", err)
+				// grace early and every replica serves the same set. The
+				// rows are trust anchors, so they are MAC'd under the audit
+				// HMAC key; without one the set stays in memory.
+				if auditKeyring != nil {
+					if err := keeper.UseCAStore(identityStore{store}); err != nil {
+						return fmt.Errorf("load the stored upstream CAs: %w", err)
+					}
+				} else if upstreamCAGrace > 0 {
+					fmt.Fprintln(os.Stderr, "omega server: WARN --upstream-ca-grace without --audit-hmac-key-file: the kept upstream CAs are not stored, so a restart ends their grace and replicas keep their own sets")
 				}
 				// The kept set changes on its own, so peers read the
 				// bundle live rather than a copy refreshed on SIGHUP.
@@ -410,15 +429,6 @@ func newServerCommand() *cobra.Command {
 			bundleSeq, err := identity.NewDurableSequence(ca, identityStore{store}, ca.TrustDomain().String())
 			if err != nil {
 				return fmt.Errorf("number the trust bundle from the stored spiffe_sequence: %w", err)
-			}
-			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
-			if upstreamCADistrustFile != "" {
-				if keeper == nil {
-					return fmt.Errorf("--upstream-ca-distrust needs --ca-backend=vault-pki, step-ca or aws-pca")
-				}
-				if err := distrust.apply(ctx); err != nil {
-					return fmt.Errorf("upstream-ca-distrust: %w", err)
-				}
 			}
 			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "" || caReloader != nil || upstreamCADistrustFile != "") && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)

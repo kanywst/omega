@@ -214,6 +214,10 @@ set to permit an action that should be denied.
 - Residual risk: an attacker who reaches the database directly
   bypasses the audit log. Mitigation is at the database access
   layer, not Omega.
+- Stored upstream CAs (the kept set of `--upstream-ca-grace`) are
+  trust anchors, so each row carries an HMAC under the audit keyring
+  and is ignored unless it verifies; without `--audit-hmac-key-file`
+  they are not stored at all.
 - Recommended: run Postgres with row-level access control or a
   least-privileged role for the omega-server process; the
   `--policy-dir` flag also lets policies be sourced from a file

@@ -18,9 +18,24 @@ func TestBundleSequence(t *testing.T) { exerciseBundleSequence(t, newStore(t)) }
 
 func TestPostgresBundleSequence(t *testing.T) { exerciseBundleSequence(t, openPostgresStore(t)) }
 
+func upstreamCAKeyring(t *testing.T, id string, fill byte) *storage.AuditKeyring {
+	t.Helper()
+	kr, err := storage.NewAuditKeyring(id, map[string][]byte{id: bytes.Repeat([]byte{fill}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return kr
+}
+
 func exerciseUpstreamCAs(t *testing.T, s *storage.Store) {
 	t.Helper()
 	ctx := context.Background()
+	// Without an audit HMAC key nothing can be stored or restored.
+	if err := s.ReplaceUpstreamCAs(ctx, "example.org", "vault-pki", nil); !errors.Is(err, storage.ErrNoUpstreamCAKey) {
+		t.Fatalf("replace without a keyring: %v", err)
+	}
+	s.UseAuditKeyring(upstreamCAKeyring(t, "k1", 1))
+	defer s.UseAuditKeyring(nil)
 	got, err := s.UpstreamCAs(ctx, "example.org", "vault-pki")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("empty store: %v %v", got, err)
@@ -57,6 +72,17 @@ func exerciseUpstreamCAs(t *testing.T, s *storage.Store) {
 			t.Errorf("unexpected CA %q", c.DER)
 		}
 	}
+	// Rows MAC'd under a key the server does not hold are not restored,
+	// so a database writer cannot add or extend a trust anchor.
+	s.UseAuditKeyring(upstreamCAKeyring(t, "k2", 2))
+	if got, _ := s.UpstreamCAs(ctx, "example.org", "vault-pki"); len(got) != 0 {
+		t.Fatalf("rows under an unknown key were restored: %v", got)
+	}
+	s.UseAuditKeyring(nil)
+	if got, _ := s.UpstreamCAs(ctx, "example.org", "vault-pki"); len(got) != 0 {
+		t.Fatalf("rows were restored without a keyring: %v", got)
+	}
+	s.UseAuditKeyring(upstreamCAKeyring(t, "k1", 1))
 	// A replace drops what is not in the new set.
 	if err := s.ReplaceUpstreamCAs(ctx, "example.org", "vault-pki", []storage.UpstreamCA{current}); err != nil {
 		t.Fatalf("replace again: %v", err)

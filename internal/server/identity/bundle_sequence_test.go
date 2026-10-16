@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeMaterial is trust material that changes when the test says so.
@@ -114,6 +115,36 @@ func TestDurableSequenceReplicas(t *testing.T) {
 	}
 }
 
+func TestDurableSequenceFollowerTakesUpTheLeadersNumber(t *testing.T) {
+	store := NewMemCAStore()
+	leaderSrc, followerSrc := newFakeMaterial("A"), newFakeMaterial("A")
+	leaderSrc.count.Store(1)
+	followerSrc.count.Store(1)
+	clock := time.Now()
+	leader := newSeq(t, leaderSrc, store, "omega.local")
+	follower := newSeq(t, followerSrc, store.Replica(true), "omega.local")
+	follower.now = func() time.Time { return clock }
+	// Two changes: the follower's source saw them as one, the leader's
+	// as two, and the follower numbered the bundle first.
+	leaderSrc.pem.Store("B")
+	followerSrc.pem.Store("B")
+	followerSrc.count.Store(2)
+	leaderSrc.count.Store(3)
+	if got := follower.BundleSequence(); got != 2 {
+		t.Fatalf("follower first: %d", got)
+	}
+	if got := leader.BundleSequence(); got != 3 {
+		t.Fatalf("leader: %d", got)
+	}
+	if got := follower.BundleSequence(); got != 2 {
+		t.Fatalf("follower before its recheck: %d", got)
+	}
+	clock = clock.Add(sequenceRecheck + time.Second)
+	if got := follower.BundleSequence(); got != 3 {
+		t.Fatalf("follower after its recheck: %d, want the leader's 3", got)
+	}
+}
+
 func TestDurableSequenceStoreFailures(t *testing.T) {
 	store := NewMemCAStore()
 	src := newFakeMaterial("A")
@@ -123,17 +154,28 @@ func TestDurableSequenceStoreFailures(t *testing.T) {
 	}
 	store.Fail(nil, nil)
 	d := newSeq(t, src, store, "omega.local")
+	clock := time.Now()
+	d.now = func() time.Time { return clock }
 	if d.BundleSequence() != 1 {
 		t.Fatal("first")
 	}
 	// With the store down, a change keeps the last sequence rather than
-	// guess, and the store is read again on the next call.
+	// guess, and the store is read again after a pause, not on every
+	// call.
 	store.Fail(errors.New("db down"), nil)
 	src.pem.Store("B")
 	if got := d.BundleSequence(); got != 1 {
 		t.Fatalf("with the store down: %d", got)
 	}
 	store.Fail(nil, nil)
+	loads, _ := store.Counts()
+	if got := d.BundleSequence(); got != 1 {
+		t.Fatalf("during the pause: %d", got)
+	}
+	if after, _ := store.Counts(); after != loads {
+		t.Fatal("the store was read again during the pause")
+	}
+	clock = clock.Add(sequenceRecheck + time.Second)
 	if got := d.BundleSequence(); got != 2 {
 		t.Fatalf("once the store is back: %d", got)
 	}
