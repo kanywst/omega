@@ -185,7 +185,10 @@ func TestPolicyAPILifecycle(t *testing.T) {
 	if code, _, _ := callH(t, root, "DELETE", base+"/alice-read", nil, map[string]string{"If-Match": updated.ETag}); code != http.StatusNoContent {
 		t.Fatalf("delete: %d", code)
 	}
-	if code, _ := call(t, root, "DELETE", base+"/alice-read", nil); code != http.StatusNotFound {
+	if code, _ := call(t, root, "DELETE", base+"/alice-read", nil); code != http.StatusPreconditionRequired {
+		t.Fatalf("delete without If-Match: %d", code)
+	}
+	if code, _, _ := callH(t, root, "DELETE", base+"/alice-read", nil, map[string]string{"If-Match": "*"}); code != http.StatusNotFound {
 		t.Fatalf("second delete: %d", code)
 	}
 	if evalAs(t, env, root, alice, "read").Decision {
@@ -324,7 +327,7 @@ func TestStoredPolicySetThatDoesNotLoad(t *testing.T) {
 		t.Fatalf("a stale set must fail closed: %d", code)
 	}
 	// The API that fixes the set stays up, and fixing it recovers.
-	if code, body := call(t, root, "DELETE", env.srv.URL+"/v1/policies/bad", nil); code != http.StatusNoContent {
+	if code, _, body := callH(t, root, "DELETE", env.srv.URL+"/v1/policies/bad", nil, map[string]string{"If-Match": "*"}); code != http.StatusNoContent {
 		t.Fatalf("delete bad: %d %s", code, body)
 	}
 	if !evalAs(t, env, root, alice, "read").Decision {
@@ -381,7 +384,7 @@ func TestStoredPoliciesReachAnotherReplica(t *testing.T) {
 	if !decision() {
 		t.Fatal("the replica must pick the stored policy up on its next sync")
 	}
-	if code, _ := call(t, root, "DELETE", env.srv.URL+"/v1/policies/x", nil); code != http.StatusNoContent {
+	if code, _, _ := callH(t, root, "DELETE", env.srv.URL+"/v1/policies/x", nil, map[string]string{"If-Match": "*"}); code != http.StatusNoContent {
 		t.Fatalf("delete: %d", code)
 	}
 	if decision() {

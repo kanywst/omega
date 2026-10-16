@@ -29,7 +29,7 @@ A Cedar policy is not confined to a domain: a `permit` written by the admin of `
 
 Each stored policy has a `version` that starts at 1 and grows by one per update, and an ETag `"<version>-<digest>"`, where `digest` is the hex SHA-256 of the text. `GET /v1/policies/{id}`, create and update return it in the `ETag` header.
 
-`PUT /v1/policies/{id}` needs `If-Match` with the current ETag, or `*` to overwrite whatever is there. A missing `If-Match` is answered with `428` and a stale one with `412`, so two admins editing the same policy cannot silently overwrite each other. `DELETE` takes an optional `If-Match`, checked the same way when present.
+`PUT` and `DELETE` on `/v1/policies/{id}` need `If-Match` with the current ETag, or `*` to act on whatever version is stored. A missing `If-Match` is answered with `428` and a stale one with `412`, so an admin cannot silently overwrite or delete a version someone else wrote since they read it.
 
 ## Audit
 
@@ -70,7 +70,7 @@ omega policy get block-media-web --server https://omega:8080 --server-ca ca.pem 
 omega policy delete block-media-web --server https://omega:8080 --server-ca ca.pem --client-cert root.pem --client-key root.key
 ```
 
-`omega policy apply` takes the id from the file name (or `--id`), creates the policy when it does not exist, and otherwise updates it with the ETag it just read, so a concurrent change fails with `412` instead of being lost. `omega policy delete --if-match` deletes only an unchanged policy.
+`omega policy apply` takes the id from the file name (or `--id`), creates the policy when it does not exist, and otherwise updates it with the ETag it just read, so a concurrent change fails with `412` instead of being lost. `omega policy delete` sends `If-Match: *` unless `--if-match` names the ETag to delete.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -78,7 +78,7 @@ omega policy delete block-media-web --server https://omega:8080 --server-ca ca.p
 | `GET /v1/policies/{id}` | Show one policy with its text |
 | `POST /v1/policies` | Store a new policy |
 | `PUT /v1/policies/{id}` | Replace a stored policy's text (`If-Match` required) |
-| `DELETE /v1/policies/{id}` | Delete a stored policy (`If-Match` optional) |
+| `DELETE /v1/policies/{id}` | Delete a stored policy (`If-Match` required) |
 | `POST /v1/policies/validate` | Run the create checks and change nothing |
 
 `examples/local-pdp` stores a policy with `omega policy apply`, checks that the control plane and the node agent both decide with it, deletes it, and checks both audit rows.

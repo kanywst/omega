@@ -155,18 +155,14 @@ func newPolicyCommand() *cobra.Command {
 		Short: "Delete a stored policy",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			var h map[string]string
-			if etag != "" {
-				h = map[string]string{"If-Match": etag}
-			}
-			resp, body, err := pc.do(http.MethodDelete, pc.url(args[0]), nil, h)
+			resp, body, err := pc.do(http.MethodDelete, pc.url(args[0]), nil, map[string]string{"If-Match": etag})
 			if err != nil {
 				return err
 			}
 			return printBody(c.OutOrStdout(), resp, body)
 		},
 	}
-	del.Flags().StringVar(&etag, "if-match", "", "delete only if the policy still has this ETag")
+	del.Flags().StringVar(&etag, "if-match", "*", "delete only if the policy still has this ETag (default: whatever version is stored)")
 
 	cmd.AddCommand(list, get, apply, del)
 	return cmd

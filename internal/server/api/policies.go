@@ -404,11 +404,15 @@ func (s *Server) deletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	match := r.Header.Get("If-Match")
+	if match == "" {
+		writeErr(w, http.StatusPreconditionRequired, errors.New("deleting a policy needs If-Match with its current ETag (or *)"))
+		return
+	}
 	if _, ok := s.changePolicy(w, r, id, func(cur *storage.Policy) (*storage.Policy, storage.AuditEvent, error) {
 		if cur == nil {
 			return nil, storage.AuditEvent{}, storage.ErrNotFound
 		}
-		if match != "" && !ifMatch(match, cur.ETag()) {
+		if !ifMatch(match, cur.ETag()) {
 			return nil, storage.AuditEvent{}, errPreconditionFailed
 		}
 		return nil, policyEvent(r, "policy.delete", id, cur, "", cur.Version, nil), nil

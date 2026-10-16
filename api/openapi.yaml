@@ -1450,13 +1450,13 @@ paths:
       operationId: deletePolicy
       summary: Delete a stored policy.
       description: |
-        When `If-Match` is sent it must match the current ETag. Records a
-        `policy.delete` audit row in the same transaction. A
+        Needs `If-Match` with the policy's current ETag (or `*`). Records
+        a `policy.delete` audit row in the same transaction. A
         `--policy-dir` file answers 409.
       parameters:
         - name: If-Match
           in: header
-          required: false
+          required: true
           schema:
             type: string
       responses:
@@ -1471,6 +1471,8 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
         "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
           $ref: "#/components/responses/PreconditionFailed"
         "503":
           $ref: "#/components/responses/NotLeader"
