@@ -14,8 +14,9 @@ import (
 
 type fakeKeeper struct{ got [][32]byte }
 
-func (f *fakeKeeper) SetKeptCAHook(func(identity.KeptCAEvent)) {}
-func (f *fakeKeeper) DistrustCAs(fps [][32]byte) int           { f.got = fps; return len(fps) }
+func (f *fakeKeeper) SetKeptCAHook(func(identity.KeptCAEvent))  {}
+func (f *fakeKeeper) DistrustCAs(fps [][32]byte) int            { f.got = fps; return len(fps) }
+func (f *fakeKeeper) UseCAStore(identity.UpstreamCAStore) error { return nil }
 
 func TestCADistrustRecordsChangesAndRejections(t *testing.T) {
 	dir := t.TempDir()

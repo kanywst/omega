@@ -12,6 +12,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 - **Issuing-CA-only bundle for AWS Private CA.** `--ca-aws-pca-bundle=issuing` (Helm: `server.ca.awsPCA.bundle`) serves only the issuing CA as the trust anchor, instead of the issuing CA plus the chain to the root, so certificates from other subordinates of the same root no longer verify for the trust domain. Peers and federation partners must accept a CA that is not self-signed as an anchor. The default, `chain`, keeps the current behavior. See [docs/ca-aws-pca.md](docs/ca-aws-pca.md#trust-bundle).
 
+### Fixed
+
+- **The upstream CA overlap and `spiffe_sequence` survive restarts and are shared by replicas.** The CAs kept by `--upstream-ca-grace` from a Vault PKI, step-ca or AWS Private CA rotation were held in memory, so a restart ended their grace early and Postgres replicas could each serve a different kept set. With `--audit-hmac-key-file` they are now stored in the database (SQLite or Postgres) with their times, each row MAC'd under the audit HMAC key so a database writer without it cannot add a trust anchor, along with the issuer's last published CAs, so a restart restores them and also catches a rotation that happened while Omega was down. Replicas read the shared set on every bundle refresh; only the leader writes it. `spiffe_sequence` is now stored per trust domain for every backend and identity source, so it never goes back after a restart and matches across replicas serving the same bundle. A kept CA taken from the database rather than seen leaving the issuer is recorded in `ca.upstream` as `kept` with the reason `restored`; the other records and the distrust list are unchanged. See [docs/ca-rotation.md](docs/ca-rotation.md).
+
 ## [0.10.0] - 2026-10-15
 
 Adds three cloud CA backends (AWS Private CA, Google Cloud CAS and Azure Key Vault), an agent-side Kubernetes workload attestor for the self-issued path, and holds every external issuer's certificates to the X.509-SVID profile.

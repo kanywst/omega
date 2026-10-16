@@ -249,6 +249,24 @@ func (s *Store) schemaDDL() []string {
 			   k  TEXT   PRIMARY KEY,
 			   v  BIGINT NOT NULL
 			 )`,
+			`CREATE TABLE IF NOT EXISTS upstream_cas (
+			   trust_domain TEXT   NOT NULL,
+			   backend      TEXT   NOT NULL,
+			   fingerprint  TEXT   NOT NULL,
+			   der          BYTEA  NOT NULL,
+			   kept_at      BIGINT NOT NULL DEFAULT 0,
+			   kept_until   BIGINT NOT NULL DEFAULT 0,
+			   saved_at     BIGINT NOT NULL DEFAULT 0,
+			   key_id       TEXT   NOT NULL DEFAULT '',
+			   mac          TEXT   NOT NULL DEFAULT '',
+			   PRIMARY KEY (trust_domain, backend, fingerprint)
+			 )`,
+			`CREATE TABLE IF NOT EXISTS bundle_sequence (
+			   trust_domain TEXT   PRIMARY KEY,
+			   seq          BIGINT NOT NULL,
+			   digest       TEXT   NOT NULL,
+			   updated_at   BIGINT NOT NULL
+			 )`,
 		}
 	}
 	return []string{
@@ -338,6 +356,24 @@ func (s *Store) schemaDDL() []string {
 		`CREATE TABLE IF NOT EXISTS audit_meta (
 		   k  TEXT    PRIMARY KEY,
 		   v  INTEGER NOT NULL
+		 )`,
+		`CREATE TABLE IF NOT EXISTS upstream_cas (
+		   trust_domain TEXT    NOT NULL,
+		   backend      TEXT    NOT NULL,
+		   fingerprint  TEXT    NOT NULL,
+		   der          BLOB    NOT NULL,
+		   kept_at      INTEGER NOT NULL DEFAULT 0,
+		   kept_until   INTEGER NOT NULL DEFAULT 0,
+		   saved_at     INTEGER NOT NULL DEFAULT 0,
+		   key_id       TEXT    NOT NULL DEFAULT '',
+		   mac          TEXT    NOT NULL DEFAULT '',
+		   PRIMARY KEY (trust_domain, backend, fingerprint)
+		 )`,
+		`CREATE TABLE IF NOT EXISTS bundle_sequence (
+		   trust_domain TEXT    PRIMARY KEY,
+		   seq          INTEGER NOT NULL,
+		   digest       TEXT    NOT NULL,
+		   updated_at   INTEGER NOT NULL
 		 )`,
 	}
 }

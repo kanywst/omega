@@ -2,6 +2,7 @@ package identity
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -29,8 +30,10 @@ const UpstreamCAGrace = 24 * time.Hour
 const upstreamRefreshBackoff = 30 * time.Second
 
 // KeptCAEvent reports a change to the set of rotated-out CAs Omega keeps
-// serving: Action is "kept" or "dropped", Reason for a drop is
-// "grace-ended", "republished" or "distrusted".
+// serving: Action is "kept" or "dropped". Reason for a drop is
+// "grace-ended", "republished" or "distrusted"; a CA kept from the
+// stored set rather than seen leaving the issuer has the reason
+// "restored".
 type KeptCAEvent struct {
 	Action      string
 	Reason      string
@@ -39,6 +42,33 @@ type KeptCAEvent struct {
 	Until       time.Time
 }
 
+// UpstreamCA is one CA an external issuer published, as Omega stores
+// it. Until is zero while the issuer still publishes the CA; once the
+// issuer stops, Omega keeps it from KeptAt until Until.
+type UpstreamCA struct {
+	DER    []byte
+	KeptAt time.Time
+	Until  time.Time
+	// SavedAt is when the store last wrote the row (zero when saving).
+	SavedAt time.Time
+}
+
+// UpstreamCAStore keeps the issuer's CAs and the ones kept from a
+// rotation across restarts, shared by every replica. Save replaces the
+// whole set for the trust domain and backend; on a replica that may not
+// write it returns an error wrapping ErrStoreNotLeader.
+type UpstreamCAStore interface {
+	LoadUpstreamCAs(ctx context.Context, trustDomain, backend string) ([]UpstreamCA, error)
+	SaveUpstreamCAs(ctx context.Context, trustDomain, backend string, cas []UpstreamCA) error
+}
+
+// ErrStoreNotLeader is the error a store returns for a write on a
+// replica that is not the leader. The leader writes; the others read.
+var ErrStoreNotLeader = errors.New("store: not the leader")
+
+// storeTimeout bounds each read or write of the stored CA state.
+const storeTimeout = 5 * time.Second
+
 // caOverlap turns an external issuer's current CA bundle into the one
 // Omega serves: the current CAs plus any it dropped within the grace
 // period. It counts changes for spiffe_sequence.
@@ -46,25 +76,47 @@ type caOverlap struct {
 	grace      time.Duration
 	mu         sync.Mutex
 	deliverMu  sync.Mutex
+	saveMu     sync.Mutex
 	loaded     bool
 	fetched    []*x509.Certificate
 	current    map[[32]byte]*x509.Certificate
 	retired    map[[32]byte]retiredCA
 	distrusted map[[32]byte]bool
+	// restoreCap bounds the keep time of a CA restored as published,
+	// to its row's save time plus the grace.
+	restoreCap map[[32]byte]time.Time
 	served     []byte
 	seq        atomic.Int64
 	hook       func(KeptCAEvent)
 	pending    []KeptCAEvent
+
+	// store, once set, holds the state across restarts and replicas.
+	store atomic.Pointer[caStore]
+	// baselined is set once the stored issuer CAs were compared with
+	// the issuer's bundle: only the first comparison after a start can
+	// find a rotation that happened while Omega was down.
+	baselined bool
+	// version counts changes to the state to store; saved is the
+	// version last stored.
+	version int64
+	saved   atomic.Int64
+}
+
+type caStore struct {
+	store       UpstreamCAStore
+	trustDomain string
+	backend     string
 }
 
 type retiredCA struct {
-	cert  *x509.Certificate
-	until time.Time
+	cert   *x509.Certificate
+	keptAt time.Time
+	until  time.Time
 }
 
 // newCAOverlap keeps dropped CAs for grace; zero keeps none.
 func newCAOverlap(grace time.Duration) *caOverlap {
-	o := &caOverlap{grace: grace, current: map[[32]byte]*x509.Certificate{}, retired: map[[32]byte]retiredCA{}, distrusted: map[[32]byte]bool{}}
+	o := &caOverlap{grace: grace, current: map[[32]byte]*x509.Certificate{}, retired: map[[32]byte]retiredCA{}, distrusted: map[[32]byte]bool{}, restoreCap: map[[32]byte]time.Time{}}
 	o.seq.Store(1)
 	return o
 }
@@ -76,27 +128,226 @@ func (o *caOverlap) setHook(h func(KeptCAEvent)) {
 	o.mu.Unlock()
 }
 
-// unlock releases o.mu and then reports the events queued under it, so
-// the hook never runs under the lock. deliverMu is taken before o.mu is
-// released, so two callers report their events in the order the changes
-// were made.
+// unlock releases o.mu, then reports the events queued under it and
+// stores the state if it changed, so neither runs under the lock.
+// deliverMu is taken before o.mu is released, so two callers report and
+// store in the order the changes were made.
 func (o *caOverlap) unlock() {
 	events, hook := o.pending, o.hook
 	o.pending = nil
+	st := o.store.Load()
+	var (
+		save     bool
+		snapshot []UpstreamCA
+		version  int64
+	)
+	if st != nil && o.version != o.saved.Load() {
+		save, snapshot, version = true, o.snapshotLocked(), o.version
+	}
 	o.deliverMu.Lock()
 	o.mu.Unlock()
-	defer o.deliverMu.Unlock()
 	if hook != nil {
 		for _, e := range events {
 			hook(e)
 		}
 	}
+	o.deliverMu.Unlock()
+	if save {
+		o.save(st, snapshot, version)
+	}
+}
+
+// save writes one snapshot. It runs outside every lock a bundle read
+// takes; one save at a time, and a caller that finds one in flight
+// skips, since the version left unsaved makes the next change or
+// refresh try again. A snapshot older than the one already saved is
+// never written over it.
+func (o *caOverlap) save(st *caStore, snapshot []UpstreamCA, version int64) {
+	if !o.saveMu.TryLock() {
+		return
+	}
+	defer o.saveMu.Unlock()
+	if version <= o.saved.Load() {
+		return
+	}
+	// A follower's store refuses the write before any I/O; trying again
+	// on each change is what lets a replica that becomes the leader
+	// store its state.
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	err := st.store.SaveUpstreamCAs(ctx, st.trustDomain, st.backend, snapshot)
+	cancel()
+	switch {
+	case err == nil:
+		o.saved.Store(version)
+	case errors.Is(err, ErrStoreNotLeader):
+		// The leader stores the set; this replica reads it.
+	default:
+		// Not marked saved, so the next change or refresh tries again.
+		slog.Warn("identity: could not store the upstream CAs; a restart before the next save loses the latest change", "err", err)
+	}
+}
+
+// snapshotLocked returns the state to store: the issuer's CAs and the
+// kept ones.
+func (o *caOverlap) snapshotLocked() []UpstreamCA {
+	out := make([]UpstreamCA, 0, len(o.current)+len(o.retired))
+	for _, c := range o.current {
+		out = append(out, UpstreamCA{DER: c.Raw})
+	}
+	for _, r := range o.retired {
+		out = append(out, UpstreamCA{DER: r.cert.Raw, KeptAt: r.keptAt, Until: r.until})
+	}
+	return out
 }
 
 func (o *caOverlap) drop(fp [32]byte, reason string) {
 	r := o.retired[fp]
 	delete(o.retired, fp)
+	o.version++
 	o.pending = append(o.pending, KeptCAEvent{Action: "dropped", Reason: reason, Subject: r.cert.Subject.String(), Fingerprint: hex.EncodeToString(fp[:]), Until: r.until})
+}
+
+// attachStore loads the stored state and keeps it in step from now on:
+// the CAs kept before a restart are kept again until their own time is
+// up, and a CA the issuer stopped publishing while Omega was down is
+// kept as if Omega had seen it go. An error leaves the overlap as it was.
+func (o *caOverlap) attachStore(store UpstreamCAStore, trustDomain, backend string, now time.Time) error {
+	st := &caStore{store: store, trustDomain: trustDomain, backend: backend}
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	stored, err := store.LoadUpstreamCAs(ctx, trustDomain, backend)
+	cancel()
+	if err != nil {
+		return err
+	}
+	o.mu.Lock()
+	defer o.unlock()
+	o.store.Store(st)
+	prev := o.mergeStoredLocked(stored, o.current, now)
+	o.retireLocked(prev, o.current, now)
+	// Store the state as this process sees it, even when nothing changed.
+	o.version++
+	if o.loaded {
+		o.serveLocked(now)
+	}
+	return nil
+}
+
+// loadStored reads the shared state, or returns false when there is no
+// store or it cannot be read; the overlap then goes on with its own.
+func (o *caOverlap) loadStored() ([]UpstreamCA, bool) {
+	st := o.store.Load()
+	if st == nil {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	stored, err := st.store.LoadUpstreamCAs(ctx, st.trustDomain, st.backend)
+	if err != nil {
+		slog.Warn("identity: could not read the stored upstream CAs; serving this replica's own", "err", err)
+		return nil, false
+	}
+	return stored, true
+}
+
+// mergeStoredLocked folds the stored state into this process's: a CA
+// kept by any replica is kept here, until the time the first replica
+// to keep it set, cut to the CA's keep time plus this process's grace
+// and to its own expiry. It returns the CAs the issuer published before
+// next: this process's own, plus, on the first merge after a start, the
+// stored ones. A stored row becomes a trust anchor, so only a CA
+// certificate is taken, and each one this process did not have is
+// recorded as kept with the reason "restored".
+func (o *caOverlap) mergeStoredLocked(stored []UpstreamCA, next map[[32]byte]*x509.Certificate, now time.Time) map[[32]byte]*x509.Certificate {
+	prev := make(map[[32]byte]*x509.Certificate, len(o.current))
+	for fp, c := range o.current {
+		prev[fp] = c
+	}
+	first := !o.baselined
+	o.baselined = true
+	for _, r := range stored {
+		c, err := x509.ParseCertificate(r.DER)
+		if err != nil {
+			slog.Warn("identity: skipping a stored upstream CA that does not parse", "err", err)
+			continue
+		}
+		fp := sha256.Sum256(c.Raw)
+		if !c.IsCA {
+			slog.Warn("identity: skipping a stored upstream certificate that is not a CA", "subject", c.Subject.String(), "fingerprint", hex.EncodeToString(fp[:]))
+			continue
+		}
+		if r.Until.IsZero() {
+			// A CA the issuer published when the row was saved. If the
+			// issuer no longer does, it is kept, but never past the save
+			// time plus the grace: a row replayed from long ago grants
+			// no more than keeping it back then would have.
+			if first && !r.SavedAt.IsZero() && now.Before(r.SavedAt.Add(o.grace)) {
+				prev[fp] = c
+				o.restoreCap[fp] = r.SavedAt.Add(o.grace)
+			}
+			continue
+		}
+		until := r.Until
+		if limit := r.KeptAt.Add(o.grace); limit.Before(until) {
+			until = limit
+		}
+		if c.NotAfter.Before(until) {
+			until = c.NotAfter
+		}
+		if _, back := next[fp]; back || o.distrusted[fp] {
+			continue
+		}
+		if !now.Before(until) {
+			// Its grace ended while no Omega was running to drop it.
+			if first {
+				o.pending = append(o.pending, KeptCAEvent{Action: "dropped", Reason: "grace-ended", Subject: c.Subject.String(), Fingerprint: hex.EncodeToString(fp[:]), Until: until})
+				o.version++
+			}
+			continue
+		}
+		have, had := o.retired[fp]
+		if had && have.until.Equal(until) && have.keptAt.Equal(r.KeptAt) {
+			continue
+		}
+		o.retired[fp] = retiredCA{cert: c, keptAt: r.KeptAt, until: until}
+		o.version++
+		if !had {
+			o.pending = append(o.pending, KeptCAEvent{Action: "kept", Reason: "restored", Subject: c.Subject.String(), Fingerprint: hex.EncodeToString(fp[:]), Until: until})
+			slog.Warn("identity: keeping a CA the issuer stopped publishing, as stored; Omega trusts it until --upstream-ca-grace ends (--upstream-ca-distrust drops it without a restart)",
+				"subject", c.Subject.String(), "fingerprint", hex.EncodeToString(fp[:]), "until", until)
+		}
+	}
+	return prev
+}
+
+// retireLocked keeps, for the grace period, each CA in prev that next
+// no longer has.
+func (o *caOverlap) retireLocked(prev, next map[[32]byte]*x509.Certificate, now time.Time) {
+	if o.grace <= 0 {
+		return
+	}
+	for fp, c := range prev {
+		// A CA that has already expired, or that the operator
+		// distrusted, is not worth keeping.
+		if _, still := next[fp]; still || !c.NotAfter.After(now) || o.distrusted[fp] {
+			continue
+		}
+		if _, kept := o.retired[fp]; kept {
+			continue
+		}
+		until := now.Add(o.grace)
+		if limit, ok := o.restoreCap[fp]; ok && limit.Before(until) {
+			until = limit
+		}
+		if c.NotAfter.Before(until) {
+			until = c.NotAfter
+		}
+		o.retired[fp] = retiredCA{cert: c, keptAt: now, until: until}
+		o.version++
+		o.pending = append(o.pending, KeptCAEvent{Action: "kept", Subject: c.Subject.String(), Fingerprint: hex.EncodeToString(fp[:]), Until: until})
+		// Omega cannot tell a routine rotation from a revocation.
+		slog.Warn("identity: the issuer stopped publishing a CA; Omega keeps trusting it until --upstream-ca-grace ends (--upstream-ca-distrust drops it without a restart)",
+			"subject", c.Subject.String(), "fingerprint", hex.EncodeToString(fp[:]), "until", until)
+	}
 }
 
 // update installs fetched, the issuer's bundle now, and returns the
@@ -107,36 +358,43 @@ func (o *caOverlap) update(fetched []byte, now time.Time) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Read what the other replicas kept before taking the lock: the
+	// store is shared, so every replica serves the same kept CAs.
+	stored, haveStored := o.loadStored()
 	o.mu.Lock()
 	defer o.unlock()
 	next := map[[32]byte]*x509.Certificate{}
 	for _, c := range certs {
 		next[sha256.Sum256(c.Raw)] = c
 	}
-	if o.grace > 0 {
-		for fp, c := range o.current {
-			// A CA that has already expired, or that the operator
-			// distrusted, is not worth keeping.
-			if _, still := next[fp]; !still && c.NotAfter.After(now) && !o.distrusted[fp] {
-				until := now.Add(o.grace)
-				if c.NotAfter.Before(until) {
-					until = c.NotAfter
-				}
-				o.retired[fp] = retiredCA{cert: c, until: until}
-				o.pending = append(o.pending, KeptCAEvent{Action: "kept", Subject: c.Subject.String(), Fingerprint: hex.EncodeToString(fp[:]), Until: until})
-				// Omega cannot tell a routine rotation from a revocation.
-				slog.Warn("identity: the issuer stopped publishing a CA; Omega keeps trusting it until --upstream-ca-grace ends (--upstream-ca-distrust drops it without a restart)",
-					"subject", c.Subject.String(), "fingerprint", hex.EncodeToString(fp[:]), "until", until)
-			}
-		}
+	prev := o.current
+	if haveStored {
+		prev = o.mergeStoredLocked(stored, next, now)
 	}
+	o.retireLocked(prev, next, now)
+	clear(o.restoreCap)
 	for fp := range o.retired {
 		if _, back := next[fp]; back {
 			o.drop(fp, "republished")
 		}
 	}
+	if !sameKeys(o.current, next) {
+		o.version++
+	}
 	o.loaded, o.fetched, o.current = true, certs, next
 	return o.serveLocked(now), nil
+}
+
+func sameKeys(a, b map[[32]byte]*x509.Certificate) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // serve returns the bundle to serve now, dropping retired CAs whose time

@@ -394,10 +394,9 @@ func newServerCommand() *cobra.Command {
 				go kept.run(ctx, func(c context.Context, e identity.KeptCAEvent) { recordKeptCA(c, store, e) })
 				keptQueue = kept
 				keeper.SetKeptCAHook(kept.push)
-				// The kept set changes on its own, so peers read the
-				// bundle live rather than a copy refreshed on SIGHUP.
-				fed.SetOwnBundleSource(ca.BundlePEM)
 			}
+			// The distrust list is in force before anything stored is
+			// restored, so a distrusted CA is never restored or served.
 			distrust := &caDistrust{keeper: keeper, path: upstreamCADistrustFile, store: store}
 			if upstreamCADistrustFile != "" {
 				if keeper == nil {
@@ -406,6 +405,30 @@ func newServerCommand() *cobra.Command {
 				if err := distrust.apply(ctx); err != nil {
 					return fmt.Errorf("upstream-ca-distrust: %w", err)
 				}
+			}
+			if keeper != nil {
+				// The kept set is stored, so a restart does not end the
+				// grace early and every replica serves the same set. The
+				// rows are trust anchors, so they are MAC'd under the audit
+				// HMAC key; without one the set stays in memory.
+				if auditKeyring != nil {
+					if err := keeper.UseCAStore(identityStore{store}); err != nil {
+						return fmt.Errorf("load the stored upstream CAs: %w", err)
+					}
+				} else if upstreamCAGrace > 0 {
+					fmt.Fprintln(os.Stderr, "omega server: WARN --upstream-ca-grace without --audit-hmac-key-file: the kept upstream CAs are not stored, so a restart ends their grace and replicas keep their own sets")
+				}
+				// The kept set changes on its own, so peers read the
+				// bundle live rather than a copy refreshed on SIGHUP.
+				fed.SetOwnBundleSource(ca.BundlePEM)
+			}
+			// spiffe_sequence is stored, so it never goes back across a
+			// restart and replicas serving the same bundle agree on it.
+			// It is numbered after the kept CAs are restored, so an
+			// unchanged trust set keeps its sequence across a restart.
+			bundleSeq, err := identity.NewDurableSequence(ca, identityStore{store}, ca.TrustDomain().String())
+			if err != nil {
+				return fmt.Errorf("number the trust bundle from the stored spiffe_sequence: %w", err)
 			}
 			if (auditKeyring != nil || reloadUpstream != nil || policyDir != "" || caReloader != nil || upstreamCADistrustFile != "") && len(sighupSignals) > 0 {
 				hup := make(chan os.Signal, 1)
@@ -438,7 +461,7 @@ func newServerCommand() *cobra.Command {
 								case changed:
 									fed.SetOwnBundle(ca.BundlePEM())
 									fmt.Fprintf(os.Stderr, "omega server: CAs reloaded\n")
-									recordCAReload(ctx, store, ca)
+									recordCAReload(ctx, store, ca, bundleSeq)
 								}
 							}
 							if upstreamCADistrustFile != "" {
@@ -544,6 +567,7 @@ func newServerCommand() *cobra.Command {
 				WithFederation(fed).
 				WithEnforceTokenExchangePolicy(enforceTokenExchangePol).
 				WithSPIFFEBundleRefreshHint(spiffeBundleRefreshHint).
+				WithBundleSequencer(bundleSeq).
 				WithRequireAuth(requireAuth).
 				WithEntityStoreSearch(entityStoreSearch)
 
@@ -1362,12 +1386,9 @@ func checkSCIMTemplate(tmpl, trustDomain string) error {
 
 // recordCAReload appends the CA set the server now trusts to the audit
 // chain, so a rotation step is on record with the active key and time.
-func recordCAReload(ctx context.Context, store *storage.Store, ca identity.Authority) {
+func recordCAReload(ctx context.Context, store *storage.Store, ca identity.Authority, seqr identity.BundleSequencer) {
 	active, _ := ca.JWTKeyID()
-	var seq int64
-	if s, ok := ca.(identity.BundleSequencer); ok {
-		seq = s.BundleSequence()
-	}
+	seq := seqr.BundleSequence()
 	payload, _ := json.Marshal(map[string]any{"active_kid": active, "trusted_cas": strings.Count(string(ca.BundlePEM()), "BEGIN CERTIFICATE"), "spiffe_sequence": seq})
 	if _, err := store.AppendAudit(ctx, storage.AuditEvent{Kind: "ca.reload", Actor: "omega-server", Decision: "ok", Payload: payload}); err != nil {
 		fmt.Fprintf(os.Stderr, "omega server: could not record the CA reload in the audit chain: %v\n", err)
@@ -1495,6 +1516,47 @@ func (q *keptCAQueue) run(ctx context.Context, record func(context.Context, iden
 			return
 		}
 	}
+}
+
+// identityStore adapts the store to the identity package's stores, so
+// the identity package does not depend on the storage layer.
+type identityStore struct{ s *storage.Store }
+
+func (a identityStore) LoadUpstreamCAs(ctx context.Context, trustDomain, backend string) ([]identity.UpstreamCA, error) {
+	rows, err := a.s.UpstreamCAs(ctx, trustDomain, backend)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]identity.UpstreamCA, len(rows))
+	for i, r := range rows {
+		out[i] = identity.UpstreamCA{DER: r.DER, KeptAt: r.KeptAt, Until: r.KeptUntil, SavedAt: r.SavedAt}
+	}
+	return out, nil
+}
+
+func (a identityStore) SaveUpstreamCAs(ctx context.Context, trustDomain, backend string, cas []identity.UpstreamCA) error {
+	rows := make([]storage.UpstreamCA, len(cas))
+	for i, c := range cas {
+		rows[i] = storage.UpstreamCA{DER: c.DER, KeptAt: c.KeptAt, KeptUntil: c.Until}
+	}
+	return notLeader(a.s.ReplaceUpstreamCAs(ctx, trustDomain, backend, rows))
+}
+
+func (a identityStore) LoadBundleSequence(ctx context.Context, trustDomain string) (int64, string, error) {
+	return a.s.LoadBundleSequence(ctx, trustDomain)
+}
+
+func (a identityStore) SaveBundleSequence(ctx context.Context, trustDomain string, seq int64, digest string) error {
+	return notLeader(a.s.SaveBundleSequence(ctx, trustDomain, seq, digest))
+}
+
+// notLeader marks the storage layer's refusal on a follower as the one
+// the identity package expects.
+func notLeader(err error) error {
+	if errors.Is(err, storage.ErrNotLeader) {
+		return fmt.Errorf("%w: %w", identity.ErrStoreNotLeader, err)
+	}
+	return err
 }
 
 // recordKeptCA appends a change to the CAs kept from a Vault PKI or

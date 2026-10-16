@@ -381,6 +381,22 @@ func (a *awsPCAAuthority) BundleSequence() int64 {
 // SetKeptCAHook implements UpstreamCAKeeper.
 func (a *awsPCAAuthority) SetKeptCAHook(h func(KeptCAEvent)) { a.overlap.setHook(h) }
 
+// UseCAStore implements UpstreamCAKeeper. The cached bundle is replaced
+// at once with one that has the CAs kept before a restart.
+func (a *awsPCAAuthority) UseCAStore(s UpstreamCAStore) error {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	if err := a.overlap.attachStore(s, a.trustDomain.String(), string(KindAWSPCA), time.Now()); err != nil {
+		return err
+	}
+	if served := a.overlap.serve(time.Now()); served != nil {
+		a.bundleMu.Lock()
+		a.bundle = served
+		a.bundleMu.Unlock()
+	}
+	return nil
+}
+
 // DistrustCAs implements UpstreamCAKeeper. The cached bundle is replaced
 // at once, under refreshMu so a refresh in flight cannot cache the
 // bundle from before the drop after it.
