@@ -267,6 +267,15 @@ func (s *Store) schemaDDL() []string {
 			   digest       TEXT   NOT NULL,
 			   updated_at   BIGINT NOT NULL
 			 )`,
+			`CREATE TABLE IF NOT EXISTS policies (
+			   id         TEXT   PRIMARY KEY,
+			   text       TEXT   NOT NULL,
+			   version    BIGINT NOT NULL,
+			   created_by TEXT   NOT NULL DEFAULT '',
+			   created_at BIGINT NOT NULL,
+			   updated_by TEXT   NOT NULL DEFAULT '',
+			   updated_at BIGINT NOT NULL
+			 )`,
 		}
 	}
 	return []string{
@@ -374,6 +383,15 @@ func (s *Store) schemaDDL() []string {
 		   seq          INTEGER NOT NULL,
 		   digest       TEXT    NOT NULL,
 		   updated_at   INTEGER NOT NULL
+		 )`,
+		`CREATE TABLE IF NOT EXISTS policies (
+		   id         TEXT    PRIMARY KEY,
+		   text       TEXT    NOT NULL,
+		   version    INTEGER NOT NULL,
+		   created_by TEXT    NOT NULL DEFAULT '',
+		   created_at INTEGER NOT NULL,
+		   updated_by TEXT    NOT NULL DEFAULT '',
+		   updated_at INTEGER NOT NULL
 		 )`,
 	}
 }
