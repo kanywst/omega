@@ -207,10 +207,8 @@ hide an authorization decision or an SVID issuance.
 An attacker with database write access modifies the Cedar policy
 set to permit an action that should be denied.
 
-- Mitigation today: policy mutation goes through the leaderOnly
-  HTTP path (`POST /v1/domains` etc.; Cedar policy CRUD over HTTP
-  is partial - see `gap-analysis.md`). Direct DB writes leave no
-  audit row.
+- Mitigation today: policy mutation goes through the leader-only HTTP API. Domains, groups and stored Cedar policies (`/v1/policies`, [ADR 0022](adr/0022-stored-policies.md)) are each written in the same transaction as their audit row; a stored policy write needs `--require-auth` and a `--domain-root-admin`, needs `If-Match` to update, and records the old and new SHA-256 digests of the text. Direct DB writes leave no audit row.
+- A stored policy written behind the API's back that does not parse makes every replica keep its last good set and then fail closed (`503`), rather than evaluate a partial set ([docs/policies.md](policies.md#when-the-stored-set-does-not-load)). One that parses is evaluated like any other: the digests in the audit chain show what the API last wrote, so comparing them with `GET /v1/policies` exposes the edit.
 - Residual risk: an attacker who reaches the database directly
   bypasses the audit log. Mitigation is at the database access
   layer, not Omega.

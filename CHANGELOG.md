@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Cedar policies stored in the control plane.** `/v1/policies` lists, reads, creates, updates and deletes Cedar policies kept in the database (SQLite or Postgres), and `POST /v1/policies/validate` checks one without storing it; `omega policy list|get|apply|delete` is the CLI. The engine evaluates them together with the `--policy-dir` files, which the API lists as read-only. Writes are leader-only, need `--require-auth` and a `--domain-root-admin`, need `If-Match` to update, and are written in one transaction with a `policy.create`, `policy.update` or `policy.delete` audit row carrying the old and new digests. An invalid policy is refused with `400`. Every replica reloads stored policies every five seconds and the bundle served to node agents carries them; a stored set that does not load keeps the last one and fails closed (`omega_stored_policy_set_load_failures_total`). Every Cedar id a stored policy defines is prefixed with `api/<id>::`. See [ADR 0022](docs/adr/0022-stored-policies.md) and [docs/policies.md](docs/policies.md).
+
 ## [0.11.0] - 2026-10-16
 
 Makes the upstream CA overlap durable: the CAs kept from a Vault PKI, step-ca or AWS Private CA rotation survive restarts and are shared by replicas, each stored row authenticated under the audit HMAC key, and `spiffe_sequence` never goes back after a restart for any backend. Adds an issuing-CA-only trust bundle for AWS Private CA.
