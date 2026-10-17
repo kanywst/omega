@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -181,8 +182,26 @@ func (s *Store) ChangePolicy(ctx context.Context, id string, change PolicyChange
 // recorded a change for, the digest of the text its latest change left
 // in place ("" after a delete). Comparing it with the stored rows shows
 // a policy edited, added or removed in the database behind the API.
+//
+// With an audit keyring every row it reads must carry a valid MAC under
+// a key the keyring holds, so a database writer without the key cannot
+// add a row that vouches for a forged policy. Without a keyring the rows
+// are taken as they are. Rows deleted from the chain are not detected
+// here; VerifyAudit walks the whole chain for that.
 func (s *Store) PolicyAuditDigests(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT subject, payload FROM audit_log
+	var (
+		keys      map[string][]byte
+		keyedFrom int64
+		hasEpoch  bool
+	)
+	if s.auditKeyring != nil {
+		var err error
+		if keyedFrom, hasEpoch, err = s.auditKeyedFromSeq(ctx); err != nil {
+			return nil, err
+		}
+		keys = s.auditKeyring.Snapshot()
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT seq, ts, kind, actor, subject, decision, payload, prev_hash, hash, key_id FROM audit_log
 		WHERE kind IN ('policy.create', 'policy.update', 'policy.delete') AND decision = 'ok' ORDER BY seq`)
 	if err != nil {
 		return nil, fmt.Errorf("query policy audit: %w", err)
@@ -191,19 +210,48 @@ func (s *Store) PolicyAuditDigests(ctx context.Context) (map[string]string, erro
 	out := map[string]string{}
 	for rows.Next() {
 		var (
-			id      string
-			payload []byte
+			ev      AuditEvent
+			ts      int64
+			payload string
 		)
-		if err := rows.Scan(&id, &payload); err != nil {
+		if err := rows.Scan(&ev.Seq, &ts, &ev.Kind, &ev.Actor, &ev.Subject, &ev.Decision, &payload, &ev.PrevHash, &ev.Hash, &ev.KeyID); err != nil {
 			return nil, fmt.Errorf("scan policy audit: %w", err)
+		}
+		ev.Ts = time.Unix(0, ts).UTC()
+		ev.Payload = json.RawMessage(payload)
+		if s.auditKeyring != nil {
+			if err := checkAuditRowMAC(ev, keys, hasEpoch, keyedFrom); err != nil {
+				return nil, fmt.Errorf("policy audit row %d: %w", ev.Seq, err)
+			}
 		}
 		var p struct {
 			NewDigest string `json:"new_digest"`
 		}
-		if err := json.Unmarshal(payload, &p); err != nil {
-			return nil, fmt.Errorf("policy audit row for %q: %w", id, err)
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			return nil, fmt.Errorf("policy audit row %d: %w", ev.Seq, err)
 		}
-		out[id] = p.NewDigest
+		out[ev.Subject] = p.NewDigest
 	}
 	return out, rows.Err()
+}
+
+// checkAuditRowMAC checks one row's own MAC, as VerifyAudit does for
+// each row it walks: an unkeyed row is accepted only from before keying
+// began, and a keyed row only under a key in keys.
+func checkAuditRowMAC(ev AuditEvent, keys map[string][]byte, hasEpoch bool, keyedFrom int64) error {
+	if ev.KeyID == "" || ev.KeyID == keyIDUnkeyed {
+		if hasEpoch && ev.Seq >= keyedFrom {
+			return errors.New("unkeyed row after audit keying began")
+		}
+		return nil
+	}
+	key, ok := keys[ev.KeyID]
+	if !ok {
+		return fmt.Errorf("row is keyed under %q, which the audit keyring does not hold", ev.KeyID)
+	}
+	got, err := hex.DecodeString(ev.Hash)
+	if err != nil || !hmac.Equal(macAuditEvent(ev, key), got) {
+		return errors.New("row MAC does not verify")
+	}
+	return nil
 }
