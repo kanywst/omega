@@ -8,6 +8,14 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- **`omega policy delete` no longer deletes whatever version is stored by default.** It needs `--if-match` with the ETag `omega policy get` printed, or `--force` for the previous behaviour, so a policy someone changed since is not removed by mistake.
+
+### Fixed
+
+- **Policy validation no longer re-parses every `--policy-dir` file.** The file policy ids are collected when the files load, so `POST /v1/policies/validate` and writes check a stored policy against them without parsing the files on each call.
+
 ## [0.12.0] - 2026-10-18
 
 Brings policy management into the control plane and tightens decisions: Cedar policies can be managed over `/v1/policies`, with every change recorded in the audit chain in the same transaction, and every AuthZEN decision carries the PEP's request id and an explanatory `context`.

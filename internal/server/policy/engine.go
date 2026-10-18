@@ -39,8 +39,11 @@ type Engine struct {
 	// exact policy set can be distributed to local evaluators. sources is
 	// the union of files (what LoadDir / LoadSources read) and stored
 	// (what SetStoredPolicies read, keyed by StoredPolicyKey).
-	sources   map[string]string
-	files     map[string]string
+	sources map[string]string
+	files   map[string]string
+	// fileIDs are the Cedar policy ids the files define, so a stored
+	// policy can be checked against them without parsing the files.
+	fileIDs   map[cedar.PolicyID]struct{}
 	stored    map[string]string
 	staticRaw []byte
 	dirSpec   Directory
@@ -103,10 +106,19 @@ func (e *Engine) LoadSources(sources map[string]string, entitiesJSON []byte) err
 	if err != nil {
 		return err
 	}
+	filePS, _, err := parseSources(sources, nil)
+	if err != nil {
+		return err
+	}
+	fileIDs := map[cedar.PolicyID]struct{}{}
+	for pid := range filePS.All() {
+		fileIDs[pid] = struct{}{}
+	}
 	e.mu.Lock()
 	e.policies = ps
 	e.static = ents
 	e.files = sources
+	e.fileIDs = fileIDs
 	e.sources = union
 	e.staticRaw = entitiesJSON
 	e.rebuildLocked()
@@ -164,12 +176,11 @@ func (e *Engine) CheckStored(id, text string) ([]string, error) {
 		return nil, errors.New("text holds no Cedar policy")
 	}
 	sort.Strings(ids)
-	files, _, err := parseSources(e.FilePolicies(), nil)
-	if err != nil {
-		return nil, err
-	}
+	e.mu.RLock()
+	fileIDs := e.fileIDs
+	e.mu.RUnlock()
 	for _, pid := range ids {
-		if files.Get(cedar.PolicyID(pid)) != nil {
+		if _, ok := fileIDs[cedar.PolicyID(pid)]; ok {
 			return nil, fmt.Errorf("policy id %q is already defined by a --policy-dir file", pid)
 		}
 	}

@@ -57,9 +57,13 @@ sequenceDiagram
 
 The leader reloads the stored set right after a write. Every replica reloads it with the domain tree every five seconds. The policy bundle served to node agents (`GET /v1/policy/bundle`) carries stored policies under the key `api/<id>` next to the file names, so the bundle revision changes with them and each local PDP picks them up on its next sync.
 
+## Upgrading
+
+A server replica from before stored policies never reads them, so a stored `forbid` is not enforced on it, and a node agent from before them does not expect the `api/<id>::` policy ids in its bundle. Upgrade every server replica and every node agent before the first write to `/v1/policies`.
+
 ## When the stored set does not load
 
-The leader only stores a policy that loads, but the stored set can still fail to load on a replica: a row written, changed or removed in the database outside the API (it no longer matches the audit chain), a chain row the check relies on that does not verify under the audit keyring, a replica whose `--policy-dir` defines an id a stored policy also defines, or a server older than the row. Then the replica keeps the last set that loaded in the engine, logs the error, increments `omega_stored_policy_set_load_failures_total`, and fails evaluation closed with `503` at once: the database holds a set the replica is not enforcing, possibly a new `forbid` written through another replica, so deciding with the old set until the usual fifteen-second stale window passed could permit what is now forbidden. A database that cannot be read at all is handled as before, failing closed once the domain tree has not reloaded for fifteen seconds. When the first load at startup fails, the server still starts, with evaluation failing closed, so that an admin can fix or delete the policy through the API. The node agents keep the last bundle they were served, since `GET /v1/policy/bundle` fails closed too. `omega_stored_policies` reports how many stored policies the engine last loaded.
+The leader only stores a policy that loads, but the stored set can still fail to load on a replica: a row written, changed or removed in the database outside the API (it no longer matches the audit chain), a chain row the check relies on that does not verify under the audit keyring, a replica whose `--policy-dir` defines an id a stored policy also defines. Then the replica keeps the last set that loaded in the engine, logs the error, increments `omega_stored_policy_set_load_failures_total`, and fails evaluation closed with `503` at once: the database holds a set the replica is not enforcing, possibly a new `forbid` written through another replica, so deciding with the old set until the usual fifteen-second stale window passed could permit what is now forbidden. A database that cannot be read at all is handled as before, failing closed once the domain tree has not reloaded for fifteen seconds. When the first load at startup fails, the server still starts, with evaluation failing closed, so that an admin can fix or delete the policy through the API. The node agents keep the last bundle they were served, since `GET /v1/policy/bundle` fails closed too. `omega_stored_policies` reports how many stored policies the engine last loaded.
 
 ## Walkthrough
 
@@ -68,10 +72,10 @@ omega policy apply -f block-media-web.cedar --server https://omega:8080 \
   --server-ca ca.pem --client-cert root.pem --client-key root.key
 omega policy list --server https://omega:8080 --server-ca ca.pem --client-cert root.pem --client-key root.key
 omega policy get block-media-web --server https://omega:8080 --server-ca ca.pem --client-cert root.pem --client-key root.key
-omega policy delete block-media-web --server https://omega:8080 --server-ca ca.pem --client-cert root.pem --client-key root.key
+omega policy delete block-media-web --force --server https://omega:8080 --server-ca ca.pem --client-cert root.pem --client-key root.key
 ```
 
-`omega policy apply` takes the id from the file name (or `--id`), creates the policy when it does not exist, and otherwise updates it with the ETag it just read, so a concurrent change fails with `412` instead of being lost. `omega policy delete` sends `If-Match: *` unless `--if-match` names the ETag to delete.
+`omega policy apply` takes the id from the file name (or `--id`), creates the policy when it does not exist, and otherwise updates it with the ETag it just read, so a concurrent change fails with `412` instead of being lost. `omega policy delete` needs either `--if-match` with the ETag `omega policy get` printed, so a policy someone changed since is not deleted, or `--force` to delete whatever version is stored.
 
 | Endpoint | Purpose |
 | --- | --- |

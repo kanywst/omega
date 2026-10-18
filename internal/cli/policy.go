@@ -149,12 +149,25 @@ func newPolicyCommand() *cobra.Command {
 	apply.Flags().StringVarP(&file, "file", "f", "", "path to a Cedar policy file")
 	apply.Flags().StringVar(&id, "id", "", "policy id (default: the file name without its extension)")
 
-	var etag string
+	var (
+		etag  string
+		force bool
+	)
 	del := &cobra.Command{
 		Use:   "delete <id>",
 		Short: "Delete a stored policy",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
+			// Deleting whatever version is stored could remove a forbid
+			// someone else just tightened, so it has to be asked for.
+			switch {
+			case etag != "" && force:
+				return errors.New("--if-match and --force contradict each other")
+			case force:
+				etag = "*"
+			case etag == "":
+				return errors.New("pass --if-match with the ETag `omega policy get` printed, or --force to delete whatever version is stored")
+			}
 			resp, body, err := pc.do(http.MethodDelete, pc.url(args[0]), nil, map[string]string{"If-Match": etag})
 			if err != nil {
 				return err
@@ -162,7 +175,8 @@ func newPolicyCommand() *cobra.Command {
 			return printBody(c.OutOrStdout(), resp, body)
 		},
 	}
-	del.Flags().StringVar(&etag, "if-match", "*", "delete only if the policy still has this ETag (default: whatever version is stored)")
+	del.Flags().StringVar(&etag, "if-match", "", "delete only if the policy still has this ETag (from `omega policy get`)")
+	del.Flags().BoolVar(&force, "force", false, "delete whatever version is stored (sends If-Match: *)")
 
 	cmd.AddCommand(list, get, apply, del)
 	return cmd
