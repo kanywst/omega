@@ -302,12 +302,12 @@ func TestEvaluationErrorsReachThePEPAsPolicyIDsOnly(t *testing.T) {
 	if err := json.Unmarshal(raw, &single); err != nil {
 		t.Fatal(err)
 	}
-	// Cedar skips the erroring forbid, so the permit stands; pinned
+	// The erroring forbid denies rather than being skipped; pinned
 	// here at the HTTP layer as well as in the policy package.
-	if string(single["decision"]) != "true" {
-		t.Errorf("decision with a skipped forbid: %s", single["decision"])
+	if string(single["decision"]) != "false" {
+		t.Errorf("decision with an erroring forbid: %s", single["decision"])
 	}
-	if string(single["context"]) != `{"reasons":["all"],"errors":[{"policy":"needs-clearance"}]}` {
+	if string(single["context"]) != `{"reasons":["needs-clearance"],"errors":[{"policy":"needs-clearance"}]}` {
 		t.Errorf("single evaluation context: %s", single["context"])
 	}
 	_, raw = postWithRequestID(t, srv.URL+"/access/v1/evaluations", accessCalls[1].body)

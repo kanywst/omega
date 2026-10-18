@@ -226,10 +226,10 @@ type DecisionContext struct {
 	// Reasons are the ids of the policies that determined the decision:
 	// the permits for an allow, the forbids for a deny.
 	Reasons []string `json:"reasons,omitempty"`
-	// Errors are the policies Cedar skipped because evaluating them
-	// failed, for example on a missing attribute. A skipped forbid can
-	// turn a deny into an allow, so a PEP may want to see them; it sees
-	// the policy ids only (see ForCaller).
+	// Errors are the policies whose evaluation failed, for example on a
+	// missing attribute. A forbid among them makes the decision a deny;
+	// a permit among them grants nothing. A PEP sees the policy ids only
+	// (see ForCaller).
 	Errors []PolicyError `json:"errors,omitempty"`
 }
 
@@ -348,6 +348,21 @@ func (e *Engine) EvaluateRevision(req EvalRequest) (EvalResponse, string, error)
 	resp := EvalResponse{Decision: bool(ok)}
 	for _, r := range diag.Reasons {
 		resp.Reasons = append(resp.Reasons, string(r.PolicyID))
+	}
+	// Cedar skips a policy whose evaluation fails, so a forbid that
+	// errors (for example on a missing attribute) would let a matching
+	// permit allow. An evaluation failure must not widen access: a
+	// forbid that errors denies, and is the reason. A permit that errors
+	// only fails to grant, which Cedar already does.
+	var erroredForbids []string
+	for _, de := range diag.Errors {
+		if p := ps.Get(de.PolicyID); p != nil && p.Effect() == cedar.Forbid {
+			erroredForbids = append(erroredForbids, string(de.PolicyID))
+		}
+	}
+	if len(erroredForbids) > 0 {
+		resp.Decision = false
+		resp.Reasons = erroredForbids
 	}
 	if len(diag.Reasons) > 0 || len(diag.Errors) > 0 {
 		resp.Context = &DecisionContext{Reasons: resp.Reasons}
