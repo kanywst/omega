@@ -1,6 +1,7 @@
 "use client";
 
 import { Search } from "lucide-react";
+import { AuthMenu } from "@/components/auth/auth-menu";
 import { Kbd } from "@/components/ui/kbd";
 
 export function Topbar({
@@ -37,6 +38,7 @@ export function Topbar({
         />
         <span>control-plane {healthLabel}</span>
       </div>
+      <AuthMenu />
     </header>
   );
 }

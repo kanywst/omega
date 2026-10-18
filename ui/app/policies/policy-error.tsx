@@ -12,9 +12,10 @@ export function retryPolicyRead(failures: number, error: Error) {
   return failures < 1;
 }
 
-// PolicyError maps a failed policy read to an empty state. The UI's
-// proxy presents no client certificate, so a server running with
-// --require-auth answers 401 or 403 and the CLI is the way in.
+// PolicyError maps a failed policy read to an empty state. Under
+// --require-auth the UI's proxy needs its own client certificate, and
+// the text of a policy needs a signed-in --domain-root-admin; otherwise
+// the CLI is the way in.
 export function PolicyError({ error, id }: { error: Error; id?: string }) {
   // 0: the request never got an answer; -1: an answer this UI cannot read.
   const status = error instanceof OmegaError ? error.status : error instanceof TypeError ? 0 : -1;
@@ -24,8 +25,11 @@ export function PolicyError({ error, id }: { error: Error; id?: string }) {
     case 401:
       return (
         <EmptyState
-          title="The control plane requires a client certificate."
-          hint="It runs with --require-auth, and this UI's proxy presents no SVID. Read policies with the CLI instead."
+          title="The control plane did not accept this request."
+          hint={
+            detail ||
+            "It runs with --require-auth: give this UI an SVID with OMEGA_API_CLIENT_CERT and OMEGA_API_CLIENT_KEY, or read policies with the CLI."
+          }
           command={cli(id ? `get ${id}` : "list")}
         />
       );
@@ -35,7 +39,7 @@ export function PolicyError({ error, id }: { error: Error; id?: string }) {
           title={id ? "Not allowed to read this policy's text." : "Not allowed to list policies."}
           hint={
             id
-              ? "Under --require-auth the text is served to a --domain-root-admin or a --decision-recorder only."
+              ? "Under --require-auth the text is served to a --domain-root-admin or a --decision-recorder only. Sign in as a root admin, or use the CLI."
               : detail || "The control plane refused the request."
           }
           command={cli(id ? `get ${id}` : "list")}
