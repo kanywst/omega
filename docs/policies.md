@@ -20,7 +20,8 @@ There is no Cedar schema in Omega, so validation is syntactic: the text must par
 
 | Operation | Needs |
 | --- | --- |
-| `GET /v1/policies`, `GET /v1/policies/{id}`, `POST /v1/policies/validate` | An authenticated caller under `--require-auth`; open without it. Followers serve them |
+| `GET /v1/policies`, `POST /v1/policies/validate` | An authenticated caller under `--require-auth`; open without it. Followers serve them |
+| `GET /v1/policies/{id}` (the Cedar text) | Under `--require-auth`, a `--domain-root-admin` or a `--decision-recorder` (which receives every policy in the bundle anyway); open without it. Followers serve it |
 | `POST`, `PUT`, `DELETE` on `/v1/policies` | `--require-auth` and a caller listed with `--domain-root-admin`. Leader only |
 
 A Cedar policy is not confined to a domain: a `permit` written by the admin of `media` could name any principal or resource. So the grant a domain admin holds on its subtree does not extend to policies, and only root admins write them. Without `--require-auth` every write is refused with `403`, because the change could not be attributed to anyone. A refused write is audited with the caller and the reason.

@@ -90,6 +90,16 @@ func TestPolicyAPILifecycle(t *testing.T) {
 	if code, _ := call(t, b, "POST", base, api.PolicyRequest{ID: "alice-read", Text: alicePermit}); code != http.StatusForbidden {
 		t.Fatalf("bob create: %d", code)
 	}
+	// Other authenticated callers see the list but not the text.
+	if code, _ := call(t, b, "GET", base, nil); code != http.StatusOK {
+		t.Fatalf("bob list: %d", code)
+	}
+	if code, _ := call(t, b, "GET", base+"/p.cedar", nil); code != http.StatusForbidden {
+		t.Fatalf("bob get: %d", code)
+	}
+	if code, _ := call(t, env.as(t, "spiffe://omega.local/node/agent"), "GET", base+"/p.cedar", nil); code != http.StatusOK {
+		t.Fatalf("a decision recorder reads the text it gets in the bundle anyway: %d", code)
+	}
 
 	code, h, body := callH(t, root, "POST", base, api.PolicyRequest{ID: "alice-read", Text: alicePermit}, nil)
 	if code != http.StatusCreated {

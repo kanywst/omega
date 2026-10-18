@@ -209,8 +209,25 @@ func (s *Server) listPolicies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// mayReadPolicyText reports whether the caller may read Cedar text.
+// Under --require-auth that is a root admin, who may write it, or a
+// --decision-recorder, which receives every policy in the bundle anyway;
+// any other authenticated caller sees the list without text. The text
+// names groups, resources and the exact conditions a request must meet.
+func (s *Server) mayReadPolicyText(r *http.Request) bool {
+	if !s.requireAuth {
+		return true
+	}
+	caller := CallerSPIFFEID(r.Context())
+	return caller != "" && (slices.Contains(s.domains.rootAdmins, caller) || s.mayRecordDecisions(caller))
+}
+
 func (s *Server) getPolicy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.mayReadPolicyText(r) {
+		writeErr(w, http.StatusForbidden, errors.New("reading policy text needs a --domain-root-admin or --decision-recorder caller"))
+		return
+	}
 	if text, ok := s.policy.FilePolicies()[id]; ok {
 		writeJSON(w, http.StatusOK, fileView(id, text, true))
 		return

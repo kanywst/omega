@@ -1385,7 +1385,7 @@ paths:
       tags: [policies]
       operationId: getPolicy
       summary: Show one policy with its Cedar text.
-      description: Under `--require-auth` the caller must be authenticated. Served by followers.
+      description: Under `--require-auth` the caller must be a `--domain-root-admin` or a `--decision-recorder`. Served by followers.
       responses:
         "200":
           description: Policy. A stored policy carries its ETag.
@@ -1397,6 +1397,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Policy"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
     put:
