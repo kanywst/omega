@@ -178,6 +178,11 @@ func (s *Store) ChangePolicy(ctx context.Context, id string, change PolicyChange
 	return next, ev, nil
 }
 
+// ErrAuditRowUnverified is returned by PolicyAuditDigests when a chain
+// row it reads does not verify under the audit keyring or does not
+// parse: a sign of tampering rather than of a database that is down.
+var ErrAuditRowUnverified = errors.New("policy audit row does not verify")
+
 // PolicyAuditDigests returns, for every policy id the audit chain has
 // recorded a change for, the digest of the text its latest change left
 // in place ("" after a delete). Comparing it with the stored rows shows
@@ -221,14 +226,14 @@ func (s *Store) PolicyAuditDigests(ctx context.Context) (map[string]string, erro
 		ev.Payload = json.RawMessage(payload)
 		if s.auditKeyring != nil {
 			if err := checkAuditRowMAC(ev, keys, hasEpoch, keyedFrom); err != nil {
-				return nil, fmt.Errorf("policy audit row %d: %w", ev.Seq, err)
+				return nil, fmt.Errorf("%w: row %d: %v", ErrAuditRowUnverified, ev.Seq, err)
 			}
 		}
 		var p struct {
 			NewDigest string `json:"new_digest"`
 		}
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
-			return nil, fmt.Errorf("policy audit row %d: %w", ev.Seq, err)
+			return nil, fmt.Errorf("%w: row %d: %v", ErrAuditRowUnverified, ev.Seq, err)
 		}
 		out[ev.Subject] = p.NewDigest
 	}

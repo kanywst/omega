@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -424,5 +425,44 @@ func TestStoredPoliciesMustMatchTheAuditChain(t *testing.T) {
 				t.Fatalf("evaluation must fail closed rather than use the tampered set: %d", code)
 			}
 		})
+	}
+}
+
+func TestUnverifiedPolicyAuditRowFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	kr, err := storage.NewAuditKeyring("k1", map[string][]byte{"k1": bytes.Repeat([]byte{1}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.UseAuditKeyring(kr)
+	ca, err := identity.LoadOrCreate(filepath.Join(dir, "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := api.NewServer(store, ca, policy.New())
+	if err := srv.RefreshDirectory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// A row whose MAC was made under a key the server does not hold.
+	other, _ := storage.NewAuditKeyring("k1", map[string][]byte{"k1": bytes.Repeat([]byte{2}, 32)})
+	store.UseAuditKeyring(other)
+	if _, err := store.AppendAudit(t.Context(), storage.AuditEvent{Kind: "policy.create", Subject: "x", Decision: "ok", Payload: []byte(`{"new_digest":"d"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	store.UseAuditKeyring(kr)
+	if err := srv.RefreshDirectory(t.Context()); !errors.Is(err, api.ErrStoredPolicySet) {
+		t.Fatalf("an unverified chain row must fail the load as a stored-set failure: %v", err)
+	}
+	h := httptest.NewServer(srv.Handler())
+	t.Cleanup(h.Close)
+	if code, _ := call(t, h.Client(), "POST", h.URL+"/access/v1/evaluation", policy.EvalRequest{
+		Subject: policy.Entity{Type: "Spiffe", ID: alice}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"},
+	}); code != http.StatusServiceUnavailable {
+		t.Fatalf("evaluation must fail closed at once: %d", code)
 	}
 }

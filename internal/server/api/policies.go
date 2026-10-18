@@ -90,6 +90,11 @@ func (s *Server) loadStoredPolicies(ctx context.Context) error {
 		return err
 	}
 	recorded, err := s.store.PolicyAuditDigests(ctx)
+	if errors.Is(err, storage.ErrAuditRowUnverified) {
+		metrics.StoredPolicySetLoadFailures.Inc()
+		slog.Error("the audit chain behind the stored policies does not verify; keeping the last set that loaded", "err", err)
+		return fmt.Errorf("%w: %v", ErrStoredPolicySet, err)
+	}
 	if err != nil {
 		return err
 	}

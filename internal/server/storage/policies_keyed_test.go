@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -35,7 +36,7 @@ func TestPolicyAuditDigestsCheckRowMACs(t *testing.T) {
 		"unknown key": {"k9", "bb", "does not hold"},
 		"bad MAC":     {"k1", "cc", "MAC does not verify"},
 	} {
-		if err := forge(c.keyID, c.hash); err == nil || !strings.Contains(err.Error(), c.want) {
+		if err := forge(c.keyID, c.hash); !errors.Is(err, ErrAuditRowUnverified) || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
