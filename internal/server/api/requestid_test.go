@@ -282,7 +282,7 @@ func TestRequestIDIsOnTheServerSpan(t *testing.T) {
 	}
 }
 
-// A PEP learns which policies Cedar skipped, but not Cedar's error
+// A PEP learns which policies failed to evaluate, but not Cedar's error
 // text, which can name what the policy reads; the audit row keeps it.
 func TestEvaluationErrorsReachThePEPAsPolicyIDsOnly(t *testing.T) {
 	pdp := policy.New()

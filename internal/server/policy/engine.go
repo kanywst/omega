@@ -361,8 +361,12 @@ func (e *Engine) EvaluateRevision(req EvalRequest) (EvalResponse, string, error)
 		}
 	}
 	if len(erroredForbids) > 0 {
+		if resp.Decision {
+			// The permits that allowed no longer decide anything.
+			resp.Reasons = nil
+		}
 		resp.Decision = false
-		resp.Reasons = erroredForbids
+		resp.Reasons = append(resp.Reasons, erroredForbids...)
 	}
 	if len(diag.Reasons) > 0 || len(diag.Errors) > 0 {
 		resp.Context = &DecisionContext{Reasons: resp.Reasons}

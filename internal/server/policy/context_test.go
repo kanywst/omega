@@ -120,6 +120,10 @@ func TestPolicyErrorsNeverWidenAccess(t *testing.T) {
 		{"erroring permit beside another matching permit allows", `@id("permit-all") permit (principal, action, resource);
 @id("permit-high") permit (principal, action, resource) when { principal.clearance > 3 };
 `, true, []string{"permit-all"}},
+		{"erroring forbid beside a matching forbid names both", `@id("permit-all") permit (principal, action, resource);
+@id("forbid-all") forbid (principal, action, resource);
+@id("forbid-low") forbid (principal, action, resource) when { principal.clearance < 3 };
+`, false, []string{"forbid-all", "forbid-low"}},
 		{"erroring permit alone denies", `@id("permit-high") permit (principal, action, resource) when { principal.clearance > 3 };
 `, false, nil},
 	}
