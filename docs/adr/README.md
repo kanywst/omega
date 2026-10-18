@@ -80,3 +80,4 @@ index to avoid collisions.
 | [0020](0020-agent-side-kubernetes-workload-attestor.md) | An agent-side Kubernetes workload attestor for the self-issued path | Accepted |
 | [0021](0021-azure-key-vault-remote-signer.md) | Azure Key Vault as a remote signer, not a hosted CA | Accepted |
 | [0022](0022-stored-policies.md) | Cedar policies stored in the control plane | Accepted |
+| [0023](0023-ui-proxy-acts-for-signed-in-people.md) | A web UI acts for signed-in people through their JWT-SVIDs | Accepted |

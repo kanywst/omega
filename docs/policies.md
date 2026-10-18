@@ -87,3 +87,32 @@ omega policy delete block-media-web --force --server https://omega:8080 --server
 | `POST /v1/policies/validate` | Run the create checks and change nothing |
 
 `examples/local-pdp` stores a policy with `omega policy apply`, checks that the control plane and the node agent both decide with it, deletes it, and checks both audit rows.
+
+## From the web UI
+
+The UI's Policies pages list policies, show their text and validate drafts. With sign-in configured they also create, edit and delete stored policies as the person signed in, through the same API, authorization and audit as the CLI ([ADR 0023](adr/0023-ui-proxy-acts-for-signed-in-people.md)):
+
+1. A person signs in to the UI through the OIDC IdP Omega federates with. The UI server exchanges their ID token at `POST /v1/oidc/exchange` for their JWT-SVID, such as `spiffe://omega.example.com/humans/corp/alice`, and keeps it in its own memory.
+2. The UI calls the policy API over mTLS with its own X.509-SVID and puts the person's JWT-SVID in the `Omega-User-Token` header. The server trusts that header only from a SPIFFE ID listed with `--ui-proxy`, and only on `/v1/policies`.
+3. The person is the caller: a write needs them to be a `--domain-root-admin`, and the audit row names them as actor, with the UI's SPIFFE ID as `via` in the payload.
+
+An edit is sent with the ETag the page read, so a version someone else wrote since is answered with `412`; the page keeps the draft and offers to load the current version. A delete asks for the policy id to be typed first and also sends the ETag. Without sign-in configured, or before signing in, the pages stay read-only and say how to enable writes.
+
+The server side:
+
+```bash
+omega server --tls-cert server.pem --tls-key server.key --client-ca ca.pem --require-auth \
+  --oidc-idp 'name=corp,issuer=https://idp.example.com,audience=omega-ui,template=spiffe://omega.example.com/humans/{idp}/{preferred_username}' \
+  --domain-root-admin spiffe://omega.example.com/humans/corp/alice \
+  --ui-proxy spiffe://omega.example.com/platform/ui
+```
+
+The `--oidc-idp` audience is the UI's OIDC client id, since the ID token the UI exchanges is issued to it. The UI's own SPIFFE ID must not be a `--domain-root-admin`: on its own it is an ordinary authenticated caller. [ui/README.md](../ui/README.md) lists the UI's settings, and `examples/ui-auth` signs a person in against a mock IdP and creates, updates and deletes a policy through the UI.
+
+| Server flag | Default | Meaning |
+| --- | --- | --- |
+| `--ui-proxy` | none | SPIFFE ID trusted to act for a signed-in person (repeatable). Needs `--require-auth` and `--oidc-idp` |
+| `--ui-proxy-audience` | `omega-ui` | The only audience a person's JWT-SVID may carry; the UI requests it at the exchange |
+| `--ui-proxy-max-token-ttl` | `1h` | The longest lifetime (`exp - iat`) a person's JWT-SVID may have |
+
+A user token from a caller that is not a `--ui-proxy`, on another route, or that does not verify is refused (`403` or `401`) and audited as `ui_proxy.delegate`. The UI server can act as anyone signed in to it while their tokens live, so treat its SVID and host as part of the admin plane (threat model E8).

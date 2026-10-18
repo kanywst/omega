@@ -8,6 +8,12 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Sign-in and policy writes in the UI.** The UI signs people in through the OIDC IdP Omega federates with (authorization code with PKCE), exchanges their ID token for their JWT-SVID at `POST /v1/oidc/exchange`, and keeps it in a server-side session. Signed in as a `--domain-root-admin`, a person can create, edit (with `If-Match`, showing a `412` conflict) and delete stored policies from the Policies pages, with a typed confirmation before a delete. State-changing requests need the UI's own origin and a per-session CSRF token. Without sign-in configured the pages stay read-only. See [ui/README.md](ui/README.md) and [docs/policies.md](docs/policies.md#from-the-web-ui).
+- **`--ui-proxy`: a web UI acts for a signed-in person on the policy API.** A caller whose mTLS X.509-SVID is listed with `--ui-proxy` may present a person's JWT-SVID in the `Omega-User-Token` header on `/v1/policies`; the request is then authorized and audited as that person, with the proxy recorded as `via` in the audit payload. The token must come from `POST /v1/oidc/exchange`, carry exactly `--ui-proxy-audience` (default `omega-ui`) and live at most `--ui-proxy-max-token-ttl` (default one hour). A user token from any other caller, on any other route, or that does not verify is refused and audited as `ui_proxy.delegate`. Needs `--require-auth` and `--oidc-idp`. See [ADR 0023](docs/adr/0023-ui-proxy-acts-for-signed-in-people.md).
+- **The mock IdP in `examples/oidc-federation` serves the authorization code flow.** `/authorize` (PKCE S256, signing in a fixed person) and `/token` (code and refresh token grants), which `examples/ui-auth` drives end to end.
+
 ## [0.13.0] - 2026-10-18
 
 Adds a read-only Policies page to the UI and hardens the stored-policy tooling that 0.12.0 introduced.
