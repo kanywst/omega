@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { FileText, Globe, KeyRound, ScrollText, ShieldCheck } from "lucide-react";
+import { FileCode, FileText, Globe, KeyRound, ScrollText, ShieldCheck } from "lucide-react";
 
 export type NavItem = {
   href: string;
@@ -27,10 +27,17 @@ export const NAV: NavItem[] = [
   },
   {
     href: "/policy",
-    label: "Policy",
+    label: "Decisions",
     shortcut: "g p",
     desc: "AuthZEN decisions",
     icon: ScrollText,
+  },
+  {
+    href: "/policies",
+    label: "Policies",
+    shortcut: "g c",
+    desc: "Cedar policies, read-only",
+    icon: FileCode,
   },
   { href: "/audit", label: "Audit", shortcut: "g a", desc: "Tamper-evident chain", icon: FileText },
   {
