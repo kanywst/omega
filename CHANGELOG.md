@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **A read-only Policies page in the UI.** `/policies` lists the `--policy-dir` files and stored policies, shows a policy's Cedar text, and validates a draft through `POST /v1/policies/validate`. It never writes, because the UI's proxy does not authenticate; changes stay with `omega policy apply` and `omega policy delete`. The existing `/policy` page is relabeled "Decisions" in the sidebar.
+
 ### Changed
 
 - **`omega policy delete` no longer deletes whatever version is stored by default.** It needs `--if-match` with the ETag `omega policy get` printed, or `--force` for the previous behaviour, so a policy someone changed since is not removed by mistake.
