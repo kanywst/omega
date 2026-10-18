@@ -8,6 +8,14 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **AuthZEN request identification and decision context.** Every `/access/v1/*` endpoint, on the server and on the agent's local PDP, echoes the `X-Request-ID` header unchanged (AuthZEN 1.0 §10.1.3) and records it as `request_id` in the audit row of each decision; it is also set on the server span. An id that is not 1 to 128 bytes of letters, digits and `-._~:/+=@;` is stored as `request_id_sha256` instead, so no oversized or log-unsafe caller string reaches the audit chain. Decisions, including each entry of a batch, now carry the optional response `context` (§5.5.1, §6.2): `reasons` lists the policies that determined the decision and `errors` the ids of the policies Cedar skipped because evaluating them failed; Cedar's error messages are recorded in the audit row only. The top-level `reasons` stays. See [docs/conformance-authzen.md](docs/conformance-authzen.md).
+
+### Changed
+
+- **Security: a `forbid` that fails to evaluate now denies.** Cedar skips a policy whose evaluation fails, for example on a missing attribute, so a `forbid` that errored left a matching `permit` to allow. omega now denies whenever a `forbid` errors, on the server (single, batch and search) and on the agent's local PDP, and names that policy in `reasons` and `context.errors`. A `permit` that errors still grants nothing. Requests that a failing `forbid` used to let through are now denied.
+
 ## [0.11.0] - 2026-10-16
 
 Makes the upstream CA overlap durable: the CAs kept from a Vault PKI, step-ca or AWS Private CA rotation survive restarts and are shared by replicas, each stored row authenticated under the audit HMAC key, and `spiffe_sequence` never goes back after a restart for any backend. Adds an issuing-CA-only trust bundle for AWS Private CA.
