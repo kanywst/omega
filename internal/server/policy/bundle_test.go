@@ -125,3 +125,33 @@ func TestLoadBundleReplacesTheFileAndStoredSets(t *testing.T) {
 		t.Fatalf("the bundle's ids are namespaced apart from stored ones: %v", err)
 	}
 }
+
+// A stored policy that arrived in a bundle is revoked when the stored
+// set no longer has it.
+func TestLoadBundleKeepsStoredPoliciesRevocable(t *testing.T) {
+	src := engineWith(t, `@id("read") permit (principal, action == Action::"read", resource);`)
+	if err := src.SetStoredPolicies(map[string]string{"pager": `@id("page") permit (principal, action == Action::"page", resource);`}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := src.Bundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := policy.New()
+	if err := local.LoadBundle(b); err != nil {
+		t.Fatal(err)
+	}
+	page := func() bool {
+		r, _ := local.Evaluate(policy.EvalRequest{Subject: policy.Entity{Type: "U", ID: "u"}, Action: policy.Action{Name: "page"}, Resource: policy.Entity{Type: "D", ID: "d"}})
+		return r.Decision
+	}
+	if !page() {
+		t.Fatal("the bundle's stored policy must apply")
+	}
+	if err := local.SetStoredPolicies(map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if page() {
+		t.Fatal("removing the stored policy must revoke it")
+	}
+}

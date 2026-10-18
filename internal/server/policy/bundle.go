@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cedar-policy/cedar-go"
@@ -110,8 +111,22 @@ func (e *Engine) LoadBundle(b Bundle) error {
 	if err != nil {
 		return err
 	}
+	// Split the bundle back into file and stored policies: stored ones
+	// travel under api/<id>, and file names cannot contain '/'.
+	files, stored := map[string]string{}, map[string]string{}
+	for name, text := range b.Policies {
+		if id, ok := strings.CutPrefix(name, StoredPolicyPrefix); ok {
+			stored[id] = text
+		} else {
+			files[name] = text
+		}
+	}
+	filePS, _, err := parseSources(files, nil)
+	if err != nil {
+		return err
+	}
 	ids := map[cedar.PolicyID]struct{}{}
-	for pid := range ps.All() {
+	for pid := range filePS.All() {
 		ids[pid] = struct{}{}
 	}
 	ents, snap := buildDirectory(dir)
@@ -119,13 +134,12 @@ func (e *Engine) LoadBundle(b Bundle) error {
 	defer e.loadMu.Unlock()
 	// One swap, so no evaluation sees new policies with an old directory
 	// or reports a revision other than the one it decided with. The
-	// bundle is the whole policy set (stored policies already under
-	// their api/ names), so it replaces the file and stored sets too: a
-	// later LoadSources or SetStoredPolicies then starts from it rather
-	// than from what was loaded before.
+	// bundle is the whole policy set, so it replaces the file and stored
+	// sets too: a later LoadSources or SetStoredPolicies then starts from
+	// it, and removing a stored policy removes it.
 	e.mu.Lock()
 	e.policies, e.static, e.sources, e.staticRaw = ps, static, b.Policies, b.Entities
-	e.files, e.fileIDs, e.stored = b.Policies, ids, nil
+	e.files, e.fileIDs, e.stored = files, ids, stored
 	e.setDirectoryLocked(dir, ents, snap)
 	e.revision = b.Revision
 	e.rebuildLocked()
