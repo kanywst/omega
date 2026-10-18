@@ -356,7 +356,8 @@ func (e *Engine) EvaluateRevision(req EvalRequest) (EvalResponse, string, error)
 	// only fails to grant, which Cedar already does.
 	var erroredForbids []string
 	for _, de := range diag.Errors {
-		if p := ps.Get(de.PolicyID); p != nil && p.Effect() == cedar.Forbid {
+		// A policy whose effect cannot be told is treated as a forbid.
+		if p := ps.Get(de.PolicyID); p == nil || p.Effect() == cedar.Forbid {
 			erroredForbids = append(erroredForbids, string(de.PolicyID))
 		}
 	}
