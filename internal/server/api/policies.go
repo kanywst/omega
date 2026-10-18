@@ -85,11 +85,7 @@ func fileView(name, text string, withText bool) PolicyView {
 // loadStoredPolicies loads the stored policies into the engine. A set
 // that does not load leaves the last one in force.
 func (s *Server) loadStoredPolicies(ctx context.Context) error {
-	items, err := s.store.ListPolicies(ctx)
-	if err != nil {
-		return err
-	}
-	recorded, err := s.store.PolicyAuditDigests(ctx)
+	items, recorded, err := s.store.PolicySet(ctx)
 	if errors.Is(err, storage.ErrAuditRowUnverified) {
 		metrics.StoredPolicySetLoadFailures.Inc()
 		slog.Error("the audit chain behind the stored policies does not verify; keeping the last set that loaded", "err", err)

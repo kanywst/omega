@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"strconv"
 	"time"
@@ -259,4 +260,33 @@ func checkAuditRowMAC(ev AuditEvent, keys map[string][]byte, hasEpoch bool, keye
 		return errors.New("row MAC does not verify")
 	}
 	return nil
+}
+
+// PolicySet returns the stored policies together with the audit digests
+// (PolicyAuditDigests) of the same moment. The two are separate reads,
+// so they are taken between two reads of the digests and retried when a
+// change committed in between: a change and its audit row commit
+// together, so equal digests on both sides mean the policies were read
+// from that same state. Comparing halves from either side of a commit
+// would look like tampering.
+func (s *Store) PolicySet(ctx context.Context) ([]Policy, map[string]string, error) {
+	before, err := s.PolicyAuditDigests(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for range 3 {
+		items, err := s.ListPolicies(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		after, err := s.PolicyAuditDigests(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if maps.Equal(before, after) {
+			return items, after, nil
+		}
+		before = after
+	}
+	return nil, nil, errors.New("stored policies kept changing while being read; retrying on the next sync")
 }

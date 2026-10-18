@@ -476,3 +476,38 @@ func TestUnverifiedPolicyAuditRowFailsClosed(t *testing.T) {
 		t.Fatalf("evaluation must fail closed at once: %d", code)
 	}
 }
+
+// A replica syncing while the leader writes must never read a policy and
+// the audit chain from either side of one commit and take that for
+// tampering.
+func TestStoredPolicySyncDuringWrites(t *testing.T) {
+	env := newDomainEnv(t, "")
+	root := env.as(t, rootAdmin)
+	base := env.srv.URL + "/v1/policies"
+	if code, body := call(t, root, "POST", base, api.PolicyRequest{ID: "x", Text: alicePermit}); code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	ca, err := identity.LoadOrCreate(filepath.Join(t.TempDir(), "ca"), "omega.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica := api.NewServer(env.store, ca, policy.New())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		texts := []string{alicePermit2, alicePermit}
+		for i := range 20 {
+			_, _, _ = callH(t, root, "PUT", base+"/x", api.PolicyRequest{Text: texts[i%2]}, map[string]string{"If-Match": "*"})
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+		}
+		if err := replica.RefreshDirectory(t.Context()); errors.Is(err, api.ErrStoredPolicySet) {
+			t.Fatalf("a sync racing a write must not look like tampering: %v", err)
+		}
+	}
+}
