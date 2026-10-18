@@ -316,22 +316,24 @@ func TestVaultPKIBacksOffAfterAFailedRefresh(t *testing.T) {
 	a, err := identity.New(identity.Config{
 		Kind: identity.KindVaultPKI, TrustDomain: "omega.local", Dir: filepath.Join(t.TempDir(), "ca"),
 		VaultPKIAddr: v.server.URL, VaultPKIToken: v.token, VaultPKIMount: v.mount, VaultPKIRole: v.role,
-		VaultPKIBundleTTL: time.Millisecond,
+		// The backoff is the shorter of the TTL and 30s: long enough here
+		// that the reads below all fall inside it.
+		VaultPKIBundleTTL: 500 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	good := a.BundlePEM()
-	time.Sleep(5 * time.Millisecond)
 	broken := []byte("not a PEM bundle") // Vault starts failing
 	v.chain.Store(&broken)
+	time.Sleep(600 * time.Millisecond) // the cached bundle expires
 	before := v.chainHits.Load()
 	for i := 0; i < 20; i++ {
 		if got := a.BundlePEM(); string(got) != string(good) {
 			t.Fatal("the last bundle must keep being served while Vault is down")
 		}
 	}
-	if n := v.chainHits.Load() - before; n > 1 {
-		t.Fatalf("%d refresh attempts during the outage, want at most one before the backoff", n)
+	if n := v.chainHits.Load() - before; n != 1 {
+		t.Fatalf("%d refresh attempts during the outage, want exactly one before the backoff", n)
 	}
 }
