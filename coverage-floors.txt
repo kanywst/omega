@@ -9,9 +9,9 @@ github.com/kanywst/omega/internal/server/audit 85
 github.com/kanywst/omega/internal/server/federation 78
 github.com/kanywst/omega/internal/server/identity 85
 github.com/kanywst/omega/internal/server/oidc 81
-github.com/kanywst/omega/internal/server/policy 84
+github.com/kanywst/omega/internal/server/policy 85
 github.com/kanywst/omega/internal/server/storage 71
-github.com/kanywst/omega/internal/cli 58
+github.com/kanywst/omega/internal/cli 60
 github.com/kanywst/omega/internal/agent/workloadapi 32
 github.com/kanywst/omega/internal/agent/attestor 70
 github.com/kanywst/omega/internal/agent/attestor/k8s 95

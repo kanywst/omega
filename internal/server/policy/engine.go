@@ -8,7 +8,9 @@ package policy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -24,15 +26,22 @@ import (
 // for concurrent Evaluate calls; Reload swaps the underlying state under
 // a write lock.
 type Engine struct {
+	// loadMu serialises the loaders (LoadSources, SetStoredPolicies), so
+	// one never parses against a half of the union another is replacing.
+	loadMu   sync.Mutex
 	mu       sync.RWMutex
 	policies *cedar.PolicySet
 	// static is the entity map from entities.json, directory the one
 	// projected from control-plane state (SetDirectory); entities is
 	// their union, with directory winning on a UID collision.
 	static cedar.EntityMap
-	// sources and staticRaw are what LoadDir / LoadSources read, kept so
-	// the exact policy set can be distributed to local evaluators.
+	// sources and staticRaw are what the engine evaluates, kept so the
+	// exact policy set can be distributed to local evaluators. sources is
+	// the union of files (what LoadDir / LoadSources read) and stored
+	// (what SetStoredPolicies read, keyed by StoredPolicyKey).
 	sources   map[string]string
+	files     map[string]string
+	stored    map[string]string
 	staticRaw []byte
 	dirSpec   Directory
 	directory cedar.EntityMap
@@ -73,22 +82,117 @@ func (e *Engine) LoadDir(dir string) error {
 	return e.LoadSources(sources, raw)
 }
 
-// LoadSources replaces the policy set with the given Cedar sources
+// LoadSources replaces the file policies with the given Cedar sources
 // (file name -> text) and the static entity map (entities.json bytes,
-// nil for none). On error the engine is left untouched.
+// nil for none). Stored policies (SetStoredPolicies) stay in force
+// alongside them. On error, including a policy id that collides with a
+// stored policy's, the engine is left untouched.
 func (e *Engine) LoadSources(sources map[string]string, entitiesJSON []byte) error {
-	ps, ents, err := parseSources(sources, entitiesJSON)
+	for name := range sources {
+		if strings.Contains(name, "/") {
+			return fmt.Errorf("policy file name %q must not contain '/'", name)
+		}
+	}
+	e.loadMu.Lock()
+	defer e.loadMu.Unlock()
+	e.mu.RLock()
+	stored := e.stored
+	e.mu.RUnlock()
+	union := unionSources(sources, stored)
+	ps, ents, err := parseSources(union, entitiesJSON)
 	if err != nil {
 		return err
 	}
 	e.mu.Lock()
 	e.policies = ps
 	e.static = ents
-	e.sources = sources
+	e.files = sources
+	e.sources = union
 	e.staticRaw = entitiesJSON
 	e.rebuildLocked()
 	e.mu.Unlock()
 	return nil
+}
+
+// SetStoredPolicies replaces the stored policies (policy id -> Cedar
+// text) evaluated alongside the file policies. On error the engine is
+// left untouched, so the last set that loaded stays in force.
+func (e *Engine) SetStoredPolicies(stored map[string]string) error {
+	e.loadMu.Lock()
+	defer e.loadMu.Unlock()
+	e.mu.RLock()
+	files, cur := e.files, e.stored
+	e.mu.RUnlock()
+	if cur != nil && maps.Equal(cur, stored) {
+		return nil
+	}
+	union := unionSources(files, stored)
+	ps, _, err := parseSources(union, nil)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.policies = ps
+	e.stored = stored
+	e.sources = union
+	e.mu.Unlock()
+	return nil
+}
+
+// FilePolicies returns the file policies (file name -> text) in force.
+// The map is the engine's own and MUST NOT be mutated.
+func (e *Engine) FilePolicies() map[string]string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.files
+}
+
+// CheckStored reports whether text would load as the stored policy id
+// alongside the file policies in force, and returns the Cedar policy
+// ids it defines. It changes nothing.
+func (e *Engine) CheckStored(id, text string) ([]string, error) {
+	key := StoredPolicyKey(id)
+	ps, _, err := parseSources(map[string]string{key: text}, nil)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for pid := range ps.All() {
+		ids = append(ids, string(pid))
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("text holds no Cedar policy")
+	}
+	sort.Strings(ids)
+	files, _, err := parseSources(e.FilePolicies(), nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, pid := range ids {
+		if files.Get(cedar.PolicyID(pid)) != nil {
+			return nil, fmt.Errorf("policy id %q is already defined by a --policy-dir file", pid)
+		}
+	}
+	return ids, nil
+}
+
+// StoredPolicyPrefix marks a stored policy among the sources. A file
+// name cannot hold '/', so a stored policy never shadows a file.
+const StoredPolicyPrefix = "api/"
+
+// StoredPolicyKey is the source key of the stored policy id, and the
+// prefix of every Cedar policy id it defines.
+func StoredPolicyKey(id string) string { return StoredPolicyPrefix + id }
+
+func unionSources(files, stored map[string]string) map[string]string {
+	out := make(map[string]string, len(files)+len(stored))
+	for name, text := range files {
+		out[name] = text
+	}
+	for id, text := range stored {
+		out[StoredPolicyKey(id)] = text
+	}
+	return out
 }
 
 // Snapshot returns what the engine evaluates against: the Cedar sources,
@@ -166,11 +270,22 @@ func parseSources(sources map[string]string, entitiesJSON []byte) (*cedar.Policy
 		// filename-stem-prefixed default - both forms collapse to a single
 		// stable, human-readable id that flows through to /access/v1
 		// reasons[] and the audit log.
+		//
+		// A stored policy is the exception: every id it defines, an
+		// @id included, is prefixed with its key, so a policy written
+		// over the API can never take over an id a file defines.
+		stored := strings.HasPrefix(base, StoredPolicyPrefix)
 		stem := strings.TrimSuffix(base, filepath.Ext(base))
+		if stored {
+			stem = base
+		}
 		for autoID, p := range fileSet.All() {
 			id := cedar.PolicyID(stem + "::" + string(autoID))
 			if v, ok := p.Annotations()["id"]; ok && v != "" {
 				id = cedar.PolicyID(v)
+				if stored {
+					id = cedar.PolicyID(stem + "::" + string(v))
+				}
 			}
 			if !ps.Add(id, p) {
 				return nil, nil, fmt.Errorf("duplicate policy id %q (defined again in %s)", id, base)

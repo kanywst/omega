@@ -59,7 +59,8 @@ func (s *Server) WithDomainRootAdmins(ids []string) *Server {
 	return s
 }
 
-// RefreshDirectory reloads the domain tree into the policy engine.
+// RefreshDirectory reloads the domain tree and the stored policies into
+// the policy engine.
 func (s *Server) RefreshDirectory(ctx context.Context) error {
 	s.domains.refreshMu.Lock()
 	defer s.domains.refreshMu.Unlock()
@@ -110,6 +111,18 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 		}
 	}
 	s.policy.SetDirectory(dir)
+	// A stored set that does not load leaves the last one in force, but
+	// the database holds a set this replica is not enforcing (another
+	// replica's new forbid, say), so evaluation fails closed at once
+	// rather than after the stale window.
+	if err := s.loadStoredPolicies(ctx); err != nil {
+		if errors.Is(err, ErrStoredPolicySet) {
+			s.domains.mu.Lock()
+			s.domains.broken = true
+			s.domains.mu.Unlock()
+		}
+		return err
+	}
 	s.domains.mu.Lock()
 	s.domains.loadedAt = time.Now()
 	s.domains.broken = false

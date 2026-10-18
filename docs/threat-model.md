@@ -207,10 +207,8 @@ hide an authorization decision or an SVID issuance.
 An attacker with database write access modifies the Cedar policy
 set to permit an action that should be denied.
 
-- Mitigation today: policy mutation goes through the leaderOnly
-  HTTP path (`POST /v1/domains` etc.; Cedar policy CRUD over HTTP
-  is partial - see `gap-analysis.md`). Direct DB writes leave no
-  audit row.
+- Mitigation today: policy mutation goes through the leader-only HTTP API. Domains, groups and stored Cedar policies (`/v1/policies`, [ADR 0022](adr/0022-stored-policies.md)) are each written in the same transaction as their audit row; a stored policy write needs `--require-auth` and a `--domain-root-admin`, needs `If-Match` to update, and records the old and new SHA-256 digests of the text. Direct DB writes leave no audit row.
+- Each replica checks the stored policies against the audit chain whenever it loads them: a policy whose digest differs from the latest `new_digest` the chain records for it, one the chain has no record of, or one the chain says is in place but the database lacks, makes the replica keep its last good set in the engine and fail evaluation closed (`503`) at once rather than enforce it ([docs/policies.md](policies.md#when-the-stored-set-does-not-load)). With the audit HMAC keyring (`--audit-hmac-key-file`) each chain row the check reads must carry a valid MAC, so a database writer without the key can deny service but cannot change what is enforced. Without a keyring the check does not stop a database writer, who can append an unkeyed chain row that matches its edit; it then only catches an edit to the policies table alone, and the server warns at startup under `--require-auth`.
 - Residual risk: an attacker who reaches the database directly
   bypasses the audit log. Mitigation is at the database access
   layer, not Omega.

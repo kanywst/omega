@@ -4,6 +4,9 @@
 # Asserts:
 #   * the agent's local PDP allows a media workload and denies another;
 #   * both decisions reach the control plane's audit chain as source=local;
+#   * a policy stored through the policy API (omega policy apply) is
+#     evaluated centrally and by the node, is audited, and stops applying
+#     once deleted;
 #   * a policy change (SIGHUP on the server) reaches the node on the next sync;
 #   * with the control plane gone, the local PDP keeps deciding until
 #     --policy-max-age and then answers 503.
@@ -116,6 +119,49 @@ for _ in $(seq 1 50); do
 done
 [[ "$n" -ge 2 ]] || { echo "FAIL: local decisions not audited ($n)" >&2; exit 1; }
 echo "  $n local decisions recorded"
+
+# omega policy, authenticated as the root admin.
+policy_cli() {
+	"$DEMO_DIR/omega" policy --server "$CP" --server-ca "$DEMO_DIR/pki/ca.pem" \
+		--client-cert "$DEMO_DIR/pki/root.pem" --client-key "$DEMO_DIR/pki/root.key" "$@"
+}
+
+central() { # spiffe-id -> the control plane's decision body
+	cp_curl -fsS -X POST "$CP/access/v1/evaluation" -H 'Content-Type: application/json' \
+		-d "{\"subject\":{\"type\":\"Spiffe\",\"id\":\"$1\"},\"action\":{\"name\":\"read\"},\"resource\":{\"type\":\"Doc\",\"id\":\"d\"}}"
+}
+
+# until_local WANT: poll the node's decision for media/web until it is WANT.
+until_local() {
+	for _ in $(seq 1 50); do
+		decide spiffe://omega.local/media/web >/dev/null
+		grep -q "\"decision\":$1" "$DEMO_DIR/decision.json" && return 0
+		sleep 0.2
+	done
+	return 1
+}
+
+echo "[demo] storing a policy through the policy API"
+cat >"$DEMO_DIR/block-media-web.cedar" <<'CEDAR'
+forbid (principal == Spiffe::"spiffe://omega.local/media/web", action == Action::"read", resource);
+CEDAR
+printf 'permit (\n' >"$DEMO_DIR/broken.cedar"
+if policy_cli apply -f "$DEMO_DIR/broken.cedar" 2>/dev/null; then
+	echo "FAIL: an invalid policy was accepted" >&2; exit 1
+fi
+policy_cli list | grep -q '"source": "file"' || { echo "FAIL: --policy-dir file not listed" >&2; exit 1; }
+policy_cli apply -f "$DEMO_DIR/block-media-web.cedar" | grep -q '"version": 1' || { echo "FAIL: apply" >&2; exit 1; }
+central spiffe://omega.local/media/web | grep -q '"api/block-media-web::policy0"' \
+	|| { echo "FAIL: the stored forbid does not decide centrally" >&2; exit 1; }
+echo "  control plane: media/web -> deny by api/block-media-web::policy0"
+until_local false || { echo "FAIL: the stored policy did not reach the node" >&2; exit 1; }
+echo "  node:          media/web -> deny after its next sync"
+cp_curl -fsS "$CP/v1/audit?since=0" | grep -q '"kind":"policy.create"' || { echo "FAIL: policy.create not audited" >&2; exit 1; }
+policy_cli delete block-media-web
+until_local true || { echo "FAIL: the deleted policy still applies on the node" >&2; exit 1; }
+central spiffe://omega.local/media/web | grep -q '"decision":true' || { echo "FAIL: the deleted policy still applies centrally" >&2; exit 1; }
+cp_curl -fsS "$CP/v1/audit?since=0" | grep -q '"kind":"policy.delete"' || { echo "FAIL: policy.delete not audited" >&2; exit 1; }
+echo "  deleted: media/web -> allow again, create and delete both in the audit chain"
 
 echo "[demo] changing the policy on the control plane (SIGHUP)"
 printf 'forbid (principal, action, resource);\n' >"$DEMO_DIR/policies/media.cedar"

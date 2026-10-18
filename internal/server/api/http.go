@@ -274,6 +274,15 @@ func (s *Server) Handler() http.Handler {
 	// The bundle carries every policy and group membership, so it needs
 	// the same caller authentication as audit reads; followers serve it.
 	handle("GET /v1/policy/bundle", s.requireSPIFFEAuth(fresh(s.getPolicyBundle)))
+	// Policy reads are served by followers; the text itself is limited
+	// further (mayReadPolicyText). Writes change what every replica
+	// evaluates, so they are leader-gated and audited.
+	handle("GET /v1/policies", s.requireSPIFFEAuth(s.listPolicies))
+	handle("GET /v1/policies/{id}", s.requireSPIFFEAuth(s.getPolicy))
+	handle("POST /v1/policies", gated(s.createPolicy))
+	handle("POST /v1/policies/validate", s.requireSPIFFEAuth(s.validatePolicy))
+	handle("PUT /v1/policies/{id}", gated(s.updatePolicy))
+	handle("DELETE /v1/policies/{id}", gated(s.deletePolicy))
 	handle("POST /v1/audit/decisions", gated(s.recordDecisions))
 	handle("POST /v1/svid/jwt", issuingOnly(gated(s.issueJWTSVID)))
 	handle("POST /v1/token/exchange", issuingOnly(gated(fresh(s.tokenExchange))))

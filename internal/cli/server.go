@@ -666,6 +666,9 @@ func newServerCommand() *cobra.Command {
 				}
 				apiServer = apiServer.WithSCIM(cfgs)
 			}
+			if requireAuth && auditKeyring == nil {
+				fmt.Fprintln(os.Stderr, "omega server: WARN no --audit-hmac-key-file: stored Cedar policies are checked against an unkeyed audit chain, so a database writer can forge a policy together with the chain row that vouches for it")
+			}
 			if requireAuth && len(domainRootAdmins) == 0 {
 				fmt.Fprintln(os.Stderr, "omega server: no --domain-root-admin set: under --require-auth nobody can create a top-level domain until one is configured")
 			}
@@ -673,9 +676,14 @@ func newServerCommand() *cobra.Command {
 			// so no request is evaluated without it (a forbid on a Domain
 			// would otherwise not apply), then keep it current so
 			// `principal in Domain::"..."` reflects domains created through
-			// any replica.
+			// any replica. Stored policies that do not load do not stop the
+			// server: evaluation fails closed, and the policy API that can
+			// fix them stays up.
 			if err := apiServer.RefreshDirectory(ctx); err != nil {
-				return fmt.Errorf("load domain tree: %w", err)
+				if !errors.Is(err, api.ErrStoredPolicySet) {
+					return fmt.Errorf("load domain tree: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "omega server: WARN %v; policy evaluation fails closed until the stored policies load (fix or delete them through /v1/policies)\n", err)
 			}
 			go apiServer.RunDirectorySync(ctx, 5*time.Second)
 
