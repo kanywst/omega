@@ -22,7 +22,11 @@ export function Sidebar() {
 
       <nav className="flex-1 px-2 py-2">
         {NAV.map((item) => {
-          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+          // Match whole segments: /policies must not light up /policy.
+          const active =
+            item.href === "/"
+              ? pathname === "/"
+              : pathname === item.href || pathname.startsWith(`${item.href}/`);
           return (
             <Link
               key={item.href}

@@ -44,13 +44,14 @@ The UI talks to the control plane via the Next rewrite at
 | `/domains`  | SPIFFE namespace list                                |
 | `/svid`     | Recent X.509 / JWT SVIDs (audit-derived)             |
 | `/policy`   | AuthZEN evaluations (audit-derived)                  |
+| `/policies` | Cedar policies: list, text, validate (read-only)     |
 | `/audit`    | Full chain + verify badge                            |
 | `/bundle`   | Download X.509 / JWKS bundles                        |
 
 ## Keyboard
 
 - `⌘K` / `Ctrl+K` - command palette
-- `g h` `g d` `g s` `g p` `g a` `g b` - jump to page
+- `g h` `g d` `g s` `g p` `g c` `g a` `g b` - jump to page
 
 ## Design rules
 
@@ -67,3 +68,11 @@ version:
 
 Read-only. Mutation flows (create domain, issue SVID via UI) are a
 planned follow-up.
+
+The Policies page never writes. The `/api/omega/*` proxy forwards
+requests without authenticating the browser, so a write path there would
+let anyone who reaches the UI change policy. Create, update and delete
+policies with `omega policy apply` and `omega policy delete`, which
+authenticate as a `--domain-root-admin`. Under `--require-auth` the
+proxy presents no client certificate, so the page shows the 401 / 403
+the control plane answers instead of the policies.
