@@ -68,9 +68,20 @@ export function authState(): AuthState {
   } catch {
     return { kind: "error", error: "OMEGA_UI_URL is not a URL" };
   }
-  const local = uiUrl.hostname === "localhost" || uiUrl.hostname === "127.0.0.1";
-  if (uiUrl.protocol !== "https:" && !local) {
+  if (!secureOrLocal(uiUrl)) {
     return { kind: "error", error: "OMEGA_UI_URL must be https:// outside localhost" };
+  }
+  // The token endpoint comes from the issuer's discovery document, and
+  // the ID token's signature is checked only by omega, so the issuer
+  // must be reached over TLS.
+  let issuerUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+  } catch {
+    return { kind: "error", error: "OMEGA_UI_OIDC_ISSUER is not a URL" };
+  }
+  if (!secureOrLocal(issuerUrl)) {
+    return { kind: "error", error: "OMEGA_UI_OIDC_ISSUER must be https:// outside localhost" };
   }
   const tokenTTL = positiveInt("OMEGA_UI_TOKEN_TTL", 900);
   const sessionMaxAge = positiveInt("OMEGA_UI_SESSION_MAX_AGE", 8 * 3600);
@@ -94,6 +105,11 @@ export function authState(): AuthState {
       sessionMaxAge,
     },
   };
+}
+
+function secureOrLocal(u: URL): boolean {
+  const local = u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "[::1]";
+  return u.protocol === "https:" || (u.protocol === "http:" && local);
 }
 
 function positiveInt(name: string, fallback: number): number | undefined {

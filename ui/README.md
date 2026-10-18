@@ -87,7 +87,7 @@ Sessions are in memory, so run one UI replica (or sticky sessions), and a restar
 | `OMEGA_API_CA` | no | PEM CA bundle that verifies the control plane's certificate |
 | `OMEGA_API_CLIENT_CERT` | with sign-in | The UI's X.509-SVID (PEM), listed on the server with `--ui-proxy`; re-read when it changes |
 | `OMEGA_API_CLIENT_KEY` | with sign-in | Its private key (PEM) |
-| `OMEGA_UI_OIDC_ISSUER` | turns sign-in on | The IdP's issuer URL (discovery at `/.well-known/openid-configuration`) |
+| `OMEGA_UI_OIDC_ISSUER` | turns sign-in on | The IdP's issuer URL (discovery at `/.well-known/openid-configuration`); `https://` outside `localhost` |
 | `OMEGA_UI_OIDC_CLIENT_ID` | with sign-in | The UI's OIDC client id; also an audience of the server's `--oidc-idp` |
 | `OMEGA_UI_OIDC_CLIENT_SECRET` | no | Client secret, sent with `client_secret_basic`; omit for a public client |
 | `OMEGA_UI_OIDC_IDP` | with sign-in | The `name` of the server's `--oidc-idp` for this IdP |

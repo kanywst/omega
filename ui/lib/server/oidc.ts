@@ -54,6 +54,11 @@ async function discover(cfg: AuthConfig): Promise<Discovery> {
   if (doc.issuer.replace(/\/+$/, "") !== cfg.issuer) {
     throw new Error(`OIDC discovery names issuer ${doc.issuer}, not ${cfg.issuer}`);
   }
+  // An https issuer must not send the code or the client secret over
+  // plain HTTP.
+  if (cfg.issuer.startsWith("https:") && !doc.token_endpoint.startsWith("https:")) {
+    throw new Error("OIDC discovery names a token endpoint that is not https://");
+  }
   discovered = { issuer: cfg.issuer, doc, at: Date.now() };
   return doc;
 }
