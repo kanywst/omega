@@ -260,11 +260,11 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /v1/attest/k8s", issuingOnly(leaderOnly(s.attestK8s)))
 	handle("GET /v1/bundle", s.getBundle)
 	handle("GET /v1/spiffe-bundle", s.getSPIFFEBundle)
-	handle("POST /access/v1/evaluation", gated(fresh(s.evaluateAccess)))
-	handle("POST /access/v1/evaluations", gated(fresh(s.evaluateAccessBatch)))
-	handle("POST /access/v1/search/subject", gated(fresh(s.searchSubject)))
-	handle("POST /access/v1/search/resource", gated(fresh(s.searchResource)))
-	handle("POST /access/v1/search/action", gated(fresh(s.searchAction)))
+	handle("POST /access/v1/evaluation", withRequestID(gated(fresh(s.evaluateAccess))))
+	handle("POST /access/v1/evaluations", withRequestID(gated(fresh(s.evaluateAccessBatch))))
+	handle("POST /access/v1/search/subject", withRequestID(gated(fresh(s.searchSubject))))
+	handle("POST /access/v1/search/resource", withRequestID(gated(fresh(s.searchResource))))
+	handle("POST /access/v1/search/action", withRequestID(gated(fresh(s.searchAction))))
 	// Audit reads expose every decision's subject and full request /
 	// response payload, so when --require-auth is on they are closed to
 	// authenticated callers too. They are NOT leader-gated (reads are
@@ -821,12 +821,12 @@ func (s *Server) evaluateAccess(w http.ResponseWriter, r *http.Request) {
 		Kind:     "access.evaluate",
 		Subject:  req.Subject.ID,
 		Decision: decision,
-		Payload: mustJSON(map[string]any{
+		Payload: mustJSON(withRequestIDPayload(r.Context(), map[string]any{
 			"request":  req,
 			"response": resp,
-		}),
+		})),
 	})
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, resp.ForCaller())
 }
 
 // BatchEvalSubrequest is one entry in a POST /access/v1/evaluations
@@ -986,16 +986,16 @@ func (s *Server) evaluateAccessBatch(w http.ResponseWriter, r *http.Request) {
 			Kind:     "access.evaluate",
 			Subject:  m.Subject.ID,
 			Decision: decision,
-			Payload: mustJSON(map[string]any{
+			Payload: mustJSON(withRequestIDPayload(ctx, map[string]any{
 				"request":  m,
 				"response": resp,
 				// semantic is recorded so that a batch of size N with
 				// fewer than N rows in the chain reads as a short
 				// circuit, not as lost audit events.
 				"batch": map[string]any{"index": i, "size": len(req.Evaluations), "semantic": semantic},
-			}),
+			})),
 		})
-		out.Evaluations = append(out.Evaluations, resp)
+		out.Evaluations = append(out.Evaluations, resp.ForCaller())
 		if (semantic == SemanticDenyOnFirstDeny && !resp.Decision) ||
 			(semantic == SemanticPermitOnFirstPermit && resp.Decision) {
 			batchSpan.SetAttributes(attribute.Int("authzen.batch.evaluated", i+1))
@@ -1454,11 +1454,11 @@ func (s *Server) evaluateForSearch(ctx context.Context, eval policy.EvalRequest,
 		Kind:     "access.evaluate",
 		Subject:  eval.Subject.ID,
 		Decision: decision,
-		Payload: mustJSON(map[string]any{
+		Payload: mustJSON(withRequestIDPayload(ctx, map[string]any{
 			"request":  eval,
 			"response": resp,
 			"search":   map[string]any{"dimension": dimension, "index": index},
-		}),
+		})),
 	})
 	return resp.Decision, true
 }

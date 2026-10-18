@@ -54,6 +54,7 @@ func TestRecordDecisionsValidation(t *testing.T) {
 	ok := api.LocalDecision{
 		ID:        "d1",
 		DecidedAt: time.Now(),
+		RequestID: "req-1",
 		Request:   policy.EvalRequest{Subject: policy.Entity{Type: "User", ID: "u"}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"}},
 		Response:  policy.EvalResponse{Decision: true},
 	}
@@ -70,6 +71,9 @@ func TestRecordDecisionsValidation(t *testing.T) {
 		{"too many", api.DecisionBatch{Decisions: tooMany}, http.StatusBadRequest},
 		{"missing id", api.DecisionBatch{Decisions: []api.LocalDecision{{DecidedAt: time.Now(), Request: ok.Request}}}, http.StatusBadRequest},
 		{"malformed request", api.DecisionBatch{Decisions: []api.LocalDecision{{ID: "x", DecidedAt: time.Now()}}}, http.StatusBadRequest},
+		{"unsafe request id", api.DecisionBatch{Decisions: []api.LocalDecision{{ID: "x", DecidedAt: time.Now(), RequestID: "a\"b", Request: ok.Request}}}, http.StatusBadRequest},
+		{"request id digest not hex", api.DecisionBatch{Decisions: []api.LocalDecision{{ID: "x", DecidedAt: time.Now(), RequestIDSHA256: "zz", Request: ok.Request}}}, http.StatusBadRequest},
+		{"request id and digest", api.DecisionBatch{Decisions: []api.LocalDecision{{ID: "x", DecidedAt: time.Now(), RequestID: "a", RequestIDSHA256: strings.Repeat("a", 64), Request: ok.Request}}}, http.StatusBadRequest},
 		{"valid", api.DecisionBatch{BundleRevision: "r1", Decisions: []api.LocalDecision{ok}}, http.StatusOK},
 	}
 	for _, tc := range cases {
@@ -80,12 +84,12 @@ func TestRecordDecisionsValidation(t *testing.T) {
 	events, _ := env.store.ListAudit(t.Context(), 0, 10)
 	var found bool
 	for _, ev := range events {
-		if ev.Kind == "access.evaluate.local" && ev.Actor == "spiffe://omega.local/nodes/n1" && strings.Contains(string(ev.Payload), `"bundle_revision":"r1"`) {
+		if ev.Kind == "access.evaluate.local" && ev.Actor == "spiffe://omega.local/nodes/n1" && strings.Contains(string(ev.Payload), `"bundle_revision":"r1"`) && strings.Contains(string(ev.Payload), `"request_id":"req-1"`) {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("the decision is recorded with the agent as actor")
+		t.Error("the decision is recorded with the agent as actor and the PEP's request id")
 	}
 }
 

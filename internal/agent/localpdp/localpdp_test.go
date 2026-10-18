@@ -882,3 +882,69 @@ func TestLocalPDPSpoolDropsShippedDecisionsEvenWhenThePendingCountIsUnchanged(t 
 		t.Fatal("the decision made during the flush must stay in the spool")
 	}
 }
+
+// The local PDP serves the same AuthZEN 1.0 §10.1.3 contract as the
+// control plane, and the id reaches the central audit row.
+func TestLocalPDPEchoesAndRecordsTheRequestID(t *testing.T) {
+	cp := newControlPlane(t, `@id("all") permit (principal, action, resource);`)
+	ctx := context.Background()
+	p := localpdp.New(localpdp.Config{ServerURL: cp.srv.URL, TrustDomain: "omega.local", HTTPClient: cp.client})
+	if err := p.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h := httptest.NewServer(p.Handler())
+	t.Cleanup(h.Close)
+	body, _ := json.Marshal(evalReq("spiffe://omega.local/media/web", "read"))
+	post := func(ids ...string) (*http.Response, map[string]json.RawMessage) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, h.URL+"/access/v1/evaluation", bytes.NewReader(body))
+		for _, id := range ids {
+			req.Header.Add(policy.RequestIDHeader, id)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]json.RawMessage
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp, out
+	}
+
+	resp, out := post("pep-42")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get(policy.RequestIDHeader) != "pep-42" {
+		t.Fatalf("valid id: %d, echoed %q", resp.StatusCode, resp.Header.Get(policy.RequestIDHeader))
+	}
+	if string(out["context"]) != `{"reasons":["all"]}` {
+		t.Errorf("local decision context: %s", out["context"])
+	}
+	// Any id is echoed; one with characters unsafe to store is recorded
+	// as its digest.
+	resp, _ = post("has", "spaces")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get(policy.RequestIDHeader) != "has, spaces" {
+		t.Fatalf("unsafe id: %d, echoed %q", resp.StatusCode, resp.Header.Get(policy.RequestIDHeader))
+	}
+	_, digest := policy.RequestIDForAudit("has, spaces")
+
+	if err := p.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	events, err := cp.store.ListAudit(ctx, 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plain, hashed bool
+	for _, ev := range events {
+		if ev.Kind != "access.evaluate.local" {
+			continue
+		}
+		plain = plain || strings.Contains(string(ev.Payload), `"request_id":"pep-42"`)
+		hashed = hashed || strings.Contains(string(ev.Payload), `"request_id_sha256":"`+digest+`"`)
+		if strings.Contains(string(ev.Payload), "has, spaces") {
+			t.Errorf("an unsafe id reached the audit chain verbatim: %s", ev.Payload)
+		}
+	}
+	if !plain || !hashed {
+		t.Errorf("central audit rows of local decisions: request_id %v, request_id_sha256 %v", plain, hashed)
+	}
+}
