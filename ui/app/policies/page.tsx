@@ -46,8 +46,10 @@ export default function PoliciesPage() {
       )}
       {q.data && q.data.length > 0 && (
         <ol className="overflow-hidden rounded-[6px] border border-[var(--color-line)]">
+          {/* File ids are *.cedar names and stored ids cannot hold a ".",
+              so an id names one policy and /policies/<id> is unambiguous. */}
           {q.data.map((p) => (
-            <PolicyRow key={`${p.source}/${p.id}`} policy={p} />
+            <PolicyRow key={p.id} policy={p} />
           ))}
         </ol>
       )}
