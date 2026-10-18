@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cedar-policy/cedar-go"
+
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
@@ -108,11 +110,22 @@ func (e *Engine) LoadBundle(b Bundle) error {
 	if err != nil {
 		return err
 	}
+	ids := map[cedar.PolicyID]struct{}{}
+	for pid := range ps.All() {
+		ids[pid] = struct{}{}
+	}
 	ents, snap := buildDirectory(dir)
+	e.loadMu.Lock()
+	defer e.loadMu.Unlock()
 	// One swap, so no evaluation sees new policies with an old directory
-	// or reports a revision other than the one it decided with.
+	// or reports a revision other than the one it decided with. The
+	// bundle is the whole policy set (stored policies already under
+	// their api/ names), so it replaces the file and stored sets too: a
+	// later LoadSources or SetStoredPolicies then starts from it rather
+	// than from what was loaded before.
 	e.mu.Lock()
 	e.policies, e.static, e.sources, e.staticRaw = ps, static, b.Policies, b.Entities
+	e.files, e.fileIDs, e.stored = b.Policies, ids, nil
 	e.setDirectoryLocked(dir, ents, snap)
 	e.revision = b.Revision
 	e.rebuildLocked()

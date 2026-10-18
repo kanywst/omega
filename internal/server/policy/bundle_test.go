@@ -97,3 +97,31 @@ func TestBundleSignature(t *testing.T) {
 		t.Error("only P-256 keys sign bundles")
 	}
 }
+
+// A bundle replaces the whole policy set, so a later stored-policy
+// update on the same engine adds to the bundle's policies instead of
+// falling back to whatever was loaded before it.
+func TestLoadBundleReplacesTheFileAndStoredSets(t *testing.T) {
+	src := engineWith(t, `@id("read") permit (principal, action == Action::"read", resource);`)
+	b, err := src.Bundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := engineWith(t, `@id("old") permit (principal, action == Action::"write", resource);`)
+	if err := local.LoadBundle(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.SetStoredPolicies(map[string]string{"extra": `@id("page") permit (principal, action == Action::"page", resource);`}); err != nil {
+		t.Fatal(err)
+	}
+	decide := func(action string) bool {
+		r, _ := local.Evaluate(policy.EvalRequest{Subject: policy.Entity{Type: "U", ID: "u"}, Action: policy.Action{Name: action}, Resource: policy.Entity{Type: "D", ID: "d"}})
+		return r.Decision
+	}
+	if !decide("read") || !decide("page") || decide("write") {
+		t.Fatalf("read %v page %v write %v: want the bundle's and the stored policy, not the pre-bundle file", decide("read"), decide("page"), decide("write"))
+	}
+	if _, err := local.CheckStored("x", `@id("read") permit (principal, action, resource);`); err != nil {
+		t.Fatalf("the bundle's ids are namespaced apart from stored ones: %v", err)
+	}
+}

@@ -14,6 +14,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ### Fixed
 
+- **A policy bundle now replaces an engine's whole policy set.** Loading a bundle left the engine's file and stored policy sets from before it, so a later stored-policy update on the same engine would have dropped the bundle's policies. Node agents never do that today; the engine no longer allows it.
 - **Policy validation no longer re-parses every `--policy-dir` file.** The file policy ids are collected when the files load, so `POST /v1/policies/validate` and writes check a stored policy against them without parsing the files on each call.
 
 ## [0.12.0] - 2026-10-18
