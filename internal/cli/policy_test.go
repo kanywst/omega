@@ -116,6 +116,9 @@ func TestPolicyCommands(t *testing.T) {
 	if _, err := run("delete", "alice-read"); err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("delete without --if-match or --force must be refused: %v", err)
 	}
+	if _, err := run("delete", "alice-read", "--if-match", "*"); err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("--if-match '*' must point to --force: %v", err)
+	}
 	if _, err := run("delete", "alice-read", "--force", "--if-match", `"1"`); err == nil {
 		t.Fatal("--force with --if-match must be refused")
 	}

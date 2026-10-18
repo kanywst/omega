@@ -163,6 +163,8 @@ func newPolicyCommand() *cobra.Command {
 			switch {
 			case etag != "" && force:
 				return errors.New("--if-match and --force contradict each other")
+			case etag == "*":
+				return errors.New("--if-match '*' deletes whatever version is stored; say so with --force")
 			case force:
 				etag = "*"
 			case etag == "":
