@@ -111,10 +111,16 @@ func (s *Server) RefreshDirectory(ctx context.Context) error {
 		}
 	}
 	s.policy.SetDirectory(dir)
-	// A stored set that does not load leaves the last one in force, and
-	// the tree is not marked fresh, so evaluation fails closed once it
-	// goes stale.
+	// A stored set that does not load leaves the last one in force, but
+	// the database holds a set this replica is not enforcing (another
+	// replica's new forbid, say), so evaluation fails closed at once
+	// rather than after the stale window.
 	if err := s.loadStoredPolicies(ctx); err != nil {
+		if errors.Is(err, ErrStoredPolicySet) {
+			s.domains.mu.Lock()
+			s.domains.broken = true
+			s.domains.mu.Unlock()
+		}
 		return err
 	}
 	s.domains.mu.Lock()

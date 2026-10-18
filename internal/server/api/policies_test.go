@@ -317,10 +317,6 @@ func TestStoredPolicySetThatDoesNotLoad(t *testing.T) {
 	if !errors.Is(err, api.ErrStoredPolicySet) {
 		t.Fatalf("refresh: %v", err)
 	}
-	if !evalAs(t, env, root, alice, "read").Decision {
-		t.Fatal("the last set that loaded must stay in force")
-	}
-	env.api.MarkDirectoryStale()
 	if code, _ := call(t, root, "POST", env.srv.URL+"/access/v1/evaluation", policy.EvalRequest{
 		Subject: policy.Entity{Type: "Spiffe", ID: alice}, Action: policy.Action{Name: "read"}, Resource: policy.Entity{Type: "Doc", ID: "d"},
 	}); code != http.StatusServiceUnavailable {
@@ -422,8 +418,10 @@ func TestStoredPoliciesMustMatchTheAuditChain(t *testing.T) {
 			if err := env.api.RefreshDirectory(t.Context()); !errors.Is(err, api.ErrStoredPolicySet) {
 				t.Fatalf("a set the audit chain does not account for must not load: %v", err)
 			}
-			if r := evalAs(t, env, root, alice, "read"); !r.Decision || evalAs(t, env, root, alice, "write").Decision {
-				t.Fatal("the last set that loaded must stay in force")
+			if code, _ := call(t, root, "POST", env.srv.URL+"/access/v1/evaluation", policy.EvalRequest{
+				Subject: policy.Entity{Type: "Spiffe", ID: alice}, Action: policy.Action{Name: "write"}, Resource: policy.Entity{Type: "Doc", ID: "d"},
+			}); code != http.StatusServiceUnavailable {
+				t.Fatalf("evaluation must fail closed rather than use the tampered set: %d", code)
 			}
 		})
 	}

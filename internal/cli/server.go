@@ -680,7 +680,6 @@ func newServerCommand() *cobra.Command {
 				if !errors.Is(err, api.ErrStoredPolicySet) {
 					return fmt.Errorf("load domain tree: %w", err)
 				}
-				apiServer.MarkDirectoryStale()
 				fmt.Fprintf(os.Stderr, "omega server: WARN %v; policy evaluation fails closed until the stored policies load (fix or delete them through /v1/policies)\n", err)
 			}
 			go apiServer.RunDirectorySync(ctx, 5*time.Second)

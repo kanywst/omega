@@ -130,16 +130,6 @@ func matchAuditChain(items []storage.Policy, recorded map[string]string) error {
 	return nil
 }
 
-// MarkDirectoryStale makes policy evaluation fail closed until the next
-// successful RefreshDirectory. The server calls it when the first load
-// at startup fails on the stored policies, so it can still serve the
-// policy API that fixes them.
-func (s *Server) MarkDirectoryStale() {
-	s.domains.mu.Lock()
-	s.domains.broken = true
-	s.domains.mu.Unlock()
-}
-
 // authorizePolicyWrite writes 403 and returns false unless the caller
 // may change stored policies: only a --domain-root-admin may, and only
 // under --require-auth. A Cedar policy is not confined to a domain, so
