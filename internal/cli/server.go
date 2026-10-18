@@ -666,6 +666,9 @@ func newServerCommand() *cobra.Command {
 				}
 				apiServer = apiServer.WithSCIM(cfgs)
 			}
+			if requireAuth && auditKeyring == nil {
+				fmt.Fprintln(os.Stderr, "omega server: WARN no --audit-hmac-key-file: stored Cedar policies are checked against an unkeyed audit chain, so a database writer can forge a policy together with the chain row that vouches for it")
+			}
 			if requireAuth && len(domainRootAdmins) == 0 {
 				fmt.Fprintln(os.Stderr, "omega server: no --domain-root-admin set: under --require-auth nobody can create a top-level domain until one is configured")
 			}
