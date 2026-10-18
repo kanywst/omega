@@ -89,13 +89,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [federation, postgres, postgres-ha, mcp-a2a-delegation, id-jag, local-pdp, scim, audit-siem, oidc-federation, audit-otlp, ca-vault-pki, ca-step-ca, ca-aws-pca, spiffe-bundle-tdf, spire-upstream, spire-upstream-live, spire-interop, spire-authz, ca-rotation]
+        example: [federation, postgres, postgres-ha, mcp-a2a-delegation, id-jag, local-pdp, scim, audit-siem, oidc-federation, audit-otlp, ca-vault-pki, ca-step-ca, ca-aws-pca, spiffe-bundle-tdf, spire-upstream, spire-upstream-live, spire-interop, spire-authz, ca-rotation, ui-auth]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+      - if: matrix.example == 'ui-auth'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
       - name: build omega and put on PATH
         run: |
           make build
