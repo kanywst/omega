@@ -8,6 +8,12 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-18
+
+Brings policy management into the control plane and tightens decisions: Cedar policies can be managed over `/v1/policies`, with every change recorded in the audit chain in the same transaction, and every AuthZEN decision carries the PEP's request id and an explanatory `context`.
+
+A minor with a breaking change in decisions: a `forbid` that fails to evaluate (for example on a missing attribute) now denies instead of being skipped, so requests it used to let through are refused. See Changed. Before the first `/v1/policies` write, upgrade every server replica and node agent.
+
 ### Added
 
 - **Cedar policies stored in the control plane.** `/v1/policies` lists, reads, creates, updates and deletes Cedar policies kept in the database (SQLite or Postgres), and `POST /v1/policies/validate` checks one without storing it; `omega policy list|get|apply|delete` is the CLI. The engine evaluates them together with the `--policy-dir` files, which the API lists as read-only. Writes are leader-only, need `--require-auth` and a `--domain-root-admin`, need `If-Match` to update or delete, and are written in one transaction with a `policy.create`, `policy.update` or `policy.delete` audit row carrying the old and new digests. An invalid policy is refused with `400`. Every replica reloads stored policies every five seconds and the bundle served to node agents carries them; a stored set that does not load, or that differs from what the audit chain records (a policy changed in the database behind the API), keeps the last one and fails evaluation closed at once (`omega_stored_policy_set_load_failures_total`). Every Cedar id a stored policy defines is prefixed with `api/<id>::`. See [ADR 0022](docs/adr/0022-stored-policies.md) and [docs/policies.md](docs/policies.md).
@@ -964,7 +970,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/kanywst/omega/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kanywst/omega/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/kanywst/omega/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kanywst/omega/compare/v0.8.0...v0.9.0

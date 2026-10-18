@@ -10,9 +10,9 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.11.0)
+## Now (next release, post-0.12.0)
 
-Nothing is committed yet. The durable upstream CA overlap and `spiffe_sequence`, and the issuing-CA-only bundle for AWS Private CA, shipped in 0.11.0.
+Nothing is committed yet. Stored Cedar policies managed over `/v1/policies` ([ADR 0022](docs/adr/0022-stored-policies.md)) and AuthZEN request identification and decision context shipped in 0.12.0.
 
 ## Next (3-6 months)
 
