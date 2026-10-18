@@ -148,7 +148,7 @@ func (s *Server) authorizePolicyWrite(w http.ResponseWriter, r *http.Request, ki
 	}
 	s.audit(r.Context(), storage.AuditEvent{
 		Kind: kind, Actor: caller, Subject: id, Decision: "deny",
-		Payload: mustJSON(map[string]string{"reason": reason}),
+		Payload: mustJSON(withVia(r.Context(), map[string]any{"reason": reason})),
 	})
 	writeErr(w, http.StatusForbidden, errors.New(reason))
 	return false
@@ -260,7 +260,8 @@ func (s *Server) validatePolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 // policyEvent is the audit row of a stored policy change. It carries the
-// digests rather than the text, which the policy API serves.
+// digests rather than the text, which the policy API serves, and the
+// --ui-proxy the change came through, if any.
 func policyEvent(r *http.Request, kind, id string, cur *storage.Policy, text string, version int64, cedarIDs []string) storage.AuditEvent {
 	payload := map[string]any{"id": id, "old_digest": "", "new_digest": "", "version": version}
 	if cur != nil {
@@ -270,7 +271,7 @@ func policyEvent(r *http.Request, kind, id string, cur *storage.Policy, text str
 		payload["new_digest"] = storage.PolicyDigest(text)
 		payload["cedar_ids"] = cedarIDs
 	}
-	return storage.AuditEvent{Kind: kind, Actor: CallerSPIFFEID(r.Context()), Subject: id, Decision: "ok", Payload: mustJSON(payload)}
+	return storage.AuditEvent{Kind: kind, Actor: CallerSPIFFEID(r.Context()), Subject: id, Decision: "ok", Payload: mustJSON(withVia(r.Context(), payload))}
 }
 
 // changePolicy commits a stored policy change with its audit row and

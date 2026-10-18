@@ -83,7 +83,26 @@ func spiffeIDFromTLS(cs *tls.ConnectionState) (string, error) {
 // with 401 and the inner handler never runs. On success the caller's
 // SPIFFE ID is stashed in the request context for downstream issuance
 // binding (see issueSVID / issueJWTSVID).
+//
+// A request that carries UserTokenHeader is refused here; only the
+// routes wrapped with requireUserAuth accept one.
 func (s *Server) requireSPIFFEAuth(h http.HandlerFunc) http.HandlerFunc {
+	return s.authenticate(h, false)
+}
+
+// requireUserAuth is requireSPIFFEAuth for the routes a --ui-proxy may
+// call on a person's behalf: when the caller is a --ui-proxy and the
+// request carries that person's user token, the person becomes the
+// caller and the proxy is recorded as the one it came through.
+func (s *Server) requireUserAuth(h http.HandlerFunc) http.HandlerFunc {
+	return s.authenticate(h, true)
+}
+
+// authenticate is requireSPIFFEAuth and requireUserAuth. A user token
+// is refused on a route that does not accept one, and from any caller
+// that is not a --ui-proxy, rather than ignored, so a misrouted or
+// misconfigured proxy fails closed instead of acting as itself.
+func (s *Server) authenticate(h http.HandlerFunc, delegable bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.requireAuth {
 			h(w, r)
@@ -94,7 +113,16 @@ func (s *Server) requireSPIFFEAuth(h http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, http.StatusUnauthorized, err)
 			return
 		}
-		ctx := context.WithValue(r.Context(), callerCtxKey{}, id)
+		ctx := r.Context()
+		if _, present := r.Header[UserTokenHeader]; present {
+			user := s.delegate(w, r, id, delegable)
+			if user == "" {
+				return
+			}
+			ctx = context.WithValue(ctx, viaCtxKey{}, id)
+			id = user
+		}
+		ctx = context.WithValue(ctx, callerCtxKey{}, id)
 		h(w, r.WithContext(ctx))
 	}
 }

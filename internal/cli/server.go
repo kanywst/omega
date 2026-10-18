@@ -146,6 +146,9 @@ func newServerCommand() *cobra.Command {
 		clientCAFile               string
 		requireAuth                bool
 		auditHMACKeyFile           string
+		uiProxies                  []string
+		uiProxyAudience            string
+		uiProxyMaxTokenTTL         time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -652,6 +655,14 @@ func newServerCommand() *cobra.Command {
 			}
 
 			apiServer = apiServer.WithDomainRootAdmins(domainRootAdmins).WithDecisionRecorders(decisionRecorders)
+			if len(uiProxies) > 0 {
+				ids, err := parseUIProxies(uiProxies, domainRootAdmins, requireAuth, len(oidcIDPs) > 0, sourceKind)
+				if err != nil {
+					return err
+				}
+				apiServer = apiServer.WithUIProxies(api.UIProxyConfig{Proxies: ids, Audience: uiProxyAudience, MaxTokenTTL: uiProxyMaxTokenTTL})
+				fmt.Fprintf(os.Stderr, "omega server: ui proxies (%d): %s (user token audience %q, max lifetime %s)\n", len(ids), strings.Join(ids, ", "), uiProxyAudience, uiProxyMaxTokenTTL)
+			}
 			if bundleSigningKeyFile != "" {
 				key, err := loadBundleSigningKey(bundleSigningKeyFile)
 				if err != nil {
@@ -903,10 +914,44 @@ func newServerCommand() *cobra.Command {
 		"SPIFFE ID, or a prefix ending in '/', allowed to read GET /v1/policy/bundle and record decisions through POST /v1/audit/decisions (repeatable): the node agents running --local-pdp-addr. Needs --require-auth; with none set both endpoints refuse every caller.")
 	cmd.Flags().BoolVar(&clientCertOptional, "client-cert-optional", false,
 		"with --client-ca and --require-auth, verify a client certificate when one is presented instead of requiring it on every connection. Endpoints gated by --require-auth still require a verified SPIFFE client certificate; ungated ones become reachable without one: health and leader state, GET /v1/domains, the trust and federation bundles, discovery documents, /metrics, the enrollment paths, and POST /oauth2/token, which authenticates its own client. See ADR 0012. Lets JWT-SVID clients use the spiffe_jwt method of the ID-JAG grant under --require-auth.")
+	cmd.Flags().StringArrayVar(&uiProxies, "ui-proxy", nil,
+		"SPIFFE ID of a web UI server trusted to act for a signed-in person (repeatable). When such a caller presents a person's JWT-SVID from POST /v1/oidc/exchange in the "+api.UserTokenHeader+" header, the policy API (/v1/policies) authorizes and audits the request as that person, recording the proxy as via. Needs --require-auth and --oidc-idp; a proxy may not also be a --domain-root-admin. See ADR 0023.")
+	cmd.Flags().StringVar(&uiProxyAudience, "ui-proxy-audience", api.DefaultUIProxyAudience,
+		"with --ui-proxy, the audience a person's JWT-SVID must carry, and nothing else: the UI asks for it at POST /v1/oidc/exchange.")
+	cmd.Flags().DurationVar(&uiProxyMaxTokenTTL, "ui-proxy-max-token-ttl", api.DefaultUIProxyMaxTokenTTL,
+		"with --ui-proxy, the longest lifetime (exp - iat) a person's JWT-SVID may have. A longer one is refused, so a stolen token is short-lived.")
 	cmd.Flags().BoolVar(&requireAuth, "require-auth", false,
 		"require an authenticated caller on every write / PDP / issuance endpoint: the request must arrive over mTLS with a verified client certificate carrying a spiffe:// URI SAN, and SVID issuance is bound to that caller (self-renewal only; minting a different identity is denied). Default false keeps today's open, unauthenticated behaviour. Requires --client-ca. Public reads (/healthz, /v1/leader, GET /v1/bundle, GET /v1/domains) and the attestation enrollment paths stay reachable. See docs/threat-model.md (S3).")
 
 	return cmd
+}
+
+// parseUIProxies checks the --ui-proxy flags against the rest of the
+// configuration and returns the canonical SPIFFE IDs.
+func parseUIProxies(specs, rootAdmins []string, requireAuth, haveOIDC bool, source identity.SourceKind) ([]string, error) {
+	if !requireAuth {
+		return nil, errors.New("--ui-proxy requires --require-auth: a proxy is recognised by its mTLS X.509-SVID")
+	}
+	if !haveOIDC {
+		return nil, errors.New("--ui-proxy requires --oidc-idp: people sign in to the UI through an OIDC IdP, and the UI exchanges their ID token for the JWT-SVID it presents")
+	}
+	if source == identity.SourceSPIREUpstream {
+		return nil, errors.New("--ui-proxy: spire-upstream mode issues no JWT-SVIDs, so there is no user token to present")
+	}
+	out := make([]string, 0, len(specs))
+	for _, s := range specs {
+		id, err := spiffeid.FromString(strings.TrimSpace(s))
+		if err != nil {
+			return nil, fmt.Errorf("--ui-proxy %q: %w", s, err)
+		}
+		if slices.Contains(rootAdmins, id.String()) {
+			return nil, fmt.Errorf("--ui-proxy %q is also a --domain-root-admin: a proxy must gain nothing without a person's token", id)
+		}
+		if !slices.Contains(out, id.String()) {
+			out = append(out, id.String())
+		}
+	}
+	return out, nil
 }
 
 // buildServerTLS assembles the listener tls.Config from the operator's
