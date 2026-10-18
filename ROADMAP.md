@@ -10,9 +10,9 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.12.0)
+## Now (next release, post-0.13.0)
 
-Nothing is committed yet. Stored Cedar policies managed over `/v1/policies` ([ADR 0022](docs/adr/0022-stored-policies.md)) and AuthZEN request identification and decision context shipped in 0.12.0.
+Nothing is committed yet. A read-only Policies page in the UI shipped in 0.13.0; writing policies from the UI waits on the UI having an authenticated identity of its own, since its proxy forwards requests without one.
 
 ## Next (3-6 months)
 

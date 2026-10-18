@@ -8,6 +8,12 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-18
+
+Adds a read-only Policies page to the UI and hardens the stored-policy tooling that 0.12.0 introduced.
+
+A minor with a breaking CLI change: `omega policy delete` now needs `--if-match` with the ETag `omega policy get` printed, or `--force`, instead of deleting whatever version is stored. See Changed.
+
 ### Added
 
 - **A read-only Policies page in the UI.** `/policies` lists the `--policy-dir` files and stored policies, shows a policy's Cedar text, and validates a draft through `POST /v1/policies/validate`. It never writes, because the UI's proxy does not authenticate; changes stay with `omega policy apply` and `omega policy delete`. The existing `/policy` page is relabeled "Decisions" in the sidebar.
@@ -983,7 +989,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/kanywst/omega/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/kanywst/omega/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kanywst/omega/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/kanywst/omega/compare/v0.9.0...v0.10.0
