@@ -157,7 +157,12 @@ echo "  control plane: media/web -> deny by api/block-media-web::policy0"
 until_local false || { echo "FAIL: the stored policy did not reach the node" >&2; exit 1; }
 echo "  node:          media/web -> deny after its next sync"
 cp_curl -fsS "$CP/v1/audit?since=0" | grep -q '"kind":"policy.create"' || { echo "FAIL: policy.create not audited" >&2; exit 1; }
-policy_cli delete block-media-web
+# Delete the version this script read, so a change made since would be
+# refused with 412 rather than lost.
+# The etag field holds the quoted ETag, as JSON: "\"<version>-<digest>\"".
+etag=$(policy_cli get block-media-web | sed -n 's/.*"etag": *"\\"\([^\\]*\)\\"".*/\1/p' | head -1)
+[ -n "$etag" ] || { echo "FAIL: no ETag from policy get" >&2; exit 1; }
+policy_cli delete block-media-web --if-match "\"$etag\""
 until_local true || { echo "FAIL: the deleted policy still applies on the node" >&2; exit 1; }
 central spiffe://omega.local/media/web | grep -q '"decision":true' || { echo "FAIL: the deleted policy still applies centrally" >&2; exit 1; }
 cp_curl -fsS "$CP/v1/audit?since=0" | grep -q '"kind":"policy.delete"' || { echo "FAIL: policy.delete not audited" >&2; exit 1; }
