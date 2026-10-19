@@ -70,8 +70,9 @@ func withVia(ctx context.Context, payload map[string]any) map[string]any {
 // delegate resolves the effective caller of a request that carries a
 // user token. proxy is the mTLS-authenticated caller. It answers the
 // error and returns "" unless proxy is a --ui-proxy, the route accepts
-// a user token, and the token is a valid user token; every refusal is
-// audited with the proxy as actor.
+// a user token, and the token is a valid user token. A refusal is
+// audited with the proxy as actor when the leader serves the request;
+// a follower serving a read can only log it.
 func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, delegable bool) string {
 	refuse := func(status int, err error) string {
 		s.audit(r.Context(), storage.AuditEvent{
@@ -101,9 +102,9 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, 
 // verifyUserToken checks a user token and returns its subject. It must
 // be a JWT-SVID this server issued through POST /v1/oidc/exchange (its
 // act claim names the OIDC IdP that signed the person in, and nothing
-// else), for exactly the --ui-proxy-audience, unexpired, with a
-// lifetime of at most --ui-proxy-max-token-ttl, and not sender
-// constrained, since the proxy presents it as a bearer.
+// else), for exactly the --ui-proxy-audience, unexpired with no clock
+// leeway, with a lifetime of at most --ui-proxy-max-token-ttl, and not
+// sender constrained, since the proxy presents it as a bearer.
 func (s *Server) verifyUserToken(token string) (string, error) {
 	id, claims, err := s.ca.ParseJWTSVIDClaims(token)
 	if err != nil {
@@ -116,6 +117,9 @@ func (s *Server) verifyUserToken(token string) (string, error) {
 	iat, okIat := claimNumericDate(claims, "iat")
 	if !okExp || !okIat {
 		return "", errors.New("token must carry iat and exp")
+	}
+	if !time.Now().Before(exp) {
+		return "", errors.New("token has expired")
 	}
 	if life := exp.Sub(iat); life > s.uiProxy.MaxTokenTTL {
 		return "", fmt.Errorf("token lifetime %s exceeds the accepted maximum %s", life, s.uiProxy.MaxTokenTTL)

@@ -189,6 +189,17 @@ func TestUIProxyRefusesUserTokens(t *testing.T) {
 	}
 }
 
+// A JWT-SVID is accepted for 30s past exp elsewhere; a user token is a
+// bearer and gets no leeway.
+func TestUIProxyRefusesAnExpiredUserToken(t *testing.T) {
+	env := newUIProxyEnv(t)
+	tok := userToken(t, env, humanAdmin, []string{api.DefaultUIProxyAudience}, time.Second, map[string]any{"act": oidcAct})
+	time.Sleep(2 * time.Second)
+	if code, _, body := callH(t, env.as(t, uiProxy), "GET", env.srv.URL+"/v1/policies", nil, map[string]string{api.UserTokenHeader: tok}); code != http.StatusUnauthorized {
+		t.Fatalf("expired user token: %d %s", code, body)
+	}
+}
+
 func TestUIProxyHonoursConfiguredLimits(t *testing.T) {
 	env := newDomainEnvWith(t, "", func(s *api.Server) {
 		s.WithDomainRootAdmins([]string{humanAdmin}).
