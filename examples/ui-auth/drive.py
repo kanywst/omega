@@ -138,7 +138,9 @@ st, _, _ = request("DELETE", f"{UI}/api/omega/v1/policies/demo", None, {**write,
 check(st == 204, f"alice deletes the policy ({st})")
 
 # Audit: every change names alice as actor and the UI as via.
-st, _, b = request("GET", f"{UI}/api/omega/v1/audit?limit=200")
+st, _, _ = request("GET", f"{UI}/api/omega/v1/audit?limit=200")
+check(st == 401, f"without a session the UI does not read the audit chain ({st})")
+st, _, b = request("GET", f"{UI}/api/omega/v1/audit?limit=200", cookies=session_cookie)
 check(st == 200, f"the audit chain is readable ({st})")
 rows = {e["kind"]: e for e in jbody(b)["items"] if e["kind"].startswith("policy.") and e["decision"] == "ok"}
 for kind in ("policy.create", "policy.update", "policy.delete"):

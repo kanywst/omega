@@ -37,12 +37,15 @@ const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 // The calls the UI's pages make, and nothing else: the proxy presents
 // the UI's own X.509-SVID, so forwarding any path would let anyone who
 // reaches the UI call any route as the UI. "*" is one policy id. A
-// signedIn route is only forwarded with a person's token.
-const ROUTES: { methods: string[]; path: string[]; signedIn?: true }[] = [
+// signedIn route is only forwarded with a person's token. A sessionOnly
+// route reads what the control plane shows only to authenticated
+// callers, so while the UI presents its SVID it is only forwarded for a
+// signed-in browser.
+const ROUTES: { methods: string[]; path: string[]; signedIn?: true; sessionOnly?: true }[] = [
   { methods: ["GET", "HEAD"], path: ["healthz"] },
   { methods: ["GET", "HEAD"], path: ["v1", "domains"] },
-  { methods: ["GET", "HEAD"], path: ["v1", "audit"] },
-  { methods: ["GET", "HEAD"], path: ["v1", "audit", "verify"] },
+  { methods: ["GET", "HEAD"], path: ["v1", "audit"], sessionOnly: true },
+  { methods: ["GET", "HEAD"], path: ["v1", "audit", "verify"], sessionOnly: true },
   { methods: ["GET", "HEAD"], path: ["v1", "policies"] },
   { methods: ["POST"], path: ["v1", "policies"], signedIn: true },
   { methods: ["POST"], path: ["v1", "policies", "validate"] },
@@ -85,22 +88,27 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
   if (auth.kind === "error") {
     return refuse(503, `this UI's sign-in is misconfigured: ${auth.error}`);
   }
+  let signedIn = false;
   if (auth.kind === "on") {
     const unsafe = UNSAFE.has(req.method);
     if (unsafe && !sameOrigin(auth.config, req)) {
       return refuse(403, "cross-origin request refused");
     }
-    if (actsForPerson(path) && req.cookies.has(SESSION_COOKIE)) {
+    if ((actsForPerson(path) || r.sessionOnly) && req.cookies.has(SESSION_COOKIE)) {
       const s = await currentSession(auth.config, req);
       if (s === "expired") return refuse(401, "your session has ended; sign in again");
       if (s) {
         if (unsafe && !csrfOK(s, req)) return refuse(403, "missing or wrong CSRF token");
-        headers.set(USER_TOKEN_HEADER, s.userToken);
+        signedIn = true;
+        if (actsForPerson(path)) headers.set(USER_TOKEN_HEADER, s.userToken);
       }
     }
   }
   if (r.signedIn && !headers.has(USER_TOKEN_HEADER)) {
     return refuse(401, "sign in to change policies");
+  }
+  if (r.sessionOnly && !signedIn && upstreamConfig().cert) {
+    return refuse(401, "sign in to read the audit log");
   }
 
   const target = `/${path.map(encodeURIComponent).join("/")}${req.nextUrl.search}`;
