@@ -29,7 +29,10 @@ export async function GET(req: NextRequest) {
       { status: 404 },
     );
   }
-  const { login, cookie } = startLogin(safeReturnTo(req.nextUrl.searchParams.get("return_to")));
+  const { login, cookie } = startLogin(
+    auth.config,
+    safeReturnTo(req.nextUrl.searchParams.get("return_to")),
+  );
   let location: string;
   try {
     location = await authorizeURL(auth.config, login);

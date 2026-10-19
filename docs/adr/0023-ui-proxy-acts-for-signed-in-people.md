@@ -32,7 +32,7 @@ Harder:
 
 - **The proxy can act as any person whose token it holds.** A compromised UI server can make policy changes as every root admin signed in to it, for as long as their tokens live (the TTL the UI requests, capped by the ID token's remaining lifetime and `--ui-proxy-max-token-ttl`), and renew them while it holds their IdP refresh tokens. Its X.509-SVID must be protected like an admin credential, and the UI host treated as part of the admin plane.
 - **No revocation of a single token.** JWT-SVIDs are short-lived and not revocable (ADR 0003). To cut a person off at once, remove them from `--domain-root-admin`; to cut off a proxy, remove its `--ui-proxy` flag or stop issuing its SVID. Both need a server restart. Disabling the person at the IdP stops the next renewal.
-- **Sessions are in one process's memory.** A UI restart signs everyone out, and several UI replicas need sticky sessions.
+- **Sessions are in one process's memory.** A UI restart signs everyone out, and several UI replicas need sticky sessions. A sign-in in progress travels in a sealed cookie instead; with `OMEGA_UI_LOGIN_SECRET` shared, it finishes on any replica and across a restart.
 - **A browser that is not signed in reads with the UI's identity.** Without a session cookie the UI calls the policy API as itself, so anyone who reaches the UI sees what the UI's own SVID may read there. Restrict who reaches the UI, or what its SVID may read, if stored policies are sensitive.
 - Only the policy API accepts a user token. Extending it to domains, groups or audit reads is a later decision per route, so each grant to the proxy is deliberate.
 

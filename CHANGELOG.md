@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`OMEGA_UI_LOGIN_SECRET` for UI replicas.** With the same secret on every replica, a sign-in started on one replica finishes on another, or after a restart. Sessions themselves are still in one process's memory, so replicas still need sticky sessions.
+
 ## [0.14.0] - 2026-10-20
 
 Lets people sign in to the UI and manage stored policies as themselves.

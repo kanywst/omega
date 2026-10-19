@@ -19,12 +19,13 @@ DEMO_DIR="${DEMO_DIR:-/tmp/omega-ui-auth-demo}"
 SERVER_PORT="${SERVER_PORT:-18280}"
 IDP_PORT="${IDP_PORT:-18281}"
 UI_PORT="${UI_PORT:-18282}"
+UI2_PORT="${UI2_PORT:-18283}"
 TRUST_DOMAIN=omega.demo
 UI_ID="spiffe://$TRUST_DOMAIN/platform/ui"
 ALICE="spiffe://$TRUST_DOMAIN/humans/demo-idp/alice"
 
 cleanup() {
-	for p in ui server mock-idp; do
+	for p in ui ui2 server mock-idp; do
 		[[ -f "$DEMO_DIR/$p.pid" ]] && kill "$(cat "$DEMO_DIR/$p.pid")" 2>/dev/null || true
 	done
 }
@@ -32,7 +33,7 @@ trap cleanup EXIT
 
 fail_with_logs() {
 	echo "[demo] FAIL: $1" >&2
-	for log in server mock-idp ui; do
+	for log in server mock-idp ui ui2; do
 		[[ -f "$DEMO_DIR/$log.log" ]] && { echo "[demo] $log.log tail:" >&2; tail -20 "$DEMO_DIR/$log.log" | sed 's/^/       /' >&2; }
 	done
 	exit 1
@@ -111,21 +112,28 @@ npm run build >"$DEMO_DIR/build.log" 2>&1 || { tail -30 "$DEMO_DIR/build.log"; f
 # UI can also be opened in a browser while the demo runs.
 rm -rf .next/standalone/.next/static && cp -R .next/static .next/standalone/.next/static
 
-echo "[demo] starting the UI on $UI_URL"
-PORT="$UI_PORT" HOSTNAME=127.0.0.1 \
-	OMEGA_API="https://127.0.0.1:$SERVER_PORT" \
-	OMEGA_API_CA="$DEMO_DIR/pki/ca.pem" \
-	OMEGA_API_CLIENT_CERT="$DEMO_DIR/pki/ui.pem" \
-	OMEGA_API_CLIENT_KEY="$DEMO_DIR/pki/ui.key" \
-	OMEGA_UI_URL="$UI_URL" \
-	OMEGA_UI_OIDC_ISSUER="$ISSUER" \
-	OMEGA_UI_OIDC_CLIENT_ID=omega-ui \
-	OMEGA_UI_OIDC_IDP=demo-idp \
-	node .next/standalone/server.js >"$DEMO_DIR/ui.log" 2>&1 &
-echo $! >"$DEMO_DIR/ui.pid"
-wait_up "$UI_URL/api/auth/session"
+# Two replicas of one UI, sharing the login secret.
+LOGIN_SECRET="$(openssl rand -hex 32)"
+start_ui() {
+	PORT="$1" HOSTNAME=127.0.0.1 \
+		OMEGA_API="https://127.0.0.1:$SERVER_PORT" \
+		OMEGA_API_CA="$DEMO_DIR/pki/ca.pem" \
+		OMEGA_API_CLIENT_CERT="$DEMO_DIR/pki/ui.pem" \
+		OMEGA_API_CLIENT_KEY="$DEMO_DIR/pki/ui.key" \
+		OMEGA_UI_URL="$UI_URL" \
+		OMEGA_UI_OIDC_ISSUER="$ISSUER" \
+		OMEGA_UI_OIDC_CLIENT_ID=omega-ui \
+		OMEGA_UI_OIDC_IDP=demo-idp \
+		OMEGA_UI_LOGIN_SECRET="$LOGIN_SECRET" \
+		node .next/standalone/server.js >"$DEMO_DIR/$2.log" 2>&1 &
+	echo $! >"$DEMO_DIR/$2.pid"
+	wait_up "http://127.0.0.1:$1/api/auth/session"
+}
+echo "[demo] starting the UI on $UI_URL and a second replica on :$UI2_PORT"
+start_ui "$UI_PORT" ui
+start_ui "$UI2_PORT" ui2
 
 echo "[demo] signing alice in and managing a policy through the UI"
-python3 "$EXAMPLE_DIR/drive.py" "$UI_URL" "$ALICE" "$UI_ID" || fail_with_logs "drive.py"
+python3 "$EXAMPLE_DIR/drive.py" "$UI_URL" "$ALICE" "$UI_ID" "http://127.0.0.1:$UI2_PORT" || fail_with_logs "drive.py"
 
 echo "[demo] success"

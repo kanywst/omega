@@ -80,7 +80,7 @@ Without sign-in configured the UI never writes: the `/api/omega/*` proxy calls t
 4. A state-changing request must come from `OMEGA_UI_URL`'s origin and, from a signed-in browser, carry the session's CSRF token, which the page reads from `/api/auth/session`.
 5. A minute before the person's JWT-SVID expires, the UI renews it through the IdP's refresh token. The session ends at sign-out, when renewal fails, or after `OMEGA_UI_SESSION_MAX_AGE`.
 
-Sessions are in memory, so run one UI replica (or sticky sessions), and a restart signs everyone out.
+Sessions are in memory, so run one UI replica (or sticky sessions), and a restart signs everyone out. Set the same `OMEGA_UI_LOGIN_SECRET` on every replica so a sign-in finishes wherever its callback lands.
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
@@ -97,5 +97,6 @@ Sessions are in memory, so run one UI replica (or sticky sessions), and a restar
 | `OMEGA_UI_TOKEN_AUDIENCE` | no | Default `omega-ui`; must equal the server's `--ui-proxy-audience` |
 | `OMEGA_UI_TOKEN_TTL` | no | Seconds the person's JWT-SVID is requested for (default 900); the server caps it at the ID token's remaining life |
 | `OMEGA_UI_SESSION_MAX_AGE` | no | Seconds a session lasts at most, renewals included (default 28800) |
+| `OMEGA_UI_LOGIN_SECRET` | no | At least 32 characters; seals the cookie that carries a sign-in in progress. Share it between replicas. Unset, each process makes its own key |
 
 When `OMEGA_UI_OIDC_ISSUER` is set but another required variable is not, the UI refuses to sign anyone in and stays read-only. Register `<OMEGA_UI_URL>/api/auth/callback` as the client's redirect URI at the IdP. The server needs `--require-auth`, the `--oidc-idp`, the person as a `--domain-root-admin` and the UI as a `--ui-proxy`; see [docs/policies.md](../docs/policies.md#from-the-web-ui). `examples/ui-auth` runs the whole flow against a mock IdP.

@@ -6,10 +6,17 @@
  * the page reads from /api/auth/session and sends back in a header.
  *
  * In-memory means one UI replica, or sticky sessions in front of
- * several; a restart signs everyone out.
+ * several; a restart signs everyone out. A sign-in in progress survives
+ * both when the replicas share OMEGA_UI_LOGIN_SECRET.
  */
 
-import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import type { AuthConfig } from "./config";
@@ -68,20 +75,24 @@ function prune<T extends { expiresAt: number }>(m: Map<string, T>, max: number) 
 }
 
 // A pending login travels in the login cookie, sealed with a key only
-// this process holds, so nobody can push out other people's logins by
-// starting many of their own.
-function seal(login: PendingLogin): string {
+// the UI holds, so nobody can push out other people's logins by
+// starting many of their own. OMEGA_UI_LOGIN_SECRET shares the key
+// between replicas; without it each process makes its own.
+const loginKey = (cfg: AuthConfig) =>
+  cfg.loginSecret ? createHash("sha256").update(cfg.loginSecret).digest() : store.loginKey;
+
+function seal(cfg: AuthConfig, login: PendingLogin): string {
   const iv = randomBytes(12);
-  const c = createCipheriv("aes-256-gcm", store.loginKey, iv);
+  const c = createCipheriv("aes-256-gcm", loginKey(cfg), iv);
   const sealed = Buffer.concat([c.update(JSON.stringify(login)), c.final()]);
   return Buffer.concat([iv, c.getAuthTag(), sealed]).toString("base64url");
 }
 
-function unseal(cookie: string): PendingLogin | undefined {
+function unseal(cfg: AuthConfig, cookie: string): PendingLogin | undefined {
   try {
     const b = Buffer.from(cookie, "base64url");
     if (b.length <= 28) return undefined;
-    const d = createDecipheriv("aes-256-gcm", store.loginKey, b.subarray(0, 12), {
+    const d = createDecipheriv("aes-256-gcm", loginKey(cfg), b.subarray(0, 12), {
       authTagLength: 16,
     });
     d.setAuthTag(b.subarray(12, 28));
@@ -93,7 +104,10 @@ function unseal(cookie: string): PendingLogin | undefined {
 }
 
 /** startLogin returns a new pending login and the login cookie that carries it. */
-export function startLogin(returnTo: string): { login: PendingLogin; cookie: string } {
+export function startLogin(
+  cfg: AuthConfig,
+  returnTo: string,
+): { login: PendingLogin; cookie: string } {
   const login = {
     state: random(),
     nonce: random(),
@@ -101,12 +115,16 @@ export function startLogin(returnTo: string): { login: PendingLogin; cookie: str
     returnTo,
     expiresAt: Date.now() + LOGIN_TTL_MS,
   };
-  return { login, cookie: seal(login) };
+  return { login, cookie: seal(cfg, login) };
 }
 
 /** takeLogin returns the pending login in cookie if it is for state and has not expired. */
-export function takeLogin(state: string, cookie: string | undefined): PendingLogin | undefined {
-  const login = state && cookie ? unseal(cookie) : undefined;
+export function takeLogin(
+  cfg: AuthConfig,
+  state: string,
+  cookie: string | undefined,
+): PendingLogin | undefined {
+  const login = state && cookie ? unseal(cfg, cookie) : undefined;
   return login && login.state === state && login.expiresAt > Date.now() ? login : undefined;
 }
 
