@@ -71,6 +71,11 @@ var (
 		Help: "Stored Cedar policies in the set the policy engine last loaded.",
 	})
 
+	UIProxyRefusalsSuppressed = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "omega_ui_proxy_refusals_suppressed_total",
+		Help: "Refused Omega-User-Token requests left off the audit chain because the caller already had one audited in the last minute.",
+	})
+
 	DomainsCreated = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "omega_domains_created_total",
 		Help: "Total domains created via the admin API.",
@@ -81,7 +86,7 @@ func init() {
 	Registry.MustRegister(
 		BuildInfo, HTTPRequests, HTTPLatency,
 		SVIDIssued, Decisions, DecisionLatency, AuditAppended, DomainsCreated, DomainsUnprojected,
-		StoredPolicySetLoadFailures, StoredPolicies,
+		StoredPolicySetLoadFailures, StoredPolicies, UIProxyRefusalsSuppressed,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)

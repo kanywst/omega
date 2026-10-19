@@ -71,6 +71,7 @@ type Server struct {
 	bundleSequence          identity.BundleSequencer
 	requireAuth             bool
 	uiProxy                 UIProxyConfig
+	refusals                *refusalLimiter
 	entityStoreSearch       bool
 }
 
@@ -95,7 +96,7 @@ func (s *Server) WithEntityStoreSearch(v bool) *Server {
 // upstream-SPIFFE Source can be wired in later without touching the
 // handlers, which only ever call the embedded Authority method set.
 func NewServer(store *storage.Store, ca identity.Authority, pdp *policy.Engine) *Server {
-	return &Server{store: store, ca: identity.AsSource(ca), policy: pdp, dpopReplay: newDPoPReplayCache()}
+	return &Server{store: store, ca: identity.AsSource(ca), policy: pdp, dpopReplay: newDPoPReplayCache(), refusals: newRefusalLimiter(refusalAuditWindow)}
 }
 
 // WithFederation wires a federation registry into the server. Passing

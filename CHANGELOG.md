@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- **A refused `Omega-User-Token` is audited at most once a minute per caller.** A caller looping bad requests no longer adds a `ui_proxy.delegate` row per request; the next row counts the refusals in between as `suppressed`, and `omega_ui_proxy_refusals_suppressed_total` counts them as well.
+
 ## [0.14.0] - 2026-10-20
 
 Lets people sign in to the UI and manage stored policies as themselves.

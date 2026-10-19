@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
+	"github.com/kanywst/omega/internal/server/metrics"
 	"github.com/kanywst/omega/internal/server/storage"
 )
 
@@ -72,13 +74,23 @@ func withVia(ctx context.Context, payload map[string]any) map[string]any {
 // error and returns "" unless proxy is a --ui-proxy, the route accepts
 // a user token, and the token is a valid user token. A refusal is
 // audited with the proxy as actor when the leader serves the request;
-// a follower serving a read only logs it.
+// a follower serving a read only logs it. Each caller gets at most one
+// refusal row per refusalAuditWindow; the next row counts the refusals
+// in between as "suppressed".
 func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, delegable bool) string {
 	refuse := func(status int, err error) string {
-		s.audit(r.Context(), storage.AuditEvent{
-			Kind: "ui_proxy.delegate", Actor: proxy, Decision: "deny",
-			Payload: mustJSON(map[string]string{"route": r.Pattern, "reason": err.Error()}),
-		})
+		if ok, suppressed := s.refusals.allow(proxy, time.Now()); ok {
+			payload := map[string]any{"route": r.Pattern, "reason": err.Error()}
+			if suppressed > 0 {
+				payload["suppressed"] = suppressed
+			}
+			s.audit(r.Context(), storage.AuditEvent{
+				Kind: "ui_proxy.delegate", Actor: proxy, Decision: "deny",
+				Payload: mustJSON(payload),
+			})
+		} else {
+			metrics.UIProxyRefusalsSuppressed.Inc()
+		}
 		writeErr(w, status, err)
 		return ""
 	}
@@ -135,4 +147,57 @@ func (s *Server) verifyUserToken(token string) (string, error) {
 		return "", errors.New("token carries a delegation chain")
 	}
 	return id.String(), nil
+}
+
+// refusalAuditWindow is how often one caller's refused user tokens
+// reach the audit chain, so a caller looping bad requests cannot grow
+// the chain at will.
+const refusalAuditWindow = time.Minute
+
+// refusalMaxCallers bounds the callers refusalLimiter tracks. Past it a
+// refusal is audited rather than dropped.
+const refusalMaxCallers = 10_000
+
+type refusalState struct {
+	until      time.Time
+	suppressed int
+}
+
+// refusalLimiter lets one refusal per caller per window through to the
+// audit chain and counts the rest.
+type refusalLimiter struct {
+	mu      sync.Mutex
+	window  time.Duration
+	callers map[string]*refusalState
+}
+
+func newRefusalLimiter(window time.Duration) *refusalLimiter {
+	return &refusalLimiter{window: window, callers: map[string]*refusalState{}}
+}
+
+// allow reports whether caller's refusal at now is audited, and how many
+// of its refusals were suppressed since its last audited one.
+func (l *refusalLimiter) allow(caller string, now time.Time) (bool, int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	st, ok := l.callers[caller]
+	if ok && now.Before(st.until) {
+		st.suppressed++
+		return false, 0
+	}
+	suppressed := 0
+	if ok {
+		suppressed = st.suppressed
+	} else if len(l.callers) >= refusalMaxCallers {
+		for k, v := range l.callers {
+			if !now.Before(v.until) && v.suppressed == 0 {
+				delete(l.callers, k)
+			}
+		}
+		if len(l.callers) >= refusalMaxCallers {
+			return true, 0
+		}
+	}
+	l.callers[caller] = &refusalState{until: now.Add(l.window)}
+	return true, suppressed
 }

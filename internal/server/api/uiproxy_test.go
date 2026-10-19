@@ -3,6 +3,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -215,5 +216,49 @@ func TestUserTokenWithoutUIProxies(t *testing.T) {
 	tok := userToken(t, env, humanAdmin, []string{api.DefaultUIProxyAudience}, 10*time.Minute, map[string]any{"act": oidcAct})
 	if code, _, _ := callH(t, env.as(t, uiProxy), "GET", env.srv.URL+"/v1/policies", nil, map[string]string{api.UserTokenHeader: tok}); code != http.StatusForbidden {
 		t.Fatalf("no --ui-proxy configured: %d", code)
+	}
+}
+
+func TestUIProxyRefusalAuditWindow(t *testing.T) {
+	t0 := time.Unix(1_000_000, 0)
+	type use = struct {
+		Caller string
+		At     time.Time
+	}
+	audited, suppressed := api.RefusalAllowForTest(time.Minute, []use{
+		{"a", t0},
+		{"a", t0.Add(10 * time.Second)},
+		{"b", t0.Add(20 * time.Second)},
+		{"a", t0.Add(30 * time.Second)},
+		{"a", t0.Add(time.Minute)},
+		{"a", t0.Add(2 * time.Minute)},
+	})
+	wantAudited := []bool{true, false, true, false, true, true}
+	wantSuppressed := []int{0, 0, 0, 0, 2, 0}
+	if !slices.Equal(audited, wantAudited) || !slices.Equal(suppressed, wantSuppressed) {
+		t.Fatalf("audited %v suppressed %v, want %v %v", audited, suppressed, wantAudited, wantSuppressed)
+	}
+}
+
+func TestUIProxyRefusalsAreAuditedOncePerWindow(t *testing.T) {
+	env := newUIProxyEnv(t)
+	tok := personToken(t, env, humanAdmin)
+	for range 3 {
+		if code, _, _ := callH(t, env.as(t, bob), "GET", env.srv.URL+"/v1/policies", nil, map[string]string{api.UserTokenHeader: tok}); code != http.StatusForbidden {
+			t.Fatalf("non-proxy caller: %d", code)
+		}
+	}
+	events, err := env.store.ListAudit(t.Context(), 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := 0
+	for _, ev := range events {
+		if ev.Kind == "ui_proxy.delegate" && ev.Actor == bob {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("got %d ui_proxy.delegate rows for three refusals, want 1", rows)
 	}
 }

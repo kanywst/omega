@@ -81,3 +81,18 @@ func (s *Server) FailAuditAfterSyncForTest(kind string) {
 func (s *Server) FailSCIMForTest() {
 	s.scimFault = func(storage.AuditEvent) error { return errors.New("injected audit failure") }
 }
+
+// RefusalAllowForTest drives a fresh refusal limiter with the given
+// window through a sequence of (caller, time) refusals.
+func RefusalAllowForTest(window time.Duration, refusals []struct {
+	Caller string
+	At     time.Time
+}) (audited []bool, suppressed []int) {
+	l := newRefusalLimiter(window)
+	for _, r := range refusals {
+		ok, n := l.allow(r.Caller, r.At)
+		audited = append(audited, ok)
+		suppressed = append(suppressed, n)
+	}
+	return audited, suppressed
+}
