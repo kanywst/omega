@@ -9,7 +9,7 @@ require (
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/cert-manager/cert-manager v1.21.2
 	github.com/cert-manager/issuer-lib v0.12.1
-	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/cobra v1.10.2
