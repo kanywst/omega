@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"sync"
@@ -84,12 +85,15 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, 
 			if suppressed > 0 {
 				payload["suppressed"] = suppressed
 			}
-			s.audit(r.Context(), storage.AuditEvent{
+			if s.appendAudit(r.Context(), storage.AuditEvent{
 				Kind: "ui_proxy.delegate", Actor: proxy, Decision: "deny",
 				Payload: mustJSON(payload),
-			})
+			}) != nil {
+				s.refusals.unrecorded(proxy, suppressed+1)
+			}
 		} else {
 			metrics.UIProxyRefusalsSuppressed.Inc()
+			slog.Debug("ui proxy refusal suppressed", "caller", proxy, "route", r.Pattern, "reason", err.Error())
 		}
 		writeErr(w, status, err)
 		return ""
@@ -155,7 +159,7 @@ func (s *Server) verifyUserToken(token string) (string, error) {
 const refusalAuditWindow = time.Minute
 
 // refusalMaxCallers bounds the callers refusalLimiter tracks. Past it a
-// refusal is audited rather than dropped.
+// refusal is audited rather than suppressed.
 const refusalMaxCallers = 10_000
 
 type refusalState struct {
@@ -169,6 +173,7 @@ type refusalLimiter struct {
 	mu      sync.Mutex
 	window  time.Duration
 	callers map[string]*refusalState
+	pruned  time.Time
 }
 
 func newRefusalLimiter(window time.Duration) *refusalLimiter {
@@ -189,9 +194,15 @@ func (l *refusalLimiter) allow(caller string, now time.Time) (bool, int) {
 	if ok {
 		suppressed = st.suppressed
 	} else if len(l.callers) >= refusalMaxCallers {
-		for k, v := range l.callers {
-			if !now.Before(v.until) && v.suppressed == 0 {
-				delete(l.callers, k)
+		// At most one sweep a window, so a full table does not cost every
+		// new caller a scan. An entry still holding a count stays until
+		// its caller's next refusal records it.
+		if now.Sub(l.pruned) >= l.window {
+			l.pruned = now
+			for k, v := range l.callers {
+				if !now.Before(v.until) && v.suppressed == 0 {
+					delete(l.callers, k)
+				}
 			}
 		}
 		if len(l.callers) >= refusalMaxCallers {
@@ -200,4 +211,15 @@ func (l *refusalLimiter) allow(caller string, now time.Time) (bool, int) {
 	}
 	l.callers[caller] = &refusalState{until: now.Add(l.window)}
 	return true, suppressed
+}
+
+// unrecorded gives back the slot allow handed out when the audit row
+// could not be written, keeping its n refusals for the next row.
+func (l *refusalLimiter) unrecorded(caller string, n int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if st, ok := l.callers[caller]; ok {
+		st.until = time.Time{}
+		st.suppressed += n
+	}
 }

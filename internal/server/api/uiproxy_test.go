@@ -240,6 +240,12 @@ func TestUIProxyRefusalAuditWindow(t *testing.T) {
 	}
 }
 
+func TestUIProxyRefusalKeptWhenItsRowIsNotWritten(t *testing.T) {
+	if ok, suppressed := api.RefusalUnrecordedForTest(); !ok || suppressed != 1 {
+		t.Fatalf("next refusal after a failed write: audited %v suppressed %d, want true 1", ok, suppressed)
+	}
+}
+
 func TestUIProxyRefusalsAreAuditedOncePerWindow(t *testing.T) {
 	env := newUIProxyEnv(t)
 	tok := personToken(t, env, humanAdmin)

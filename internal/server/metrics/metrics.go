@@ -73,7 +73,7 @@ var (
 
 	UIProxyRefusalsSuppressed = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "omega_ui_proxy_refusals_suppressed_total",
-		Help: "Refused Omega-User-Token requests left off the audit chain because the caller already had one audited in the last minute.",
+		Help: "Refused Omega-User-Token requests left off the audit chain, within a minute of the caller's last recorded refusal.",
 	})
 
 	DomainsCreated = prometheus.NewCounter(prometheus.CounterOpts{
