@@ -25,6 +25,8 @@ See [`values.yaml`](values.yaml) for the full schema. Notable knobs:
 | `server.domainRootAdmins`                 | `[]`                    | `--domain-root-admin` SPIFFE IDs                                                                                      |
 | `server.decisionRecorders`                | `[]`                    | Node agents that may read the policy bundle and record local decisions                                                |
 | `server.scimProviders`                    | `[]`                    | SCIM providers: `name`, `domain`, `tokenSecret` (Secret with a `token` key), optional `template`                      |
+| `server.uiProxy.proxies` | `[]` | `--ui-proxy` SPIFFE IDs of a web UI that acts for the person signed in to it ([ADR 0023](../../docs/adr/0023-ui-proxy-acts-for-signed-in-people.md)); also needs `--require-auth` and `--oidc-idp` in `server.extraArgs` |
+| `server.uiProxy.audience` / `.maxTokenTTL` | `` | `--ui-proxy-audience` and `--ui-proxy-max-token-ttl`; unset keeps `omega-ui` and `1h` |
 | `server.ca.backend` | `disk` | `--ca-backend`: `disk` (evaluation), `aws-pca`, `gcp-cas` or `azure-keyvault`, each configured by its block below; other backends through `server.extraArgs` |
 | `server.ca.gcpCas.pool`                   | `""`                    | CAS CA pool `projects/<p>/locations/<l>/caPools/<pool>`; required for `gcp-cas`                                       |
 | `server.ca.gcpCas.endpoint` / `.issuingCA` / `.certificateTemplate` | `""` | API endpoint override (https), a CA id that pins issuance inside the pool, and a certificate template |

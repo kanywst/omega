@@ -38,6 +38,15 @@ server:
   #       domain: people
   #       tokenSecret: omega-scim-corp
   scimProviders: []
+  # A web UI trusted to act for the person signed in to it on the policy
+  # API (ADR 0023). proxies are the UI's SPIFFE IDs (--ui-proxy); the
+  # server also needs --require-auth and --oidc-idp, through extraArgs.
+  # audience and maxTokenTTL override --ui-proxy-audience (omega-ui) and
+  # --ui-proxy-max-token-ttl (1h) when set.
+  uiProxy:
+    proxies: []
+    audience: ""
+    maxTokenTTL: ""
   extraArgs: []
   # Extra labels on the server pods, e.g. azure.workload.identity/use:
   # "true" for Azure workload identity.
