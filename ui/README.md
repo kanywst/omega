@@ -20,9 +20,10 @@ pnpm dev
 # -> http://localhost:3000
 ```
 
-The UI talks to the control plane via the Next rewrite at
+The UI talks to the control plane through its server-side proxy at
 `/api/omega/*` → `OMEGA_API` (default `http://127.0.0.1:8080`). Set
-`OMEGA_API` in `ui/.env.local` to point elsewhere.
+`OMEGA_API` in `ui/.env.local` to point elsewhere. The proxy forwards
+only the calls the pages make and answers `404` for any other path.
 
 ## Stack
 

@@ -34,6 +34,32 @@ const RESPONSE_ONLY = new Set(["set-cookie"]);
 
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+// The calls the UI's pages make, and nothing else: the proxy presents
+// the UI's own X.509-SVID, so forwarding any path would let anyone who
+// reaches the UI call any route as the UI. "*" is one policy id. A
+// signedIn route is only forwarded with a person's token.
+const ROUTES: { methods: string[]; path: string[]; signedIn?: true }[] = [
+  { methods: ["GET", "HEAD"], path: ["healthz"] },
+  { methods: ["GET", "HEAD"], path: ["v1", "domains"] },
+  { methods: ["GET", "HEAD"], path: ["v1", "audit"] },
+  { methods: ["GET", "HEAD"], path: ["v1", "audit", "verify"] },
+  { methods: ["GET", "HEAD"], path: ["v1", "policies"] },
+  { methods: ["POST"], path: ["v1", "policies"], signedIn: true },
+  { methods: ["POST"], path: ["v1", "policies", "validate"] },
+  { methods: ["GET", "HEAD"], path: ["v1", "policies", "*"] },
+  { methods: ["PUT", "DELETE"], path: ["v1", "policies", "*"], signedIn: true },
+];
+
+const DOT_SEGMENTS = new Set(["", ".", ".."]);
+
+const route = (method: string, path: string[]) =>
+  ROUTES.find(
+    (r) =>
+      r.methods.includes(method) &&
+      r.path.length === path.length &&
+      r.path.every((p, i) => (p === "*" ? !DOT_SEGMENTS.has(path[i]) : p === path[i])),
+  );
+
 // The routes the control plane lets a --ui-proxy call on a person's
 // behalf. Every other route is called as the UI itself: the control
 // plane refuses a person's token there.
@@ -42,15 +68,18 @@ const actsForPerson = (path: string[]) => path[0] === "v1" && path[1] === "polic
 const refuse = (status: number, error: string) =>
   Response.json({ error }, { status, headers: { "cache-control": "no-store" } });
 
-// proxy forwards /api/omega/<path> to the control plane. With sign-in
+// proxy forwards the routes above to the control plane. With sign-in
 // configured it presents the signed-in person's JWT-SVID in
 // Omega-User-Token next to the UI's own X.509-SVID on the policy API,
 // and refuses a state-changing request that is cross-origin or, from a
-// signed-in browser, lacks the session's CSRF token. A browser whose
-// session has ended gets 401 rather than being served as the UI itself.
+// signed-in browser, lacks the session's CSRF token. A policy write
+// without a live session gets 401 rather than being sent as the UI.
 async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
   const headers = strip(req.headers, REQUEST_ONLY);
+
+  const r = route(req.method, path);
+  if (!r) return refuse(404, "this UI does not forward that request");
 
   const auth = authState();
   if (auth.kind === "error") {
@@ -69,6 +98,9 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
         headers.set(USER_TOKEN_HEADER, s.userToken);
       }
     }
+  }
+  if (r.signedIn && !headers.has(USER_TOKEN_HEADER)) {
+    return refuse(401, "sign in to change policies");
   }
 
   const target = `/${path.map(encodeURIComponent).join("/")}${req.nextUrl.search}`;

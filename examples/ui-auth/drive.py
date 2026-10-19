@@ -66,9 +66,14 @@ st, _, b = request("GET", f"{UI}/api/auth/session")
 s = jbody(b)
 check(st == 200 and s["configured"] and "user" not in s, "sign-in is configured and nobody is signed in")
 st, _, b = request("POST", f"{UI}/api/omega/v1/policies", {"id": "demo", "text": POLICY}, {"Origin": ORIGIN})
-check(st == 403, f"without sign-in the UI's own SVID may not write policy ({st})")
+check(st == 401, f"without sign-in the UI does not write policy ({st})")
 st, _, _ = request("POST", f"{UI}/api/omega/v1/policies", {"id": "demo", "text": POLICY}, {"Origin": "https://evil.example"})
 check(st == 403, "a cross-origin write is refused")
+# The UI forwards only the calls its pages make, never other routes as itself.
+st, _, _ = request("POST", f"{UI}/api/omega/v1/svid", {"spiffe_id": UI_ID, "csr": "x"}, {"Origin": ORIGIN})
+check(st == 404, f"the UI does not forward SVID issuance ({st})")
+st, _, _ = request("GET", f"{UI}/api/omega/v1/policies/%2e%2e/svid")
+check(st == 404, f"a dot segment does not reach another route ({st})")
 
 # Sign in: UI -> IdP -> UI callback.
 st, h, _ = request("GET", f"{UI}/api/auth/login?return_to=/policies")
@@ -139,8 +144,6 @@ rows = {e["kind"]: e for e in jbody(b)["items"] if e["kind"].startswith("policy.
 for kind in ("policy.create", "policy.update", "policy.delete"):
     ev = rows.get(kind)
     check(ev is not None and ev.get("actor") == ALICE and ev["payload"].get("via") == UI_ID, f"{kind} is audited as alice via the UI")
-denied = [e for e in jbody(b)["items"] if e["kind"] == "policy.create" and e["decision"] == "deny"]
-check(any(e.get("actor") == UI_ID for e in denied), "the UI's own refused write is audited with the UI as actor")
 
 # Sign out ends the session; the cookie stops working.
 st, _, _ = request("POST", f"{UI}/api/auth/logout", None, write, session_cookie)
