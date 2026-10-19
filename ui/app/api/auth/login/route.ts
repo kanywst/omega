@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
       { status: 404 },
     );
   }
-  const login = startLogin(safeReturnTo(req.nextUrl.searchParams.get("return_to")));
+  const { login, cookie } = startLogin(safeReturnTo(req.nextUrl.searchParams.get("return_to")));
   let location: string;
   try {
     location = await authorizeURL(auth.config, login);
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
     );
   }
   const res = NextResponse.redirect(location, 302);
-  res.cookies.set(LOGIN_COOKIE, login.state, cookieOptions(600));
+  res.cookies.set(LOGIN_COOKIE, cookie, cookieOptions(600));
   res.headers.set("cache-control", "no-store");
   return res;
 }

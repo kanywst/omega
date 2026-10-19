@@ -9,7 +9,7 @@
  * several; a restart signs everyone out.
  */
 
-import { timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import type { AuthConfig } from "./config";
@@ -26,7 +26,6 @@ export const USER_TOKEN_HEADER = "omega-user-token";
 const RENEW_BEFORE_MS = 60_000;
 const LOGIN_TTL_MS = 10 * 60_000;
 const MAX_SESSIONS = 10_000;
-const MAX_LOGINS = 1_000;
 
 export type Session = {
   id: string;
@@ -40,19 +39,22 @@ export type Session = {
   renewing?: Promise<Session | undefined>;
 };
 
-export type PendingLogin = {
-  state: string;
-  nonce: string;
-  verifier: string;
-  returnTo: string;
-  expiresAt: number;
-};
+const PendingLogin = z.object({
+  state: z.string(),
+  nonce: z.string(),
+  verifier: z.string(),
+  returnTo: z.string(),
+  expiresAt: z.number(),
+});
+export type PendingLogin = z.infer<typeof PendingLogin>;
 
-type Store = { sessions: Map<string, Session>; logins: Map<string, PendingLogin> };
+type Store = { sessions: Map<string, Session>; loginKey: Buffer };
 
 // On globalThis so every route handler bundle shares one store.
 const g = globalThis as typeof globalThis & { __omegaAuthStore?: Store };
-if (!g.__omegaAuthStore) g.__omegaAuthStore = { sessions: new Map(), logins: new Map() };
+if (!g.__omegaAuthStore) {
+  g.__omegaAuthStore = { sessions: new Map(), loginKey: randomBytes(32) };
+}
 const store: Store = g.__omegaAuthStore;
 
 function prune<T extends { expiresAt: number }>(m: Map<string, T>, max: number) {
@@ -65,8 +67,30 @@ function prune<T extends { expiresAt: number }>(m: Map<string, T>, max: number) 
   }
 }
 
-export function startLogin(returnTo: string): PendingLogin {
-  prune(store.logins, MAX_LOGINS);
+// A pending login travels in the login cookie, sealed with a key only
+// this process holds, rather than in a shared table that anyone could
+// fill to push out other people's logins.
+function seal(login: PendingLogin): string {
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", store.loginKey, iv);
+  const sealed = Buffer.concat([c.update(JSON.stringify(login)), c.final()]);
+  return Buffer.concat([iv, c.getAuthTag(), sealed]).toString("base64url");
+}
+
+function unseal(cookie: string): PendingLogin | undefined {
+  try {
+    const b = Buffer.from(cookie, "base64url");
+    const d = createDecipheriv("aes-256-gcm", store.loginKey, b.subarray(0, 12));
+    d.setAuthTag(b.subarray(12, 28));
+    const json = Buffer.concat([d.update(b.subarray(28)), d.final()]).toString();
+    return PendingLogin.parse(JSON.parse(json));
+  } catch {
+    return undefined;
+  }
+}
+
+/** startLogin returns a new pending login and the login cookie that carries it. */
+export function startLogin(returnTo: string): { login: PendingLogin; cookie: string } {
   const login = {
     state: random(),
     nonce: random(),
@@ -74,15 +98,13 @@ export function startLogin(returnTo: string): PendingLogin {
     returnTo,
     expiresAt: Date.now() + LOGIN_TTL_MS,
   };
-  store.logins.set(login.state, login);
-  return login;
+  return { login, cookie: seal(login) };
 }
 
-/** takeLogin returns the pending login for state once, if it has not expired. */
-export function takeLogin(state: string): PendingLogin | undefined {
-  const login = store.logins.get(state);
-  store.logins.delete(state);
-  return login && login.expiresAt > Date.now() ? login : undefined;
+/** takeLogin returns the pending login in cookie if it is for state and has not expired. */
+export function takeLogin(state: string, cookie: string | undefined): PendingLogin | undefined {
+  const login = state && cookie ? unseal(cookie) : undefined;
+  return login && login.state === state && login.expiresAt > Date.now() ? login : undefined;
 }
 
 const Exchange = z.object({

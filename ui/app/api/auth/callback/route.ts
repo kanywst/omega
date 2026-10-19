@@ -26,8 +26,7 @@ export async function GET(req: NextRequest) {
   const cfg = auth.config;
   const q = req.nextUrl.searchParams;
   const state = q.get("state") ?? "";
-  const bound = req.cookies.get(LOGIN_COOKIE)?.value;
-  const login = state && bound === state ? takeLogin(state) : undefined;
+  const login = takeLogin(state, req.cookies.get(LOGIN_COOKIE)?.value);
 
   const done = (path: string, error?: string) => {
     const url = new URL(path, cfg.uiUrl);
