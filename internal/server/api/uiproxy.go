@@ -72,7 +72,7 @@ func withVia(ctx context.Context, payload map[string]any) map[string]any {
 // error and returns "" unless proxy is a --ui-proxy, the route accepts
 // a user token, and the token is a valid user token. A refusal is
 // audited with the proxy as actor when the leader serves the request;
-// a follower serving a read can only log it.
+// a follower serving a read only logs it.
 func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, delegable bool) string {
 	refuse := func(status int, err error) string {
 		s.audit(r.Context(), storage.AuditEvent{
