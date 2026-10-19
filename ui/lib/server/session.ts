@@ -80,7 +80,10 @@ function seal(login: PendingLogin): string {
 function unseal(cookie: string): PendingLogin | undefined {
   try {
     const b = Buffer.from(cookie, "base64url");
-    const d = createDecipheriv("aes-256-gcm", store.loginKey, b.subarray(0, 12));
+    if (b.length <= 28) return undefined;
+    const d = createDecipheriv("aes-256-gcm", store.loginKey, b.subarray(0, 12), {
+      authTagLength: 16,
+    });
     d.setAuthTag(b.subarray(12, 28));
     const json = Buffer.concat([d.update(b.subarray(28)), d.final()]).toString();
     return PendingLogin.parse(JSON.parse(json));
