@@ -12,7 +12,7 @@ release as features are ready rather than on a fixed cadence; see
 
 ## Now (next release, post-0.13.0)
 
-Nothing is committed yet. A read-only Policies page in the UI shipped in 0.13.0; writing policies from the UI waits on the UI having an authenticated identity of its own, since its proxy forwards requests without one.
+Nothing is committed yet.
 
 ## Next (3-6 months)
 

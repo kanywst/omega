@@ -15,6 +15,8 @@ const button = cva(
           "text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-bg-muted)]",
         outline:
           "border border-[var(--color-line)] text-[var(--color-fg)] hover:border-[var(--color-line-strong)] hover:bg-[var(--color-bg-muted)]",
+        danger:
+          "border border-[color-mix(in_oklch,var(--color-err)_40%,var(--color-line))] text-[var(--color-err)] hover:border-[var(--color-err)] hover:bg-[color-mix(in_oklch,var(--color-err)_10%,transparent)]",
       },
       size: {
         default: "h-8 px-3 text-[13px] rounded-[6px]",

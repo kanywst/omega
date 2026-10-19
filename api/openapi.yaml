@@ -1339,6 +1339,8 @@ paths:
         Files come first (`source: file`, id = file name), then stored
         policies (`source: api`) by id. Under `--require-auth` the
         caller must be authenticated. Served by followers.
+      parameters:
+        - $ref: "#/components/parameters/OmegaUserToken"
       responses:
         "200":
           description: Policy list.
@@ -1357,6 +1359,8 @@ paths:
         policy is rejected with 400 and never stored. The change and its
         `policy.create` audit row commit in one transaction. Every Cedar
         policy id the text defines is prefixed with `api/<id>::`.
+      parameters:
+        - $ref: "#/components/parameters/OmegaUserToken"
       requestBody:
         required: true
         content:
@@ -1392,6 +1396,8 @@ paths:
         Runs the same checks as create and update and changes nothing.
         `id` defaults to `draft`. Under `--require-auth` the caller must
         be authenticated. Served by followers.
+      parameters:
+        - $ref: "#/components/parameters/OmegaUserToken"
       requestBody:
         required: true
         content:
@@ -1416,6 +1422,7 @@ paths:
         description: A stored policy id, or the file name of a --policy-dir file.
         schema:
           type: string
+      - $ref: "#/components/parameters/OmegaUserToken"
     get:
       tags: [policies]
       operationId: getPolicy
@@ -1671,6 +1678,21 @@ components:
       description: The token in the provider's --scim-idp token-file.
 
   parameters:
+    OmegaUserToken:
+      name: Omega-User-Token
+      in: header
+      required: false
+      schema:
+        type: string
+      description: |
+        The JWT-SVID of the person a `--ui-proxy` acts for, from
+        `POST /v1/oidc/exchange` with the `--ui-proxy-audience`. Only a
+        caller whose mTLS X.509-SVID is listed with `--ui-proxy` may
+        send it, and only on the policy routes; the request is then
+        authorized and audited as the token's subject, with the proxy
+        recorded as `via` in the audit payload. Refused with 403 from
+        any other caller or on any other route, and with 401 when the
+        token is not valid. See ADR 0023.
     AuthzenRequestID:
       name: X-Request-ID
       in: header

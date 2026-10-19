@@ -1,7 +1,8 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Mono } from "@/components/data/code";
 import { EmptyState } from "@/components/data/empty-state";
@@ -10,7 +11,9 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { OmegaError, omega, type Policy } from "@/lib/omega";
+import { useSession } from "@/lib/session";
 import { PolicyError, retryPolicyRead } from "./policy-error";
+import { CedarTextarea, ErrorPanel, WriteAccess, writeMessage } from "./policy-write";
 
 export default function PoliciesPage() {
   const q = useQuery({
@@ -18,6 +21,8 @@ export default function PoliciesPage() {
     queryFn: omega.listPolicies,
     retry: retryPolicyRead,
   });
+  const { canWrite } = useSession();
+  const [creating, setCreating] = useState(false);
 
   return (
     <>
@@ -25,20 +30,30 @@ export default function PoliciesPage() {
         kicker="Authorization"
         title="Policies"
         description="The Cedar policies the engine evaluates: --policy-dir files and policies stored through the API."
-        action={<StatusPill tone="neutral">read-only</StatusPill>}
+        action={
+          canWrite ? (
+            <Button size="sm" onClick={() => setCreating(true)} disabled={creating}>
+              New policy
+            </Button>
+          ) : (
+            <StatusPill tone="neutral">read-only</StatusPill>
+          )
+        }
       />
 
-      <p className="mb-6 text-[13px] text-[var(--color-fg-muted)]">
-        This UI's proxy does not authenticate, so it never changes policy. Use{" "}
-        <Mono>omega policy apply</Mono> and <Mono>omega policy delete</Mono>.
-      </p>
+      <WriteAccess />
+      {canWrite && creating && <CreatePanel onCancel={() => setCreating(false)} />}
 
       {q.isLoading && <p className="text-[13px] text-[var(--color-fg-muted)]">Loading…</p>}
       {q.error && <PolicyError error={q.error} />}
       {q.data && q.data.length === 0 && (
         <EmptyState
           title="No policies yet."
-          hint="Add *.cedar files to --policy-dir, or store one through the API."
+          hint={
+            canWrite
+              ? "Create one with New policy, or add *.cedar files to --policy-dir."
+              : "Add *.cedar files to --policy-dir, or store one through the API."
+          }
           command={`omega policy apply -f block-media-web.cedar \\
   --server https://omega:8080 --server-ca ca.pem \\
   --client-cert root.pem --client-key root.key`}
@@ -87,6 +102,64 @@ function PolicyRow({ policy: p }: { policy: Policy }) {
   );
 }
 
+// CreatePanel stores a new policy as the signed-in person and opens it.
+function CreatePanel({ onCancel }: { onCancel: () => void }) {
+  const [id, setId] = useState("");
+  const [text, setText] = useState("");
+  const router = useRouter();
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: () => omega.createPolicy(id.trim(), text),
+    onSuccess: async (p) => {
+      await qc.invalidateQueries({ queryKey: ["policies"] });
+      router.push(`/policies/${encodeURIComponent(p.id)}`);
+    },
+  });
+  const ready = id.trim() !== "" && text.trim() !== "" && !m.isPending;
+  const submit = () => ready && m.mutate();
+
+  return (
+    <section className="mb-8 rounded-[6px] border border-[var(--color-line)] p-4">
+      <h2 className="mb-3 font-medium text-[14px] text-[var(--color-fg)]">New policy</h2>
+      <label className="mb-3 block">
+        <span className="mb-1.5 block font-mono text-[10.5px] text-[var(--color-fg-subtle)] uppercase tracking-[0.06em]">
+          Id
+        </span>
+        <input
+          value={id}
+          onChange={(e) => setId(e.target.value)}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="block-media-web"
+          className="block h-8 w-full max-w-sm rounded-[6px] border border-[var(--color-line)] bg-[var(--color-bg-raised)] px-2.5 font-mono text-[12.5px] text-[var(--color-fg)] outline-none placeholder:text-[var(--color-fg-subtle)] focus:border-[var(--color-line-strong)]"
+        />
+        <span className="mt-1 block text-[12px] text-[var(--color-fg-subtle)]">
+          1-63 lowercase letters, digits, - or _. Its Cedar policy ids become{" "}
+          <Mono className="text-[12px] text-[var(--color-fg-subtle)]">
+            api/{id.trim() || "<id>"}::…
+          </Mono>
+        </span>
+      </label>
+      <CedarTextarea value={text} onChange={setText} onSubmit={submit} />
+      <div className="mt-3 flex items-center gap-3">
+        <Button size="sm" onClick={submit} disabled={!ready}>
+          Create
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={m.isPending}>
+          Cancel
+        </Button>
+        <Kbd>⌘↵</Kbd>
+        {m.isPending && (
+          <span className="ml-auto">
+            <StatusPill tone="neutral">saving</StatusPill>
+          </span>
+        )}
+      </div>
+      {m.error && <ErrorPanel>{writeMessage(m.error)}</ErrorPanel>}
+    </section>
+  );
+}
+
 function ValidatePanel() {
   const [text, setText] = useState("");
   const m = useMutation({ mutationFn: omega.validatePolicy });
@@ -99,25 +172,7 @@ function ValidatePanel() {
       <p className="mb-3 text-[13px] text-[var(--color-fg-muted)]">
         Runs the checks a create runs and stores nothing.
       </p>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            submit();
-          }
-        }}
-        spellCheck={false}
-        rows={8}
-        aria-label="Cedar policy text"
-        placeholder={`forbid (
-  principal == Spiffe::"spiffe://omega.local/media/web",
-  action == Action::"read",
-  resource
-);`}
-        className="block w-full resize-y rounded-[6px] border border-[var(--color-line)] bg-[var(--color-bg-raised)] p-3 font-mono text-[12.5px] text-[var(--color-fg)] leading-relaxed outline-none placeholder:text-[var(--color-fg-subtle)] focus:border-[var(--color-line-strong)]"
-      />
+      <CedarTextarea value={text} onChange={setText} onSubmit={submit} />
       <div className="mt-3 flex items-center gap-3">
         <Button size="sm" variant="outline" onClick={submit} disabled={!text.trim() || m.isPending}>
           Validate
@@ -164,7 +219,7 @@ function validateMessage(err: Error): string {
       return err.detail || "The policy does not parse.";
     case 401:
     case 403:
-      return `${err.detail || `HTTP ${err.status}`}\nThe control plane runs with --require-auth and this UI's proxy presents no SVID.`;
+      return `${err.detail || `HTTP ${err.status}`}\nThe control plane runs with --require-auth and refused this UI's request.`;
     default:
       return err.detail || err.message;
   }

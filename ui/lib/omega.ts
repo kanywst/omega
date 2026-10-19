@@ -17,17 +17,37 @@ async function get<T>(path: string, schema: z.ZodSchema<T>): Promise<T> {
   return schema.parse(await res.json());
 }
 
-async function post<T>(path: string, body: unknown, schema: z.ZodSchema<T>): Promise<T> {
+// The signed-in session's CSRF token, sent with every state-changing
+// request. useSession sets it.
+let csrfToken = "";
+export function setCSRFToken(token: string) {
+  csrfToken = token;
+}
+
+async function send(
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<Response> {
   const res = await fetch(`${base}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    method,
+    headers: {
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(csrfToken ? { "X-Omega-CSRF": csrfToken } : {}),
+      ...headers,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new OmegaError(res.status, `POST ${path} -> ${res.status}`, await errorDetail(res));
+    throw new OmegaError(res.status, `${method} ${path} -> ${res.status}`, await errorDetail(res));
   }
-  return schema.parse(await res.json());
+  return res;
+}
+
+async function post<T>(path: string, body: unknown, schema: z.ZodSchema<T>): Promise<T> {
+  return schema.parse(await (await send("POST", path, body)).json());
 }
 
 const ErrorBody = z.object({ error: z.string() });
@@ -106,14 +126,50 @@ export const PolicyValidation = z.object({
 });
 export type PolicyValidation = z.infer<typeof PolicyValidation>;
 
+export const Session = z.object({
+  configured: z.boolean(),
+  error: z.string().optional(),
+  expired: z.boolean().optional(),
+  user: z.object({ spiffe_id: z.string(), name: z.string(), expires_at: z.string() }).optional(),
+  csrf: z.string().optional(),
+});
+export type Session = z.infer<typeof Session>;
+
+const policyPath = (id: string) => `/v1/policies/${encodeURIComponent(id)}`;
+
+export const auth = {
+  session: async () => {
+    const res = await fetch("/api/auth/session", { cache: "no-store" });
+    if (!res.ok) throw new OmegaError(res.status, "session", await errorDetail(res));
+    return Session.parse(await res.json());
+  },
+  loginUrl: (returnTo: string) => `/api/auth/login?return_to=${encodeURIComponent(returnTo)}`,
+  logout: async () => {
+    const res = await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: csrfToken ? { "X-Omega-CSRF": csrfToken } : {},
+      cache: "no-store",
+    });
+    if (!res.ok) throw new OmegaError(res.status, "logout", await errorDetail(res));
+  },
+};
+
 export const omega = {
   health: () => fetch(`${base}/healthz`, { cache: "no-store" }).then((r) => r.ok),
   listDomains: () => get("/v1/domains", DomainList).then((d) => d.items),
   listAudit: (limit = 50) => get(`/v1/audit?limit=${limit}`, AuditList).then((d) => d.items),
   verifyAudit: () => get("/v1/audit/verify", AuditVerify),
   listPolicies: () => get("/v1/policies", PolicyList).then((d) => d.items),
-  getPolicy: (id: string) => get(`/v1/policies/${encodeURIComponent(id)}`, Policy),
+  getPolicy: (id: string) => get(policyPath(id), Policy),
   validatePolicy: (text: string) => post("/v1/policies/validate", { text }, PolicyValidation),
+  createPolicy: (id: string, text: string) => post("/v1/policies", { id, text }, Policy),
+  // updatePolicy and deletePolicy send the ETag the page read, so a
+  // version someone else wrote since answers 412 instead of being lost.
+  updatePolicy: async (id: string, text: string, etag: string) =>
+    Policy.parse(await (await send("PUT", policyPath(id), { text }, { "If-Match": etag })).json()),
+  deletePolicy: async (id: string, etag: string) => {
+    await send("DELETE", policyPath(id), undefined, { "If-Match": etag });
+  },
   bundleUrl: () => `${base}/v1/bundle`,
   jwtBundleUrl: () => `${base}/v1/jwt/bundle`,
 };

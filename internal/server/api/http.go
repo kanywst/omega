@@ -70,6 +70,7 @@ type Server struct {
 	spiffeBundleRefreshHint time.Duration
 	bundleSequence          identity.BundleSequencer
 	requireAuth             bool
+	uiProxy                 UIProxyConfig
 	entityStoreSearch       bool
 }
 
@@ -188,6 +189,11 @@ func (s *Server) Handler() http.Handler {
 	gated := func(h http.HandlerFunc) http.HandlerFunc {
 		return leaderOnly(s.requireSPIFFEAuth(h))
 	}
+	// userGated is gated for the routes a --ui-proxy may call on a
+	// person's behalf (requireUserAuth).
+	userGated := func(h http.HandlerFunc) http.HandlerFunc {
+		return leaderOnly(s.requireUserAuth(h))
+	}
 	// fresh fails a policy-evaluating route closed while the projected
 	// domain tree is stale, since a forbid on a domain created since the
 	// last reload would otherwise not apply.
@@ -276,13 +282,14 @@ func (s *Server) Handler() http.Handler {
 	handle("GET /v1/policy/bundle", s.requireSPIFFEAuth(fresh(s.getPolicyBundle)))
 	// Policy reads are served by followers; the text itself is limited
 	// further (mayReadPolicyText). Writes change what every replica
-	// evaluates, so they are leader-gated and audited.
-	handle("GET /v1/policies", s.requireSPIFFEAuth(s.listPolicies))
-	handle("GET /v1/policies/{id}", s.requireSPIFFEAuth(s.getPolicy))
-	handle("POST /v1/policies", gated(s.createPolicy))
-	handle("POST /v1/policies/validate", s.requireSPIFFEAuth(s.validatePolicy))
-	handle("PUT /v1/policies/{id}", gated(s.updatePolicy))
-	handle("DELETE /v1/policies/{id}", gated(s.deletePolicy))
+	// evaluates, so they are leader-gated and audited. These are the only
+	// routes a --ui-proxy may call on a person's behalf.
+	handle("GET /v1/policies", s.requireUserAuth(s.listPolicies))
+	handle("GET /v1/policies/{id}", s.requireUserAuth(s.getPolicy))
+	handle("POST /v1/policies", userGated(s.createPolicy))
+	handle("POST /v1/policies/validate", s.requireUserAuth(s.validatePolicy))
+	handle("PUT /v1/policies/{id}", userGated(s.updatePolicy))
+	handle("DELETE /v1/policies/{id}", userGated(s.deletePolicy))
 	handle("POST /v1/audit/decisions", gated(s.recordDecisions))
 	handle("POST /v1/svid/jwt", issuingOnly(gated(s.issueJWTSVID)))
 	handle("POST /v1/token/exchange", issuingOnly(gated(fresh(s.tokenExchange))))

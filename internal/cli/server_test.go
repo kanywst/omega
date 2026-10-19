@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kanywst/omega/internal/server/federation"
+	"github.com/kanywst/omega/internal/server/identity"
 )
 
 func TestHasNonEmpty(t *testing.T) {
@@ -365,5 +366,36 @@ func TestServerCommandAzureKeyVaultFlags(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "azure-keyvault") || !strings.Contains(err.Error(), "must use https") {
 		t.Fatalf("want the vault URL refused, got: %v", err)
+	}
+}
+
+func TestParseUIProxies(t *testing.T) {
+	const proxy = "spiffe://omega.local/platform/ui"
+	ok := func(specs ...string) ([]string, error) {
+		return parseUIProxies(specs, []string{"spiffe://omega.local/platform/root"}, true, true, identity.SourceBuiltIn)
+	}
+	got, err := ok(proxy, " "+proxy+" ")
+	if err != nil || len(got) != 1 || got[0] != proxy {
+		t.Fatalf("parse: %v %v", got, err)
+	}
+	for name, err := range map[string]error{
+		"no require-auth": func() error {
+			_, err := parseUIProxies([]string{proxy}, nil, false, true, identity.SourceBuiltIn)
+			return err
+		}(),
+		"no oidc idp": func() error {
+			_, err := parseUIProxies([]string{proxy}, nil, true, false, identity.SourceBuiltIn)
+			return err
+		}(),
+		"spire-upstream": func() error {
+			_, err := parseUIProxies([]string{proxy}, nil, true, true, identity.SourceSPIREUpstream)
+			return err
+		}(),
+		"not a spiffe id":   func() error { _, err := ok("https://ui.example.com"); return err }(),
+		"also a root admin": func() error { _, err := ok("spiffe://omega.local/platform/root"); return err }(),
+	} {
+		if err == nil {
+			t.Errorf("%s: want an error", name)
+		}
 	}
 }

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { LoginError } from "@/components/auth/login-error";
 import { omega } from "@/lib/omega";
 import { useGlobalShortcuts } from "@/lib/shortcuts";
 import { CommandPalette } from "./command-palette";
@@ -47,6 +48,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar onPalette={() => setPaletteOpen(true)} health={health} />
+        <LoginError />
         <main className="flex-1 overflow-y-auto bg-[var(--color-bg)]">
           <div className="mx-auto max-w-5xl px-8 py-8">{children}</div>
         </main>

@@ -22,11 +22,7 @@ Human principal's SPIFFE ID.
    token's RFC 8693 `act` claim records the upstream IdP as
    `{idp: demo-idp, iss: http://..., kind: oidc-idp, sub: alice@example.com}`.
 
-The mock IdP is intentionally tiny - no `/authorize`, no `/token`,
-no consent screen. omega never calls any of those. A real
-deployment swaps the mock for Keycloak / Okta / Entra ID / Google
-Workspace / Dex / Authentik / etc. by pointing `--oidc-idp` at
-their issuer URL.
+The mock IdP is intentionally tiny: no login page, no consent screen. omega itself never calls `/authorize` or `/token`; the mock serves them (PKCE S256, signing in the person `--login-username` names) for the web UI's sign-in, which [`examples/ui-auth`](../ui-auth/) drives. A real deployment swaps the mock for Keycloak / Okta / Entra ID / Google Workspace / Dex / Authentik / etc. by pointing `--oidc-idp` at their issuer URL.
 
 ## Run
 
