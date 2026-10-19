@@ -7,9 +7,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // safeReturnTo keeps the post-login redirect on this UI: a path, never
-// another origin. It resolves the path the way the callback will, since
-// the URL parser drops tabs and newlines ("/\t/evil.example" becomes
-// "//evil.example").
+// another origin. It resolves the path as the callback will: the URL
+// parser drops tabs and newlines, so "/\t/evil.example" becomes
+// "//evil.example".
 function safeReturnTo(raw: string | null): string {
   if (!raw?.startsWith("/")) return "/";
   const base = "http://ui.invalid";

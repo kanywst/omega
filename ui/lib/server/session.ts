@@ -68,8 +68,8 @@ function prune<T extends { expiresAt: number }>(m: Map<string, T>, max: number) 
 }
 
 // A pending login travels in the login cookie, sealed with a key only
-// this process holds, rather than in a shared table that anyone could
-// fill to push out other people's logins.
+// this process holds, so nobody can push out other people's logins by
+// starting many of their own.
 function seal(login: PendingLogin): string {
   const iv = randomBytes(12);
   const c = createCipheriv("aes-256-gcm", store.loginKey, iv);
