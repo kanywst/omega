@@ -10,9 +10,9 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.13.0)
+## Now (next release, post-0.14.0)
 
-Nothing is committed yet.
+Nothing is committed yet. Sign-in to the UI and policy writes as the signed-in person, through `--ui-proxy` ([ADR 0023](docs/adr/0023-ui-proxy-acts-for-signed-in-people.md)), shipped in 0.14.0.
 
 ## Next (3-6 months)
 

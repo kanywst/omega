@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-20
+
+Lets people sign in to the UI and manage stored policies as themselves.
+
 ### Added
 
 - **Sign-in and policy writes in the UI.** The UI signs people in through the OIDC IdP Omega federates with (authorization code with PKCE), exchanges their ID token for their JWT-SVID at `POST /v1/oidc/exchange`, and keeps it in a server-side session. Signed in as a `--domain-root-admin`, a person can create, edit (with `If-Match`, showing a `412` conflict) and delete stored policies from the Policies pages, with a typed confirmation before a delete. State-changing requests need the UI's own origin and a per-session CSRF token. Without sign-in configured the pages stay read-only. See [ui/README.md](ui/README.md) and [docs/policies.md](docs/policies.md#from-the-web-ui).
@@ -999,7 +1003,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/kanywst/omega/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/kanywst/omega/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/kanywst/omega/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kanywst/omega/compare/v0.10.0...v0.11.0
