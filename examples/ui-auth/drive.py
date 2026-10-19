@@ -86,7 +86,7 @@ st, h, _ = request("GET", callback)
 check(st == 303 and "login_error" in h["Location"], "a callback from another browser does not sign in")
 
 # The state is single use, so start again for the real sign-in.
-st, h, _ = request("GET", f"{UI}/api/auth/login?return_to=//evil.example")
+st, h, _ = request("GET", f"{UI}/api/auth/login?return_to=/%09/evil.example")
 jar = set_cookies(h)
 st, h, _ = request("GET", h["Location"])
 st, h, _ = request("GET", h["Location"], cookies=jar)

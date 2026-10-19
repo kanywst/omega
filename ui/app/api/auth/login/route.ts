@@ -7,10 +7,15 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // safeReturnTo keeps the post-login redirect on this UI: a path, never
-// another origin ("//evil.example" or "/\evil.example").
+// another origin. It resolves the path the way the callback will, since
+// the URL parser drops tabs and newlines ("/\t/evil.example" becomes
+// "//evil.example").
 function safeReturnTo(raw: string | null): string {
-  if (!raw?.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) return "/";
-  return raw;
+  if (!raw?.startsWith("/")) return "/";
+  const base = "http://ui.invalid";
+  const url = new URL(raw, base);
+  if (url.origin !== base) return "/";
+  return url.pathname + url.search + url.hash;
 }
 
 // GET /api/auth/login starts the authorization code flow with PKCE. The
