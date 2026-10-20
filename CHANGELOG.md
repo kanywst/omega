@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Chart values for `--ui-proxy`.** `server.uiProxy.proxies`, `.audience` and `.maxTokenTTL` set `--ui-proxy`, `--ui-proxy-audience` and `--ui-proxy-max-token-ttl`. `--require-auth` and `--oidc-idp` still go through `server.extraArgs`.
+
 ## [0.14.0] - 2026-10-20
 
 Lets people sign in to the UI and manage stored policies as themselves.
