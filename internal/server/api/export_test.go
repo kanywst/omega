@@ -97,6 +97,21 @@ func RefusalAllowForTest(window time.Duration, refusals []struct {
 	return audited, suppressed
 }
 
+// RefusalFullForTest fills a limiter that tracks max callers and
+// reports whether two refusals from a new caller in one window are both
+// audited.
+func RefusalFullForTest(max int) (bool, bool) {
+	l := newRefusalLimiter(time.Minute)
+	l.max = max
+	t0 := time.Unix(1_000_000, 0)
+	for i := range max {
+		l.allow(string(rune('a'+i)), t0)
+	}
+	first, _ := l.allow("new", t0.Add(time.Second))
+	second, _ := l.allow("new", t0.Add(2*time.Second))
+	return first, second
+}
+
 // RefusalUnrecordedForTest lets one refusal through, fails its audit
 // write, and reports what the caller's next refusal a second later gets.
 func RefusalUnrecordedForTest() (bool, int) {

@@ -243,7 +243,8 @@ func TestUIProxyRefusalAuditWindow(t *testing.T) {
 func TestUIProxyRefusalOfANewKindGetsItsOwnRow(t *testing.T) {
 	env := newUIProxyEnv(t)
 	proxy := env.as(t, uiProxy)
-	for _, tok := range []string{"", "not-a-jwt", "still-not-a-jwt"} {
+	wrongAud := userToken(t, env, humanAdmin, []string{"target-api"}, 10*time.Minute, map[string]any{"act": oidcAct})
+	for _, tok := range []string{"", "not-a-jwt", "still-not-a-jwt", wrongAud} {
 		if code, _, _ := callH(t, proxy, "GET", env.srv.URL+"/v1/policies", nil, map[string]string{api.UserTokenHeader: tok}); code != http.StatusUnauthorized {
 			t.Fatalf("token %q: %d", tok, code)
 		}
@@ -258,8 +259,16 @@ func TestUIProxyRefusalOfANewKindGetsItsOwnRow(t *testing.T) {
 			rows++
 		}
 	}
-	if rows != 2 {
-		t.Fatalf("got %d rows for an empty header and two bad tokens, want 2", rows)
+	if rows != 3 {
+		t.Fatalf("got %d rows for an empty header, two unparsable tokens and a wrong audience, want 3", rows)
+	}
+}
+
+// A full limiter audits rather than suppresses, so it never hides a
+// refusal it cannot track.
+func TestUIProxyRefusalLimiterFull(t *testing.T) {
+	if first, second := api.RefusalFullForTest(3); !first || !second {
+		t.Fatalf("new caller on a full limiter: audited %v %v, want true true", first, second)
 	}
 }
 

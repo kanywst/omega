@@ -81,10 +81,11 @@ func withVia(ctx context.Context, payload map[string]any) map[string]any {
 // refusal row per refusalAuditWindow; the next row counts the refusals
 // in between as "suppressed".
 func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, delegable bool) string {
-	// kind is a fixed name for the refusal, so a new kind of refusal
-	// from the same caller gets its own row within the window.
+	// kind is a fixed name for the refusal and r.Pattern a registered
+	// route, so the keys stay bounded while a new kind of refusal, or one
+	// on another route, still gets its own row within the window.
 	refuse := func(status int, kind string, err error) string {
-		key := proxy + "\x00" + kind
+		key := proxy + "\x00" + kind + "\x00" + r.Pattern
 		if ok, suppressed := s.refusals.allow(key, time.Now()); ok {
 			payload := map[string]any{"route": r.Pattern, "reason": err.Error()}
 			if suppressed > 0 {
@@ -94,6 +95,7 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, 
 				Kind: "ui_proxy.delegate", Actor: proxy, Decision: "deny",
 				Payload: mustJSON(payload),
 			}) != nil {
+				metrics.UIProxyRefusalsSuppressed.Inc()
 				s.refusals.unrecorded(key, suppressed+1)
 			}
 		} else {
@@ -116,15 +118,26 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, 
 	user, err := s.verifyUserToken(values[0])
 	if err != nil {
 		kind := "token"
-		if errors.Is(err, errUserTokenExpired) || errors.Is(err, jwt.ErrExpired) {
-			kind = "token-expired"
+		var te *userTokenError
+		if errors.As(err, &te) {
+			kind = "token-" + te.kind
 		}
 		return refuse(http.StatusUnauthorized, kind, fmt.Errorf("%s: %w", UserTokenHeader, err))
 	}
 	return user
 }
 
-var errUserTokenExpired = errors.New("token has expired")
+// userTokenError names which check a user token failed, so each kind of
+// failure gets its own refusal window.
+type userTokenError struct {
+	kind string
+	err  error
+}
+
+func (e *userTokenError) Error() string { return e.err.Error() }
+func (e *userTokenError) Unwrap() error { return e.err }
+
+func tokenErr(kind string, err error) error { return &userTokenError{kind: kind, err: err} }
 
 // verifyUserToken checks a user token and returns its subject. It must
 // be a JWT-SVID this server issued through POST /v1/oidc/exchange (its
@@ -135,31 +148,34 @@ var errUserTokenExpired = errors.New("token has expired")
 func (s *Server) verifyUserToken(token string) (string, error) {
 	id, claims, err := s.ca.ParseJWTSVIDClaims(token)
 	if err != nil {
-		return "", err
+		if errors.Is(err, jwt.ErrExpired) {
+			return "", tokenErr("expired", err)
+		}
+		return "", tokenErr("unverified", err)
 	}
 	if aud := audienceValues(claims["aud"]); len(aud) != 1 || aud[0] != s.uiProxy.Audience {
-		return "", fmt.Errorf("aud must be exactly %q", s.uiProxy.Audience)
+		return "", tokenErr("audience", fmt.Errorf("aud must be exactly %q", s.uiProxy.Audience))
 	}
 	exp, okExp := claimExpiry(claims)
 	iat, okIat := claimNumericDate(claims, "iat")
 	if !okExp || !okIat {
-		return "", errors.New("token must carry iat and exp")
+		return "", tokenErr("times", errors.New("token must carry iat and exp"))
 	}
 	if !time.Now().Before(exp) {
-		return "", errUserTokenExpired
+		return "", tokenErr("expired", errors.New("token has expired"))
 	}
 	if life := exp.Sub(iat); life > s.uiProxy.MaxTokenTTL {
-		return "", fmt.Errorf("token lifetime %s exceeds the accepted maximum %s", life, s.uiProxy.MaxTokenTTL)
+		return "", tokenErr("lifetime", fmt.Errorf("token lifetime %s exceeds the accepted maximum %s", life, s.uiProxy.MaxTokenTTL))
 	}
 	if _, ok := claims["cnf"]; ok {
-		return "", errors.New("token must not be sender-constrained (cnf)")
+		return "", tokenErr("cnf", errors.New("token must not be sender-constrained (cnf)"))
 	}
 	act, ok := claims["act"].(map[string]any)
 	if !ok || act["kind"] != "oidc-idp" {
-		return "", errors.New("token was not issued for a person signed in through an OIDC IdP")
+		return "", tokenErr("act", errors.New("token was not issued for a person signed in through an OIDC IdP"))
 	}
 	if _, nested := act["act"]; nested {
-		return "", errors.New("token carries a delegation chain")
+		return "", tokenErr("act-chain", errors.New("token carries a delegation chain"))
 	}
 	return id.String(), nil
 }
@@ -184,11 +200,13 @@ type refusalLimiter struct {
 	mu      sync.Mutex
 	window  time.Duration
 	callers map[string]*refusalState
+	max     int
 	pruned  time.Time
+	warned  time.Time
 }
 
 func newRefusalLimiter(window time.Duration) *refusalLimiter {
-	return &refusalLimiter{window: window, callers: map[string]*refusalState{}}
+	return &refusalLimiter{window: window, callers: map[string]*refusalState{}, max: refusalMaxCallers}
 }
 
 // allow reports whether caller's refusal at now is audited, and how many
@@ -204,7 +222,7 @@ func (l *refusalLimiter) allow(caller string, now time.Time) (bool, int) {
 	suppressed := 0
 	if ok {
 		suppressed = st.suppressed
-	} else if len(l.callers) >= refusalMaxCallers {
+	} else if len(l.callers) >= l.max {
 		// At most one sweep a window, so a full table does not cost every
 		// new caller a scan. An entry still holding a count stays until
 		// its caller's next refusal records it.
@@ -216,7 +234,11 @@ func (l *refusalLimiter) allow(caller string, now time.Time) (bool, int) {
 				}
 			}
 		}
-		if len(l.callers) >= refusalMaxCallers {
+		if len(l.callers) >= l.max {
+			if now.Sub(l.warned) >= l.window {
+				l.warned = now
+				slog.Warn("ui proxy refusal limiter is full; auditing every refusal from new callers", "tracked", len(l.callers))
+			}
 			return true, 0
 		}
 	}
