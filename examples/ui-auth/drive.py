@@ -3,7 +3,9 @@
 It signs alice in to the UI (authorization code + PKCE against the mock
 IdP, following the redirects by hand so every cookie is visible), then
 manages a Cedar policy through the UI's /api/omega routes and checks the
-audit chain. Usage: drive.py <ui-url> <alice-spiffe-id> <ui-spiffe-id>
+audit chain. With a second replica's URL, it also checks that a login
+started on one replica finishes on the other.
+Usage: drive.py <ui-url> <alice-spiffe-id> <ui-spiffe-id> [<replica-url>]
 """
 
 import http.client
@@ -13,6 +15,7 @@ import time
 import urllib.parse
 
 UI, ALICE, UI_ID = sys.argv[1], sys.argv[2], sys.argv[3]
+REPLICA = sys.argv[4] if len(sys.argv) > 4 else None
 ORIGIN = UI
 
 POLICY = 'permit (principal == Spiffe::"spiffe://omega.demo/media/web", action == Action::"read", resource);'
@@ -152,3 +155,13 @@ st, _, _ = request("POST", f"{UI}/api/auth/logout", None, write, session_cookie)
 check(st == 204, "sign out")
 st, _, b = request("POST", f"{UI}/api/omega/v1/policies", {"id": "demo", "text": POLICY}, write, session_cookie)
 check(st == 401, "the ended session no longer writes")
+
+# A login started on one replica finishes on another that shares the
+# login secret.
+if REPLICA:
+    st, h, _ = request("GET", f"{UI}/api/auth/login?return_to=/policies")
+    jar = set_cookies(h)
+    st, h, _ = request("GET", h["Location"])
+    callback = urllib.parse.urlsplit(h["Location"])
+    st, h, _ = request("GET", f"{REPLICA}{callback.path}?{callback.query}", cookies=jar)
+    check(st == 303 and h["Location"] == f"{UI}/policies" and set_cookies(h).get("__Host-omega-session"), f"a login started on one replica finishes on another ({st} {h['Location']})")

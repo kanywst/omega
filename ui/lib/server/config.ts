@@ -29,6 +29,8 @@ export type AuthConfig = {
   tokenTTL: number;
   /** Longest a session lasts, refreshes included, in seconds. */
   sessionMaxAge: number;
+  /** Secret the login cookie is sealed with; unset, each process makes its own. */
+  loginSecret?: string;
 };
 
 const env = (name: string) => process.env[name]?.trim() || undefined;
@@ -83,6 +85,10 @@ export function authState(): AuthState {
   if (!secureOrLocal(issuerUrl)) {
     return { kind: "error", error: "OMEGA_UI_OIDC_ISSUER must be https:// outside localhost" };
   }
+  const loginSecret = env("OMEGA_UI_LOGIN_SECRET");
+  if (loginSecret !== undefined && loginSecret.length < 32) {
+    return { kind: "error", error: "OMEGA_UI_LOGIN_SECRET must be at least 32 characters" };
+  }
   const tokenTTL = positiveInt("OMEGA_UI_TOKEN_TTL", 900);
   const sessionMaxAge = positiveInt("OMEGA_UI_SESSION_MAX_AGE", 8 * 3600);
   if (tokenTTL === undefined || sessionMaxAge === undefined) {
@@ -103,6 +109,7 @@ export function authState(): AuthState {
       audience: env("OMEGA_UI_TOKEN_AUDIENCE") ?? "omega-ui",
       tokenTTL,
       sessionMaxAge,
+      loginSecret,
     },
   };
 }

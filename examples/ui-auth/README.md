@@ -7,15 +7,16 @@ A person signs in to the web UI and manages Cedar policies as themselves. The UI
 1. issues a demo CA, the control plane's TLS certificate and the UI's X.509-SVID, `spiffe://omega.demo/platform/ui`;
 2. starts the mock OIDC IdP from [`examples/oidc-federation`](../oidc-federation/), whose `/authorize` signs in `alice` at once (no login page) and whose ID tokens live 65 seconds;
 3. starts `omega server` with TLS, `--require-auth`, `--oidc-idp` for the mock IdP, `--ui-proxy spiffe://omega.demo/platform/ui`, and alice's human SPIFFE ID `spiffe://omega.demo/humans/demo-idp/alice` as the only `--domain-root-admin`;
-4. builds the UI (`npm ci` when `ui/node_modules` is missing, then `npm run build`) and starts it with sign-in configured;
+4. builds the UI (`npm ci` when `ui/node_modules` is missing, then `npm run build`) and starts two replicas of it with sign-in configured and a shared `OMEGA_UI_LOGIN_SECRET`;
 5. runs `drive.py`, which plays the browser and checks:
-   - before sign-in, the UI's own SVID cannot write policy, and a cross-origin write is refused;
+   - before sign-in, the UI does not write policy or read the audit chain, a cross-origin write is refused, and the UI forwards no other route, such as SVID issuance;
    - sign-in uses PKCE S256, a nonce and a state, a callback without the browser's login cookie does not sign in, and the redirect after sign-in stays on the UI's origin;
    - the session answer names alice and carries no token;
    - a write without the CSRF token is refused; alice creates, reads, updates and deletes a policy, and an update with a stale ETag answers `412`;
    - the UI renews alice's JWT-SVID through the IdP's refresh token before it expires;
-   - the audit chain records each change with alice as actor and the UI as `via`, and the UI's own refused write with the UI as actor;
-   - after sign-out the session cookie no longer writes.
+   - the audit chain records each change with alice as actor and the UI as `via`;
+   - after sign-out the session cookie no longer writes;
+   - a sign-in started on one replica finishes on the other.
 
 Needs Go, Node.js 20 or later, `openssl` and `python3`.
 

@@ -11,6 +11,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Added
 
 - **Chart values for `--ui-proxy`.** `server.uiProxy.proxies`, `.audience` and `.maxTokenTTL` set `--ui-proxy`, `--ui-proxy-audience` and `--ui-proxy-max-token-ttl`. `--require-auth` and `--oidc-idp` still go through `server.extraArgs`.
+- **`OMEGA_UI_LOGIN_SECRET` for UI replicas.** With the same secret on every replica, a sign-in started on one replica finishes on another, or after a restart. Sessions are still in one process's memory, so several replicas still need sticky sessions.
 
 ## [0.14.0] - 2026-10-20
 
