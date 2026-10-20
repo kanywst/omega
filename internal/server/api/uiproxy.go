@@ -224,12 +224,12 @@ func (l *refusalLimiter) allow(caller string, now time.Time) (bool, int) {
 		suppressed = st.suppressed
 	} else if len(l.callers) >= l.max {
 		// At most one sweep a window, so a full table does not cost every
-		// new caller a scan. An entry still holding a count stays until
-		// its caller's next refusal records it.
+		// new caller a scan. A swept entry's count is already in the
+		// metric.
 		if now.Sub(l.pruned) >= l.window {
 			l.pruned = now
 			for k, v := range l.callers {
-				if !now.Before(v.until) && v.suppressed == 0 {
+				if !now.Before(v.until) {
 					delete(l.callers, k)
 				}
 			}
@@ -246,13 +246,13 @@ func (l *refusalLimiter) allow(caller string, now time.Time) (bool, int) {
 	return true, suppressed
 }
 
-// unrecorded gives back the slot allow handed out when the audit row
-// could not be written, keeping its n refusals for the next row.
+// unrecorded keeps n refusals for the next row when the audit row could
+// not be written. The window stays, so a follower, whose writes always
+// fail, tries once a window rather than on every refusal.
 func (l *refusalLimiter) unrecorded(caller string, n int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if st, ok := l.callers[caller]; ok {
-		st.until = time.Time{}
 		st.suppressed += n
 	}
 }

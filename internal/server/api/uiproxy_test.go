@@ -273,8 +273,8 @@ func TestUIProxyRefusalLimiterFull(t *testing.T) {
 }
 
 func TestUIProxyRefusalKeptWhenItsRowIsNotWritten(t *testing.T) {
-	if ok, suppressed := api.RefusalUnrecordedForTest(); !ok || suppressed != 1 {
-		t.Fatalf("next refusal after a failed write: audited %v suppressed %d, want true 1", ok, suppressed)
+	if ok, suppressed := api.RefusalUnrecordedForTest(); !ok || suppressed != 2 {
+		t.Fatalf("next window after a failed write: audited %v suppressed %d, want true 2", ok, suppressed)
 	}
 }
 
