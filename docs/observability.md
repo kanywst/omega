@@ -49,7 +49,7 @@ at the network layer from external clients.
 | `omega_audit_appended_total`   | `kind`                        | Total audit log entries appended (per event kind).        |
 | `omega_domains_created_total`  | (none)                        | Total domains created via the admin API.                  |
 | `omega_stored_policy_set_load_failures_total` | (none) | Times the stored Cedar policies failed to load; see [policies.md](policies.md#when-the-stored-set-does-not-load). |
-| `omega_ui_proxy_refusals_suppressed_total` | (none) | Refused `Omega-User-Token` requests left off the audit chain, within a minute of the caller's last recorded refusal; see [policies.md](policies.md#from-the-web-ui). |
+| `omega_ui_proxy_refusals_suppressed_total` | (none) | Refused `Omega-User-Token` requests left off the audit chain, within a minute of the caller's last recorded refusal of the same kind; see [policies.md](policies.md#from-the-web-ui). |
 
 ### Histograms
 

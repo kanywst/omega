@@ -240,6 +240,29 @@ func TestUIProxyRefusalAuditWindow(t *testing.T) {
 	}
 }
 
+func TestUIProxyRefusalOfANewKindGetsItsOwnRow(t *testing.T) {
+	env := newUIProxyEnv(t)
+	proxy := env.as(t, uiProxy)
+	for _, tok := range []string{"", "not-a-jwt", "still-not-a-jwt"} {
+		if code, _, _ := callH(t, proxy, "GET", env.srv.URL+"/v1/policies", nil, map[string]string{api.UserTokenHeader: tok}); code != http.StatusUnauthorized {
+			t.Fatalf("token %q: %d", tok, code)
+		}
+	}
+	events, err := env.store.ListAudit(t.Context(), 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := 0
+	for _, ev := range events {
+		if ev.Kind == "ui_proxy.delegate" && ev.Actor == uiProxy {
+			rows++
+		}
+	}
+	if rows != 2 {
+		t.Fatalf("got %d rows for an empty header and two bad tokens, want 2", rows)
+	}
+}
+
 func TestUIProxyRefusalKeptWhenItsRowIsNotWritten(t *testing.T) {
 	if ok, suppressed := api.RefusalUnrecordedForTest(); !ok || suppressed != 1 {
 		t.Fatalf("next refusal after a failed write: audited %v suppressed %d, want true 1", ok, suppressed)

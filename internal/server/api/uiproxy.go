@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-jose/go-jose/v4/jwt"
+
 	"github.com/kanywst/omega/internal/server/metrics"
 	"github.com/kanywst/omega/internal/server/storage"
 )
@@ -79,8 +81,11 @@ func withVia(ctx context.Context, payload map[string]any) map[string]any {
 // refusal row per refusalAuditWindow; the next row counts the refusals
 // in between as "suppressed".
 func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, delegable bool) string {
-	refuse := func(status int, err error) string {
-		if ok, suppressed := s.refusals.allow(proxy, time.Now()); ok {
+	// kind is a fixed name for the refusal, so a new kind of refusal
+	// from the same caller gets its own row within the window.
+	refuse := func(status int, kind string, err error) string {
+		key := proxy + "\x00" + kind
+		if ok, suppressed := s.refusals.allow(key, time.Now()); ok {
 			payload := map[string]any{"route": r.Pattern, "reason": err.Error()}
 			if suppressed > 0 {
 				payload["suppressed"] = suppressed
@@ -89,7 +94,7 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, 
 				Kind: "ui_proxy.delegate", Actor: proxy, Decision: "deny",
 				Payload: mustJSON(payload),
 			}) != nil {
-				s.refusals.unrecorded(proxy, suppressed+1)
+				s.refusals.unrecorded(key, suppressed+1)
 			}
 		} else {
 			metrics.UIProxyRefusalsSuppressed.Inc()
@@ -99,21 +104,27 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, 
 		return ""
 	}
 	if !slices.Contains(s.uiProxy.Proxies, proxy) {
-		return refuse(http.StatusForbidden, fmt.Errorf("caller is not a --ui-proxy and may not present %s", UserTokenHeader))
+		return refuse(http.StatusForbidden, "not-proxy", fmt.Errorf("caller is not a --ui-proxy and may not present %s", UserTokenHeader))
 	}
 	if !delegable {
-		return refuse(http.StatusForbidden, fmt.Errorf("this endpoint does not accept %s", UserTokenHeader))
+		return refuse(http.StatusForbidden, "route", fmt.Errorf("this endpoint does not accept %s", UserTokenHeader))
 	}
 	values := r.Header.Values(UserTokenHeader)
 	if len(values) != 1 || values[0] == "" {
-		return refuse(http.StatusUnauthorized, fmt.Errorf("%s must hold exactly one token", UserTokenHeader))
+		return refuse(http.StatusUnauthorized, "header", fmt.Errorf("%s must hold exactly one token", UserTokenHeader))
 	}
 	user, err := s.verifyUserToken(values[0])
 	if err != nil {
-		return refuse(http.StatusUnauthorized, fmt.Errorf("%s: %w", UserTokenHeader, err))
+		kind := "token"
+		if errors.Is(err, errUserTokenExpired) || errors.Is(err, jwt.ErrExpired) {
+			kind = "token-expired"
+		}
+		return refuse(http.StatusUnauthorized, kind, fmt.Errorf("%s: %w", UserTokenHeader, err))
 	}
 	return user
 }
+
+var errUserTokenExpired = errors.New("token has expired")
 
 // verifyUserToken checks a user token and returns its subject. It must
 // be a JWT-SVID this server issued through POST /v1/oidc/exchange (its
@@ -135,7 +146,7 @@ func (s *Server) verifyUserToken(token string) (string, error) {
 		return "", errors.New("token must carry iat and exp")
 	}
 	if !time.Now().Before(exp) {
-		return "", errors.New("token has expired")
+		return "", errUserTokenExpired
 	}
 	if life := exp.Sub(iat); life > s.uiProxy.MaxTokenTTL {
 		return "", fmt.Errorf("token lifetime %s exceeds the accepted maximum %s", life, s.uiProxy.MaxTokenTTL)
@@ -153,12 +164,12 @@ func (s *Server) verifyUserToken(token string) (string, error) {
 	return id.String(), nil
 }
 
-// refusalAuditWindow is how often one caller's refused user tokens
-// reach the audit chain, so a caller looping bad requests cannot grow
-// the chain at will.
+// refusalAuditWindow is how often one caller's refused user tokens of
+// one kind reach the audit chain, so a caller looping bad requests
+// cannot grow the chain at will.
 const refusalAuditWindow = time.Minute
 
-// refusalMaxCallers bounds the callers refusalLimiter tracks. Past it a
+// refusalMaxCallers bounds the (caller, kind) pairs refusalLimiter tracks. Past it a
 // refusal is audited rather than suppressed.
 const refusalMaxCallers = 10_000
 
