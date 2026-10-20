@@ -92,12 +92,12 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, 
 			if suppressed > 0 {
 				payload["suppressed"] = suppressed
 			}
-			if s.appendAudit(r.Context(), storage.AuditEvent{
+			if err := s.appendAudit(r.Context(), storage.AuditEvent{
 				Kind: "ui_proxy.delegate", Actor: proxy, Decision: "deny",
 				Payload: mustJSON(payload),
-			}) != nil {
+			}); err != nil {
 				metrics.UIProxyRefusalsSuppressed.Inc()
-				s.refusals.unrecorded(key, suppressed+1)
+				s.refusals.unrecorded(key, suppressed+1, !errors.Is(err, storage.ErrNotLeader))
 			}
 		} else {
 			metrics.UIProxyRefusalsSuppressed.Inc()
@@ -253,12 +253,16 @@ func (l *refusalLimiter) allow(caller string, now time.Time) (bool, int) {
 }
 
 // unrecorded keeps n refusals for the next row when the audit row could
-// not be written. The window stays, so a follower, whose writes always
+// not be written. retry reopens the window so the next refusal tries
+// again; without it the window stays, so a follower, whose writes always
 // fail, tries once a window rather than on every refusal.
-func (l *refusalLimiter) unrecorded(caller string, n int) {
+func (l *refusalLimiter) unrecorded(caller string, n int, retry bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if st, ok := l.callers[caller]; ok {
 		st.suppressed += n
+		if retry {
+			st.until = time.Time{}
+		}
 	}
 }

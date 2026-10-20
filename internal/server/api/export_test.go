@@ -113,13 +113,23 @@ func RefusalFullForTest(max int) (bool, bool) {
 }
 
 // RefusalUnrecordedForTest lets one refusal through, fails its audit
-// write, suppresses one more, and reports what the caller's first
+// write as on a follower, suppresses one more, and reports what the caller's first
 // refusal in the next window gets.
 func RefusalUnrecordedForTest() (bool, int) {
 	l := newRefusalLimiter(time.Minute)
 	t0 := time.Unix(1_000_000, 0)
 	_, n := l.allow("a", t0)
-	l.unrecorded("a", n+1)
+	l.unrecorded("a", n+1, false)
 	l.allow("a", t0.Add(time.Second))
 	return l.allow("a", t0.Add(time.Minute))
+}
+
+// RefusalRetryForTest fails one refusal's audit write with retry and
+// reports what the caller's next refusal a second later gets.
+func RefusalRetryForTest() (bool, int) {
+	l := newRefusalLimiter(time.Minute)
+	t0 := time.Unix(1_000_000, 0)
+	_, n := l.allow("a", t0)
+	l.unrecorded("a", n+1, true)
+	return l.allow("a", t0.Add(time.Second))
 }

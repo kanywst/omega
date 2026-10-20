@@ -278,6 +278,9 @@ func TestUIProxyRefusalKeptWhenItsRowIsNotWritten(t *testing.T) {
 	if ok, suppressed := api.RefusalUnrecordedForTest(); !ok || suppressed != 2 {
 		t.Fatalf("next window after a failed write: audited %v suppressed %d, want true 2", ok, suppressed)
 	}
+	if ok, suppressed := api.RefusalRetryForTest(); !ok || suppressed != 1 {
+		t.Fatalf("next refusal after a transient failed write: audited %v suppressed %d, want true 1", ok, suppressed)
+	}
 }
 
 func TestUIProxyRefusalsAreAuditedOncePerWindow(t *testing.T) {
