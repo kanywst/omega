@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,7 +247,11 @@ func TestUIProxyRefusalOfANewKindGetsItsOwnRow(t *testing.T) {
 	wrongAud := userToken(t, env, humanAdmin, []string{"target-api"}, 10*time.Minute, map[string]any{"act": oidcAct})
 	other := newUIProxyEnv(t)
 	forged := personToken(t, other, humanAdmin)
-	for _, tok := range []string{"", "not-a-jwt", "still-not-a-jwt", forged, wrongAud} {
+	// A token of ours carrying the signature of another of ours.
+	a := strings.Split(personToken(t, env, humanAdmin), ".")
+	b := strings.Split(userToken(t, env, humanAdmin, []string{api.DefaultUIProxyAudience}, 5*time.Minute, map[string]any{"act": oidcAct}), ".")
+	badSig := a[0] + "." + a[1] + "." + b[2]
+	for _, tok := range []string{"", "not-a-jwt", "still-not-a-jwt", forged, badSig, wrongAud} {
 		if code, _, _ := callH(t, proxy, "GET", env.srv.URL+"/v1/policies", nil, map[string]string{api.UserTokenHeader: tok}); code != http.StatusUnauthorized {
 			t.Fatalf("token %q: %d", tok, code)
 		}
@@ -261,8 +266,8 @@ func TestUIProxyRefusalOfANewKindGetsItsOwnRow(t *testing.T) {
 			rows++
 		}
 	}
-	if rows != 4 {
-		t.Fatalf("got %d rows for an empty header, two unparsable tokens, a forged one and a wrong audience, want 4", rows)
+	if rows != 5 {
+		t.Fatalf("got %d rows for an empty header, two unparsable tokens, an unknown key, a bad signature and a wrong audience, want 5", rows)
 	}
 }
 

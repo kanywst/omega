@@ -154,8 +154,11 @@ func (s *Server) verifyUserToken(token string) (string, error) {
 	}
 	id, claims, err := s.ca.ParseJWTSVIDClaims(token)
 	if err != nil {
-		if errors.Is(err, jwt.ErrExpired) {
+		switch {
+		case errors.Is(err, jwt.ErrExpired):
 			return "", tokenErr("expired", err)
+		case errors.Is(err, jose.ErrCryptoFailure):
+			return "", tokenErr("signature", err)
 		}
 		return "", tokenErr("unverified", err)
 	}
