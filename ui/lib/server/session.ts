@@ -6,8 +6,8 @@
  * the page reads from /api/auth/session and sends back in a header.
  *
  * In-memory means one UI replica, or sticky sessions in front of
- * several; a restart signs everyone out. A sign-in in progress survives
- * both when the replicas share OMEGA_UI_LOGIN_SECRET.
+ * several; a restart signs everyone out. With OMEGA_UI_LOGIN_SECRET
+ * set, the same on every replica, a sign-in in progress survives both.
  */
 
 import {

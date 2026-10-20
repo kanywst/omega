@@ -8,11 +8,13 @@
 #   3. boots omega with TLS, --require-auth, --oidc-idp for the mock IdP,
 #      --ui-proxy for the UI's SPIFFE ID, and alice's human SPIFFE ID as
 #      the only --domain-root-admin;
-#   4. builds and starts the UI with sign-in configured;
+#   4. builds the UI and starts two replicas with sign-in configured and
+#      one OMEGA_UI_LOGIN_SECRET;
 #   5. drive.py signs alice in (authorization code + PKCE), then creates,
 #      updates and deletes a policy through the UI's /api/omega routes and
 #      checks the CSRF and origin checks, the 412 on a stale ETag, the
-#      audit rows (actor alice, via the UI) and sign-out.
+#      audit rows (actor alice, via the UI) and sign-out, and that a
+#      login started on one replica finishes on the other.
 set -euo pipefail
 
 DEMO_DIR="${DEMO_DIR:-/tmp/omega-ui-auth-demo}"

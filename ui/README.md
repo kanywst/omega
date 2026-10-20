@@ -97,6 +97,6 @@ Sessions are in memory, so run one UI replica (or sticky sessions), and a restar
 | `OMEGA_UI_TOKEN_AUDIENCE` | no | Default `omega-ui`; must equal the server's `--ui-proxy-audience` |
 | `OMEGA_UI_TOKEN_TTL` | no | Seconds the person's JWT-SVID is requested for (default 900); the server caps it at the ID token's remaining life |
 | `OMEGA_UI_SESSION_MAX_AGE` | no | Seconds a session lasts at most, renewals included (default 28800) |
-| `OMEGA_UI_LOGIN_SECRET` | no | At least 32 characters; seals the cookie that carries a sign-in in progress. Share it between replicas. Unset, each process makes its own key |
+| `OMEGA_UI_LOGIN_SECRET` | no | At least 32 random characters (`openssl rand -hex 32`); seals the cookie that carries a sign-in in progress (unset, each process makes its own key) |
 
 When `OMEGA_UI_OIDC_ISSUER` is set but another required variable is not, the UI refuses to sign anyone in and stays read-only. Register `<OMEGA_UI_URL>/api/auth/callback` as the client's redirect URI at the IdP. The server needs `--require-auth`, the `--oidc-idp`, the person as a `--domain-root-admin` and the UI as a `--ui-proxy`; see [docs/policies.md](../docs/policies.md#from-the-web-ui). `examples/ui-auth` runs the whole flow against a mock IdP.
