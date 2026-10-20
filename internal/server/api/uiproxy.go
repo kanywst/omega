@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/kanywst/omega/internal/server/metrics"
@@ -146,6 +147,11 @@ func tokenErr(kind string, err error) error { return &userTokenError{kind: kind,
 // leeway, with a lifetime of at most --ui-proxy-max-token-ttl, and not
 // sender constrained, since the proxy presents it as a bearer.
 func (s *Server) verifyUserToken(token string) (string, error) {
+	// Parsed once on its own so an unparsable token and a bad signature
+	// are different kinds of refusal.
+	if _, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES256}); err != nil {
+		return "", tokenErr("malformed", fmt.Errorf("parse jwt: %w", err))
+	}
 	id, claims, err := s.ca.ParseJWTSVIDClaims(token)
 	if err != nil {
 		if errors.Is(err, jwt.ErrExpired) {

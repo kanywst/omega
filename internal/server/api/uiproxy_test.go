@@ -244,7 +244,9 @@ func TestUIProxyRefusalOfANewKindGetsItsOwnRow(t *testing.T) {
 	env := newUIProxyEnv(t)
 	proxy := env.as(t, uiProxy)
 	wrongAud := userToken(t, env, humanAdmin, []string{"target-api"}, 10*time.Minute, map[string]any{"act": oidcAct})
-	for _, tok := range []string{"", "not-a-jwt", "still-not-a-jwt", wrongAud} {
+	other := newUIProxyEnv(t)
+	forged := personToken(t, other, humanAdmin)
+	for _, tok := range []string{"", "not-a-jwt", "still-not-a-jwt", forged, wrongAud} {
 		if code, _, _ := callH(t, proxy, "GET", env.srv.URL+"/v1/policies", nil, map[string]string{api.UserTokenHeader: tok}); code != http.StatusUnauthorized {
 			t.Fatalf("token %q: %d", tok, code)
 		}
@@ -259,8 +261,8 @@ func TestUIProxyRefusalOfANewKindGetsItsOwnRow(t *testing.T) {
 			rows++
 		}
 	}
-	if rows != 3 {
-		t.Fatalf("got %d rows for an empty header, two unparsable tokens and a wrong audience, want 3", rows)
+	if rows != 4 {
+		t.Fatalf("got %d rows for an empty header, two unparsable tokens, a forged one and a wrong audience, want 4", rows)
 	}
 }
 
