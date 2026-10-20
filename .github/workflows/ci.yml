@@ -123,6 +123,7 @@ jobs:
         run: |
           helm template omega charts/omega > /dev/null
           helm template omega charts/omega --set agent.k8sWorkloadAttestor.enabled=true > /dev/null
+          helm template omega charts/omega --set 'server.uiProxy.proxies[0]=spiffe://omega.local/platform/ui' | grep -q -- '--ui-proxy=spiffe://omega.local/platform/ui'
 
   kind-csi:
     runs-on: ubuntu-latest
