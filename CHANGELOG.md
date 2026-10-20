@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Chart values for `--ui-proxy`.** `server.uiProxy.proxies`, `.audience` and `.maxTokenTTL` set `--ui-proxy`, `--ui-proxy-audience` and `--ui-proxy-max-token-ttl`. `--require-auth` and `--oidc-idp` still go through `server.extraArgs`.
+
 ### Changed
 
 - **A refused `Omega-User-Token` is audited at most once a minute per caller and kind of refusal.** A caller looping bad requests no longer adds a `ui_proxy.delegate` row per request; the next row counts the refusals in between as `suppressed`, and `omega_ui_proxy_refusals_suppressed_total` counts them as well.

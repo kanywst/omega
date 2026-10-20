@@ -70,6 +70,17 @@ spec:
             {{- range .Values.server.scimProviders }}
             - --scim-idp=name={{ .name }},domain={{ .domain }},token-file=/etc/omega/scim/{{ .name }}/token{{ if .template }},template={{ .template }}{{ end }}
             {{- end }}
+            {{- with .Values.server.uiProxy }}
+            {{- range .proxies }}
+            - --ui-proxy={{ . }}
+            {{- end }}
+            {{- if .audience }}
+            - --ui-proxy-audience={{ .audience }}
+            {{- end }}
+            {{- if .maxTokenTTL }}
+            - --ui-proxy-max-token-ttl={{ .maxTokenTTL }}
+            {{- end }}
+            {{- end }}
             {{- $ca := .Values.server.ca }}
             {{- if not (has $ca.backend (list "disk" "aws-pca" "gcp-cas" "azure-keyvault")) }}
             {{- fail (printf "server.ca.backend %q is not configurable through the chart (supported: disk, aws-pca, gcp-cas, azure-keyvault); use server.extraArgs for other backends" $ca.backend) }}
