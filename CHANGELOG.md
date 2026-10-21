@@ -13,6 +13,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 - **Chart values for `--ui-proxy`.** `server.uiProxy.proxies`, `.audience` and `.maxTokenTTL` set `--ui-proxy`, `--ui-proxy-audience` and `--ui-proxy-max-token-ttl`. `--require-auth` and `--oidc-idp` still go through `server.extraArgs`.
 - **`OMEGA_UI_LOGIN_SECRET` for UI replicas.** With the same secret on every replica, a sign-in started on one replica finishes on another, or after a restart. Sessions are still in one process's memory, so several replicas still need sticky sessions.
 
+### Changed
+
+- **A refused `Omega-User-Token` is audited at most once a minute per caller, route and kind of refusal.** A caller looping bad requests no longer adds a `ui_proxy.delegate` row per request; the next row counts the refusals in between as `suppressed`, and `omega_ui_proxy_refusals_suppressed_total` counts them as well.
+
 ## [0.14.0] - 2026-10-20
 
 Lets people sign in to the UI and manage stored policies as themselves.

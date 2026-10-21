@@ -81,3 +81,55 @@ func (s *Server) FailAuditAfterSyncForTest(kind string) {
 func (s *Server) FailSCIMForTest() {
 	s.scimFault = func(storage.AuditEvent) error { return errors.New("injected audit failure") }
 }
+
+// RefusalAllowForTest drives a fresh refusal limiter with the given
+// window through a sequence of (caller, time) refusals.
+func RefusalAllowForTest(window time.Duration, refusals []struct {
+	Caller string
+	At     time.Time
+}) (audited []bool, suppressed []int) {
+	l := newRefusalLimiter(window)
+	for _, r := range refusals {
+		ok, n := l.allow(r.Caller, r.At)
+		audited = append(audited, ok)
+		suppressed = append(suppressed, n)
+	}
+	return audited, suppressed
+}
+
+// RefusalFullForTest fills a limiter that tracks max callers and
+// reports whether two refusals from a new caller in one window are both
+// audited.
+func RefusalFullForTest(max int) (bool, bool) {
+	l := newRefusalLimiter(time.Minute)
+	l.max = max
+	t0 := time.Unix(1_000_000, 0)
+	for i := range max {
+		l.allow(string(rune('a'+i)), t0)
+	}
+	first, _ := l.allow("new", t0.Add(time.Second))
+	second, _ := l.allow("new", t0.Add(2*time.Second))
+	return first, second
+}
+
+// RefusalUnrecordedForTest lets one refusal through, fails its audit
+// write as on a follower, suppresses one more, and reports what the caller's first
+// refusal in the next window gets.
+func RefusalUnrecordedForTest() (bool, int) {
+	l := newRefusalLimiter(time.Minute)
+	t0 := time.Unix(1_000_000, 0)
+	_, n := l.allow("a", t0)
+	l.unrecorded("a", n+1, false)
+	l.allow("a", t0.Add(time.Second))
+	return l.allow("a", t0.Add(time.Minute))
+}
+
+// RefusalRetryForTest fails one refusal's audit write with retry and
+// reports what the caller's next refusal a second later gets.
+func RefusalRetryForTest() (bool, int) {
+	l := newRefusalLimiter(time.Minute)
+	t0 := time.Unix(1_000_000, 0)
+	_, n := l.allow("a", t0)
+	l.unrecorded("a", n+1, true)
+	return l.allow("a", t0.Add(time.Second))
+}
