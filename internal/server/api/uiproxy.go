@@ -79,8 +79,8 @@ func withVia(ctx context.Context, payload map[string]any) map[string]any {
 // a user token, and the token is a valid user token. A refusal is
 // audited with the proxy as actor when the leader serves the request;
 // a follower serving a read only logs it. Each caller gets at most one
-// refusal row per refusalAuditWindow; the next row counts the refusals
-// in between as "suppressed".
+// refusal row per refusalAuditWindow for each kind and route; the next
+// row counts the refusals in between as "suppressed".
 func (s *Server) delegate(w http.ResponseWriter, r *http.Request, proxy string, delegable bool) string {
 	// kind is a fixed name for the refusal and r.Pattern a registered
 	// route, so the keys stay bounded while a new kind of refusal, or one
@@ -147,7 +147,7 @@ func tokenErr(kind string, err error) error { return &userTokenError{kind: kind,
 // leeway, with a lifetime of at most --ui-proxy-max-token-ttl, and not
 // sender constrained, since the proxy presents it as a bearer.
 func (s *Server) verifyUserToken(token string) (string, error) {
-	// Parsed once on its own so an unparsable token and a bad signature
+	// Parsed here first so an unparsable token and a bad signature
 	// are different kinds of refusal.
 	if _, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES256}); err != nil {
 		return "", tokenErr("malformed", fmt.Errorf("parse jwt: %w", err))
@@ -189,13 +189,13 @@ func (s *Server) verifyUserToken(token string) (string, error) {
 	return id.String(), nil
 }
 
-// refusalAuditWindow is how often one caller's refused user tokens of
-// one kind reach the audit chain, so a caller looping bad requests
+// refusalAuditWindow is how often one caller's refusals of one kind on
+// one route reach the audit chain, so a caller looping bad requests
 // cannot grow the chain at will.
 const refusalAuditWindow = time.Minute
 
-// refusalMaxCallers bounds the (caller, kind) pairs refusalLimiter tracks. Past it a
-// refusal is audited rather than suppressed.
+// refusalMaxCallers bounds the (caller, kind, route) keys refusalLimiter
+// tracks. Past it a refusal is audited rather than suppressed.
 const refusalMaxCallers = 10_000
 
 type refusalState struct {
@@ -203,8 +203,8 @@ type refusalState struct {
 	suppressed int
 }
 
-// refusalLimiter lets one refusal per caller per window through to the
-// audit chain and counts the rest.
+// refusalLimiter lets one refusal per caller, kind and route per window
+// through to the audit chain and counts the rest.
 type refusalLimiter struct {
 	mu      sync.Mutex
 	window  time.Duration
