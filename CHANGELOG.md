@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-21
+
+Follow-ups to 0.14.0's UI sign-in: chart values for `--ui-proxy`, sign-in across UI replicas, and fewer audit rows for repeated refused user tokens.
+
 ### Added
 
 - **Chart values for `--ui-proxy`.** `server.uiProxy.proxies`, `.audience` and `.maxTokenTTL` set `--ui-proxy`, `--ui-proxy-audience` and `--ui-proxy-max-token-ttl`. `--require-auth` and `--oidc-idp` still go through `server.extraArgs`.
@@ -16,6 +20,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Changed
 
 - **A refused `Omega-User-Token` is audited at most once a minute per caller, route and kind of refusal.** A caller looping bad requests no longer adds a `ui_proxy.delegate` row per request; the next row counts the refusals in between as `suppressed`, and `omega_ui_proxy_refusals_suppressed_total` counts them as well.
+
+### Security
+
+- **Raised the Go requirement to 1.26.10** for GO-2026-6809 in `crypto/x509`.
 
 ## [0.14.0] - 2026-10-20
 
@@ -1012,7 +1020,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/kanywst/omega/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kanywst/omega/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/kanywst/omega/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/kanywst/omega/compare/v0.11.0...v0.12.0
