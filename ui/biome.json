@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
   "vcs": { "enabled": false },
   "files": {
     "includes": [
@@ -8,7 +8,8 @@
       "!**/node_modules",
       "!**/public",
       "!**/next-env.d.ts",
-      "!**/app/globals.css"
+      "!**/app/globals.css",
+      "!**/*.md"
     ]
   },
   "formatter": {
