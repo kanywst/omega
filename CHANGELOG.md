@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Security
+
+- **A `null`-valued property no longer matches another `null`.** In an AuthZEN request, `null` in `context` or in subject / resource `properties` used to reach Cedar as `""`, so a subject and a resource that both sent `"tenant": null` satisfied `principal.tenant == resource.tenant` and were allowed. A `null` property is now left out, as if it had not been sent: `has` is false, and reading it without a `has` guard is an evaluation error, so a `permit` that reads it does not grant and a `forbid` that reads it denies. A `null` array element, and a `null` member of a nested object, are dropped too. A `forbid` that reads such a property without `has` used to be skipped (`"" == true` is false) and now denies. Requests carrying `null` are still accepted, as the §11.5 erratum proposed in [openid/authzen#792](https://github.com/openid/authzen/pull/792) requires.
+
 ## [0.15.0] - 2026-10-21
 
 Follow-ups to 0.14.0's UI sign-in: chart values for `--ui-proxy`, sign-in across UI replicas, and fewer audit rows for repeated refused user tokens.

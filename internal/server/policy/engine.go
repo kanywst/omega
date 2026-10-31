@@ -575,12 +575,20 @@ func requestEntities(subUID cedar.EntityUID, subAttrs map[string]any, resUID ced
 // Only the JSON primitive shapes are bridged; nested arrays/objects fall
 // through as Cedar strings of their JSON representation, which avoids
 // pretending to support full Cedar value translation.
+//
+// A null-valued property is left out of the record (AuthZEN §11.5 lets a
+// receiver treat it as absent). Cedar has no null, and any stand-in value
+// would let two nulls compare equal, so `principal.tenant ==
+// resource.tenant` would hold when neither side has a tenant.
 func recordFromMap(m map[string]any) (cedar.Record, error) {
 	if len(m) == 0 {
 		return cedar.NewRecord(cedar.RecordMap{}), nil
 	}
 	out := cedar.RecordMap{}
 	for k, v := range m {
+		if v == nil {
+			continue
+		}
 		val, err := valueOf(v)
 		if err != nil {
 			return cedar.Record{}, fmt.Errorf("%q: %w", k, err)
@@ -593,7 +601,7 @@ func recordFromMap(m map[string]any) (cedar.Record, error) {
 func valueOf(v any) (cedar.Value, error) {
 	switch x := v.(type) {
 	case nil:
-		return cedar.String(""), nil
+		return nil, errors.New("null has no Cedar value")
 	case bool:
 		if x {
 			return cedar.True, nil
@@ -630,6 +638,11 @@ func valueOf(v any) (cedar.Value, error) {
 	case []any:
 		vals := make([]cedar.Value, 0, len(x))
 		for _, e := range x {
+			// Dropped for the same reason as a null property: kept as a
+			// member, it would make two sets overlap on nothing.
+			if e == nil {
+				continue
+			}
 			val, err := valueOf(e)
 			if err != nil {
 				return nil, err
@@ -638,7 +651,32 @@ func valueOf(v any) (cedar.Value, error) {
 		}
 		return cedar.NewSet(vals...), nil
 	default:
-		raw, _ := json.Marshal(x)
+		raw, _ := json.Marshal(stripNulls(x))
 		return cedar.String(string(raw)), nil
 	}
+}
+
+// stripNulls removes null members from a nested object or array before it
+// is flattened to JSON text, so `{"tenant": null}` and `{}` compare equal
+// and two nulls never make two objects match.
+func stripNulls(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			if e != nil {
+				out[k] = stripNulls(e)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(x))
+		for _, e := range x {
+			if e != nil {
+				out = append(out, stripNulls(e))
+			}
+		}
+		return out
+	}
+	return v
 }
