@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-31
+
+A security fix for `null` values in AuthZEN requests.
+
 ### Security
 
 - **A `null`-valued property no longer matches another `null`.** In an AuthZEN request, `null` in `context` or in subject / resource `properties` used to reach Cedar as `""`, so a subject and a resource that both sent `"tenant": null` satisfied `principal.tenant == resource.tenant` and were allowed. A property whose value is `null`, or holds a `null` anywhere inside an array or object, is now left out, as if it had not been sent: `has` is false, and reading it without a `has` guard is an evaluation error, so a `permit` that reads it does not grant and a `forbid` that reads it denies. A `forbid` that reads such a property without `has` used to be skipped (`"" == true` is false) and now denies. Requests carrying `null` are still accepted, as the §11.5 erratum proposed in [openid/authzen#792](https://github.com/openid/authzen/pull/792) requires.
@@ -1024,7 +1028,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/kanywst/omega/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/kanywst/omega/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kanywst/omega/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/kanywst/omega/compare/v0.12.0...v0.13.0
