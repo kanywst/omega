@@ -37,8 +37,19 @@ Nothing is queued here; the items below are the next candidates.
 
 - IETF WIMSE multi-domain identity. Track WG draft progress before
   committing to an in-tree implementation.
-- NIST PQC: ML-DSA / ML-KEM / SLH-DSA support for CA and JWT-SVID
-  signing once Go's standard library exposes stable APIs.
+- NIST PQC: ML-DSA support for CA and JWT-SVID signing. The Go side
+  is no longer the gate: Go 1.27 ships `crypto/mldsa` and ML-DSA in
+  `crypto/x509` and `crypto/tls`, and TLS already negotiates the hybrid
+  `X25519MLKEM768` key exchange by default, so ML-KEM needs nothing
+  from omega. What still blocks an in-tree ML-DSA CA (re-checked
+  October 2026) is everything around it: a SPIFFE bundle carries keys
+  as JWKs and there is no registered JWK form for ML-DSA yet (the
+  JOSE/COSE ML-DSA draft is still a draft and go-jose does not support
+  it), and SPIRE has not shipped ML-DSA SVIDs (spiffe/spire issues for
+  X.509 / JWT ML-DSA SVIDs and PQC are open), so an omega trust domain
+  signed with ML-DSA could not federate with, or consume from, SPIRE.
+  Revisit when either lands. SLH-DSA has no Go standard library
+  package.
 - AuthZEN PDP capability metadata (§9.1.2) and the `page.properties`
   Search extension that depends on it. Moved here from Now in October
   2026: the Final specification creates the "AuthZEN Policy Decision
