@@ -576,17 +576,19 @@ func requestEntities(subUID cedar.EntityUID, subAttrs map[string]any, resUID ced
 // through as Cedar strings of their JSON representation, which avoids
 // pretending to support full Cedar value translation.
 //
-// A null-valued property is left out of the record (AuthZEN §11.5 lets a
-// receiver treat it as absent). Cedar has no null, and any stand-in value
-// would let two nulls compare equal, so `principal.tenant ==
-// resource.tenant` would hold when neither side has a tenant.
+// A property whose value is null, or holds a null anywhere inside it, is
+// left out of the record (AuthZEN §11.5 lets a receiver treat a null as
+// absent). Cedar has no null, and any stand-in value, or silently dropping
+// the null inside an array or object, would let two nulls compare equal,
+// so `principal.tenant == resource.tenant` would hold when neither side
+// has a tenant.
 func recordFromMap(m map[string]any) (cedar.Record, error) {
 	if len(m) == 0 {
 		return cedar.NewRecord(cedar.RecordMap{}), nil
 	}
 	out := cedar.RecordMap{}
 	for k, v := range m {
-		if v == nil {
+		if containsNull(v) {
 			continue
 		}
 		val, err := valueOf(v)
@@ -638,11 +640,6 @@ func valueOf(v any) (cedar.Value, error) {
 	case []any:
 		vals := make([]cedar.Value, 0, len(x))
 		for _, e := range x {
-			// Dropped for the same reason as a null property: kept as a
-			// member, it would make two sets overlap on nothing.
-			if e == nil {
-				continue
-			}
 			val, err := valueOf(e)
 			if err != nil {
 				return nil, err
@@ -651,32 +648,28 @@ func valueOf(v any) (cedar.Value, error) {
 		}
 		return cedar.NewSet(vals...), nil
 	default:
-		raw, _ := json.Marshal(stripNulls(x))
+		raw, _ := json.Marshal(x)
 		return cedar.String(string(raw)), nil
 	}
 }
 
-// stripNulls removes null members from a nested object or array before it
-// is flattened to JSON text, so `{"tenant": null}` and `{}` compare equal
-// and two nulls never make two objects match.
-func stripNulls(v any) any {
+// containsNull reports whether v is null or holds a null at any depth.
+func containsNull(v any) bool {
 	switch x := v.(type) {
+	case nil:
+		return true
 	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, e := range x {
-			if e != nil {
-				out[k] = stripNulls(e)
-			}
-		}
-		return out
-	case []any:
-		out := make([]any, 0, len(x))
 		for _, e := range x {
-			if e != nil {
-				out = append(out, stripNulls(e))
+			if containsNull(e) {
+				return true
 			}
 		}
-		return out
+	case []any:
+		for _, e := range x {
+			if containsNull(e) {
+				return true
+			}
+		}
 	}
-	return v
+	return false
 }

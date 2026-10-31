@@ -65,18 +65,50 @@ func TestNullContextPropertyIsAbsent(t *testing.T) {
 	}
 }
 
-func TestNullSetElementsAreDropped(t *testing.T) {
-	e := loadEngine(t, `permit (principal, action, resource) when { principal.groups.containsAny(resource.groups) };`)
+// A property that holds a null anywhere is absent as a whole. Dropping
+// only the null would leave `[null]` and `[]`, or `{"tenant": null}` and
+// `{}`, equal on both sides.
+func TestPropertiesHoldingNullAreAbsent(t *testing.T) {
+	e := loadEngine(t, `permit (principal, action == Action::"OVERLAP", resource) when { principal.groups.containsAny(resource.groups) };
+permit (principal, action == Action::"SETEQ", resource) when { principal.groups == resource.groups };
+permit (principal, action == Action::"OBJEQ", resource) when { principal.org == resource.org };`)
+	cases := []struct{ action, sub, res string }{
+		{"OVERLAP", `{"groups": [null]}`, `{"groups": [null, "ops"]}`},
+		{"SETEQ", `{"groups": [null]}`, `{"groups": [null]}`},
+		{"SETEQ", `{"groups": [null]}`, `{"groups": []}`},
+		{"OBJEQ", `{"org": {"tenant": null}}`, `{"org": {"tenant": null}}`},
+		{"OBJEQ", `{"org": {"tenant": null}}`, `{"org": {}}`},
+		{"OBJEQ", `{"org": {"tenant": null}}`, `{"org": {"tenant": "acme"}}`},
+		{"OBJEQ", `{"org": [{"tenant": null}]}`, `{"org": [{"tenant": null}]}`},
+	}
+	for _, c := range cases {
+		resp, err := e.Evaluate(decodeReq(t, `{
+		  "subject":  {"type": "User", "id": "alice", "properties": `+c.sub+`},
+		  "action":   {"name": "`+c.action+`"},
+		  "resource": {"type": "Doc", "id": "d1", "properties": `+c.res+`}
+		}`))
+		if err != nil {
+			t.Fatalf("%s %s vs %s: a null must be accepted, got %v", c.action, c.sub, c.res, err)
+		}
+		if resp.Decision {
+			t.Errorf("%s %s vs %s: a property holding a null must not match", c.action, c.sub, c.res)
+		}
+	}
+}
+
+// Properties without a null still convert as before.
+func TestNullFreeNestedValuesStillMatch(t *testing.T) {
+	e := loadEngine(t, `permit (principal, action, resource) when { principal.org == resource.org && principal.groups.contains("ops") };`)
 	resp, err := e.Evaluate(decodeReq(t, `{
-	  "subject":  {"type": "User", "id": "alice", "properties": {"groups": [null]}},
+	  "subject":  {"type": "User", "id": "alice", "properties": {"org": {"tenant": "acme"}, "groups": ["ops"], "note": null}},
 	  "action":   {"name": "GET"},
-	  "resource": {"type": "Doc", "id": "d1", "properties": {"groups": [null, "ops"]}}
+	  "resource": {"type": "Doc", "id": "d1", "properties": {"org": {"tenant": "acme"}}}
 	}`))
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
-	if resp.Decision {
-		t.Errorf("null elements must not become a shared \"\" member of both sets")
+	if !resp.Decision {
+		t.Errorf("null-free properties must keep matching; a null sibling must not affect them")
 	}
 }
 
@@ -96,20 +128,5 @@ forbid (principal, action, resource) when { context.revoked == true };`)
 	}
 	if resp.Decision {
 		t.Errorf("a forbid that cannot read context.revoked must deny")
-	}
-}
-
-func TestNullsInNestedObjectsDoNotMatch(t *testing.T) {
-	e := loadEngine(t, `permit (principal, action, resource) when { principal.org == resource.org };`)
-	resp, err := e.Evaluate(decodeReq(t, `{
-	  "subject":  {"type": "User", "id": "alice", "properties": {"org": {"tenant": null}}},
-	  "action":   {"name": "GET"},
-	  "resource": {"type": "Doc", "id": "d1", "properties": {"org": {"tenant": "acme"}}}
-	}`))
-	if err != nil {
-		t.Fatalf("evaluate: %v", err)
-	}
-	if resp.Decision {
-		t.Errorf("a null nested member must not match a set one")
 	}
 }
