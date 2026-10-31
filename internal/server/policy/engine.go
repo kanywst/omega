@@ -575,12 +575,22 @@ func requestEntities(subUID cedar.EntityUID, subAttrs map[string]any, resUID ced
 // Only the JSON primitive shapes are bridged; nested arrays/objects fall
 // through as Cedar strings of their JSON representation, which avoids
 // pretending to support full Cedar value translation.
+//
+// A property whose value is null, or holds a null anywhere inside it, is
+// left out of the record (AuthZEN §11.5 lets a receiver treat a null as
+// absent). Cedar has no null, and any stand-in value, or silently dropping
+// the null inside an array or object, would let two nulls compare equal,
+// so `principal.tenant == resource.tenant` would hold when neither side
+// has a tenant.
 func recordFromMap(m map[string]any) (cedar.Record, error) {
 	if len(m) == 0 {
 		return cedar.NewRecord(cedar.RecordMap{}), nil
 	}
 	out := cedar.RecordMap{}
 	for k, v := range m {
+		if containsNull(v) {
+			continue
+		}
 		val, err := valueOf(v)
 		if err != nil {
 			return cedar.Record{}, fmt.Errorf("%q: %w", k, err)
@@ -593,7 +603,7 @@ func recordFromMap(m map[string]any) (cedar.Record, error) {
 func valueOf(v any) (cedar.Value, error) {
 	switch x := v.(type) {
 	case nil:
-		return cedar.String(""), nil
+		return nil, errors.New("null has no Cedar value")
 	case bool:
 		if x {
 			return cedar.True, nil
@@ -641,4 +651,25 @@ func valueOf(v any) (cedar.Value, error) {
 		raw, _ := json.Marshal(x)
 		return cedar.String(string(raw)), nil
 	}
+}
+
+// containsNull reports whether v is null or holds a null at any depth.
+func containsNull(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case map[string]any:
+		for _, e := range x {
+			if containsNull(e) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if containsNull(e) {
+				return true
+			}
+		}
+	}
+	return false
 }
