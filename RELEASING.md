@@ -14,8 +14,14 @@ cut from `main` only.
 
 ## Cadence
 
-Pre-1.0: release as features are ready, with at most one minor per
-month so downstream consumers can plan upgrades.
+Pre-1.0: release as features are ready. A minor is cut when a
+user-visible feature or change lands, so several can ship in one
+month (October 2026 shipped 0.6.0 through 0.15.0). Each minor's
+breaking changes are listed under "Changed" in `CHANGELOG.md`, which
+is what lets a consumer skip versions and still upgrade safely. A
+security fix ships as a patch as soon as it is ready. When only
+dependency bumps have landed since the last tag, no release is cut
+unless `govulncheck` on that tag reports a reachable vulnerability.
 
 After 1.0: minor releases on a 6-week cadence, patch releases as
 needed.
