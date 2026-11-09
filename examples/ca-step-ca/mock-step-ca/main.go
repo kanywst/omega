@@ -101,7 +101,7 @@ func main() {
 		// OTT verification: signature against the configured provisioner
 		// public JWK, then claim-level checks for the fields omega
 		// promises to bind.
-		sig, err := jose.ParseSigned(req.OTT, []jose.SignatureAlgorithm{jose.ES256})
+		sig, err := jose.ParseSignedCompact(req.OTT, []jose.SignatureAlgorithm{jose.ES256})
 		if err != nil {
 			http.Error(w, "parse ott: "+err.Error(), http.StatusUnauthorized)
 			return

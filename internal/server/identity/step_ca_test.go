@@ -111,7 +111,7 @@ func newStepCAFixture(t *testing.T, provisioner string) *stepCAFixture {
 		}
 		// Verify the OTT signature against the provisioner's public
 		// JWK and extract the sans / sha for the assertions below.
-		sig, err := jose.ParseSigned(req.OTT, []jose.SignatureAlgorithm{jose.ES256})
+		sig, err := jose.ParseSignedCompact(req.OTT, []jose.SignatureAlgorithm{jose.ES256})
 		if err != nil {
 			http.Error(w, "parse ott: "+err.Error(), http.StatusUnauthorized)
 			return
