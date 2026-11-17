@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Security
+
+- **Raised the Go requirement to 1.26.11** for GO-2026-6859 in `net/http`.
+
 ## [0.15.1] - 2026-10-31
 
 A security fix for `null` values in AuthZEN requests.
