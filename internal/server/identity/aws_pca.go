@@ -43,7 +43,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/acmpca"
+	"github.com/aws/aws-sdk-go-v2/service/acmpca/schemas"
 	acmpcatypes "github.com/aws/aws-sdk-go-v2/service/acmpca/types"
+	"github.com/aws/smithy-go/transport/http/protocol/awsjson"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
@@ -160,6 +162,10 @@ func newAWSPCAAuthority(local *localAuthority, cfg Config) (*awsPCAAuthority, er
 		return nil, fmt.Errorf("identity: aws-pca: load aws config: %w", err)
 	}
 	client := acmpca.NewFromConfig(awsCfg, func(o *acmpca.Options) {
+		// acmpca >= v1.57 defaults to RPCv2 CBOR. Stay on AWS JSON 1.1,
+		// which ACM PCA still serves and which PCA-compatible endpoints
+		// given via --endpoint (and our mock-pca) actually speak.
+		o.Protocol = awsjson.New11(schemas.ACMPrivateCA)
 		if endpoint != "" {
 			o.BaseEndpoint = aws.String(endpoint)
 		}
