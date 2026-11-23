@@ -41,22 +41,31 @@ Nothing is queued here; the items below are the next candidates.
   is no longer the gate: Go 1.27 ships `crypto/mldsa` and ML-DSA in
   `crypto/x509` and `crypto/tls`, and TLS already negotiates the hybrid
   `X25519MLKEM768` key exchange by default, so ML-KEM needs nothing
-  from omega. What still blocks an in-tree ML-DSA CA (re-checked
-  October 2026) is everything around it: a SPIFFE bundle carries keys
-  as JWKs and there is no registered JWK form for ML-DSA yet (the
-  JOSE/COSE ML-DSA draft is still a draft and go-jose does not support
-  it), and SPIRE has not shipped ML-DSA SVIDs (spiffe/spire issues for
-  X.509 / JWT ML-DSA SVIDs and PQC are open), so an omega trust domain
-  signed with ML-DSA could not federate with, or consume from, SPIRE.
-  Revisit when either lands. SLH-DSA has no Go standard library
-  package.
+  from omega. The JOSE side is no longer the gate either: RFC 9964
+  (May 2026) registers the ML-DSA JWK form and algorithms, and go-jose
+  supports it from v4.1.8. What still blocks an in-tree ML-DSA CA
+  (re-checked November 2026) is SPIRE: it has not shipped ML-DSA SVIDs
+  (spiffe/spire#7205 for X.509 / JWT ML-DSA SVIDs is open and in the
+  backlog), so an omega trust domain signed with ML-DSA could not
+  federate with, or consume from, SPIRE. Revisit when it lands. SLH-DSA
+  has no Go standard library package.
 - AuthZEN PDP capability metadata (§9.1.2) and the `page.properties`
   Search extension that depends on it. Moved here from Now in October
   2026: the Final specification creates the "AuthZEN Policy Decision
   Point Capabilities" registry (§12.3) with no initial entries, so
   there is no URN omega could declare, and the spec names the metadata
   key both `capabilities` (§9.1.2) and `supported_capabilities`
-  (§8.2.1). Revisit when the first capability is registered.
+  (§8.2.1). Revisit when the first capability is registered; still
+  none in November 2026, and the form a capability value takes is an
+  open question (openid/authzen#771).
+- AuthZEN Obligations. The working group split the profile in November
+  2026 (openid/authzen#697) into the Obligations Core extension (the
+  `obligations` member, PEP opt-in through
+  `supported_mandatory_extensions`, and a plain deny when the PEP has
+  not opted in) and a Standard Types Profile with the normative types.
+  Cedar has no obligation concept, so supporting it means deciding
+  where obligations come from (policy annotations or a side table).
+  Revisit when the extension is adopted as a stable draft.
 
 ## Non-goals
 
