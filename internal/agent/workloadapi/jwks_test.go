@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,8 +78,17 @@ func TestValidateAgainstJWKSAcceptsEverySPIREKeyType(t *testing.T) {
 				t.Fatalf("sub = %q", sub)
 			}
 
-			// The same kid with a different algorithm is refused.
 			other := map[jose.SignatureAlgorithm]crypto.Signer{jose.ES256: p256, jose.ES384: p384, jose.RS256: rsaKey}
+
+			// A token under this kid but another algorithm is refused by
+			// the alg pin itself, not only by go-jose's key-type check.
+			mismatch := map[jose.SignatureAlgorithm]jose.SignatureAlgorithm{jose.ES256: jose.ES384, jose.ES384: jose.ES256, jose.RS256: jose.ES256}[tc.alg]
+			_, _, err = validateAgainstJWKS(context.Background(), s, sign(mismatch, other[mismatch]), "api")
+			if err == nil || !strings.Contains(err.Error(), "does not match") {
+				t.Fatalf("mismatched alg: err = %v, want the alg pin to refuse it", err)
+			}
+
+			// No other key type's token validates under this kid.
 			for alg, key := range other {
 				if alg == tc.alg {
 					continue

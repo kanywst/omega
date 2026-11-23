@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -63,6 +65,10 @@ func parseUpstreamJWKS(jwksJSON []byte) (map[string]JWTVerificationKey, []byte, 
 		keys[k.Kid] = key
 		canonical = append(canonical, jwk)
 	}
+	// Sorted by kid: go-spiffe marshals a bundle from a map, so the same
+	// keys arrive in a different order on every push, and an unsorted
+	// re-encoding would count each re-push as a rotation.
+	slices.SortFunc(canonical, func(a, b map[string]string) int { return strings.Compare(a["kid"], b["kid"]) })
 	if len(keys) == 0 {
 		return nil, nil, errors.New("identity: upstream JWKS contained no usable signing keys (EC P-256, EC P-384 or RSA)")
 	}

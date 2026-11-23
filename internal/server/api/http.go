@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -453,8 +454,35 @@ func (s *Server) getOIDCDiscovery(w http.ResponseWriter, _ *http.Request) {
 		JWKSURI:                          iss + "/v1/jwt/bundle",
 		ResponseTypesSupported:           []string{"id_token"},
 		SubjectTypesSupported:            []string{"public"},
-		IDTokenSigningAlgValuesSupported: []string{"ES256"},
+		IDTokenSigningAlgValuesSupported: s.jwtSigningAlgs(),
 	})
+}
+
+// jwtSigningAlgs lists the algorithms of the keys served at jwks_uri. In
+// spire-upstream mode those are the upstream's keys, which may be RS256 or
+// ES384; a relying party that takes this list as its allow-list would
+// otherwise refuse every upstream token.
+func (s *Server) jwtSigningAlgs() []string {
+	algs := []string{}
+	if raw, err := s.ca.JWTBundle(); err == nil {
+		var set struct {
+			Keys []struct {
+				Alg string `json:"alg"`
+			} `json:"keys"`
+		}
+		if json.Unmarshal(raw, &set) == nil {
+			for _, k := range set.Keys {
+				if k.Alg != "" && !slices.Contains(algs, k.Alg) {
+					algs = append(algs, k.Alg)
+				}
+			}
+		}
+	}
+	if len(algs) == 0 {
+		return []string{"ES256"}
+	}
+	slices.Sort(algs)
+	return algs
 }
 
 // AuthzenDiscoveryResponse is the discovery document advertised at

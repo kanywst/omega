@@ -160,7 +160,11 @@ func TestNewUpstreamSourceWithJWTRejectsCorruptRSAAndP384Keys(t *testing.T) {
 		"RSA under 2048 bits": spireJWKS(t, "a", &small.PublicKey),
 		"RSA even exponent":   fmt.Appendf(nil, `{"keys":[{"kty":"RSA","kid":"a","n":%q,"e":"Ag"}]}`, rsaJWK["n"]),
 		"RSA n leading zero":  fmt.Appendf(nil, `{"keys":[{"kty":"RSA","kid":"a","n":%q,"e":"AQAB"}]}`, paddedN),
-		"RSA missing kid":     fmt.Appendf(nil, `{"keys":[{"kty":"RSA","n":%q,"e":"AQAB"}]}`, rsaJWK["n"]),
+		// Both load as RSA keys but crypto/rsa refuses them at
+		// verification, so every token would fail after a clean start.
+		"RSA even modulus":          fmt.Appendf(nil, `{"keys":[{"kty":"RSA","kid":"a","n":%q,"e":"AQAB"}]}`, base64.RawURLEncoding.EncodeToString(append([]byte{1}, make([]byte, 256)...))),
+		"RSA exponent above 2^31-1": fmt.Appendf(nil, `{"keys":[{"kty":"RSA","kid":"a","n":%q,"e":"_____w"}]}`, rsaJWK["n"]),
+		"RSA missing kid":           fmt.Appendf(nil, `{"keys":[{"kty":"RSA","n":%q,"e":"AQAB"}]}`, rsaJWK["n"]),
 		// P-256-sized coordinates on a P-384 key.
 		"P-384 short coordinates": fmt.Appendf(nil, `{"keys":[{"kty":"EC","crv":"P-384","kid":"a","x":%q,"y":%q}]}`, x, y),
 	}

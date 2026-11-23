@@ -597,6 +597,12 @@ func validateAgainstJWKS(ctx context.Context, s *Server, token, audience string)
 	if err := parsed.Claims(key.Key, &claims, &raw); err != nil {
 		return "", nil, status.Errorf(codes.PermissionDenied, "verify: %v", err)
 	}
+	// go-jose skips the expiry check when exp is absent, which would make
+	// such a token valid forever; JWT-SVIDs must carry exp, and the
+	// control plane already refuses one without it.
+	if claims.Expiry == nil {
+		return "", nil, status.Error(codes.PermissionDenied, "jwt is missing the required exp claim")
+	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
 		AnyAudience: jwt.Audience{audience},
 		Time:        time.Now(),

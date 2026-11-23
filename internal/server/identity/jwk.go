@@ -173,6 +173,9 @@ func rsaPublicKeyFromJWK(n, e string) (*rsa.PublicKey, error) {
 		return nil, errors.New("jwk n must be a non-empty big-endian integer without leading zeros")
 	}
 	modulus := new(big.Int).SetBytes(nb)
+	if modulus.Bit(0) == 0 {
+		return nil, errors.New("jwk RSA modulus is even")
+	}
 	if bits := modulus.BitLen(); bits < minRSAKeyBits {
 		return nil, fmt.Errorf("jwk RSA modulus is %d bits, want at least %d", bits, minRSAKeyBits)
 	}
@@ -180,7 +183,9 @@ func rsaPublicKeyFromJWK(n, e string) (*rsa.PublicKey, error) {
 		return nil, errors.New("jwk e must be a big-endian integer of 1 to 4 bytes without leading zeros")
 	}
 	exp := new(big.Int).SetBytes(eb).Int64()
-	if exp < 3 || exp%2 == 0 {
+	// crypto/rsa refuses an exponent above 2^31-1 at verification time,
+	// so a larger one would load and then fail every token.
+	if exp < 3 || exp%2 == 0 || exp > 1<<31-1 {
 		return nil, fmt.Errorf("jwk RSA exponent %d is not an odd integer of at least 3", exp)
 	}
 	return &rsa.PublicKey{N: modulus, E: int(exp)}, nil
