@@ -33,7 +33,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	workloadpb "github.com/spiffe/go-spiffe/v2/proto/spiffe/workload"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -44,6 +43,7 @@ import (
 
 	"github.com/kanywst/omega/internal/agent/attestor"
 	"github.com/kanywst/omega/internal/server/api"
+	"github.com/kanywst/omega/internal/server/identity"
 )
 
 // Mapping maps a peer UID to the SPIFFE ID the agent will request on
@@ -122,7 +122,7 @@ type Server struct {
 // every RPC.
 type jwksSnapshot struct {
 	raw         []byte
-	keys        map[string]*ecdsa.PublicKey
+	keys        map[string]identity.JWTVerificationKey
 	trustDomain string
 	expiry      time.Time
 }
@@ -577,7 +577,7 @@ func validateAgainstJWKS(ctx context.Context, s *Server, token, audience string)
 		return "", nil, err
 	}
 	keySet := snap.keys
-	parsed, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES256})
+	parsed, err := jwt.ParseSigned(token, identity.JWTSVIDAlgs)
 	if err != nil {
 		return "", nil, status.Errorf(codes.InvalidArgument, "parse jwt: %v", err)
 	}
@@ -585,13 +585,16 @@ func validateAgainstJWKS(ctx context.Context, s *Server, token, audience string)
 		return "", nil, status.Error(codes.InvalidArgument, "jwt has no header")
 	}
 	kid := parsed.Headers[0].KeyID
-	pub, ok := keySet[kid]
+	key, ok := keySet[kid]
 	if !ok {
 		return "", nil, status.Errorf(codes.PermissionDenied, "unknown kid %q", kid)
 	}
+	if alg := parsed.Headers[0].Algorithm; alg != string(key.Alg) {
+		return "", nil, status.Errorf(codes.PermissionDenied, "jwt alg %q does not match the %s key %q", alg, key.Alg, kid)
+	}
 	var claims jwt.Claims
 	var raw map[string]any
-	if err := parsed.Claims(pub, &claims, &raw); err != nil {
+	if err := parsed.Claims(key.Key, &claims, &raw); err != nil {
 		return "", nil, status.Errorf(codes.PermissionDenied, "verify: %v", err)
 	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
@@ -603,47 +606,29 @@ func validateAgainstJWKS(ctx context.Context, s *Server, token, audience string)
 	return claims.Subject, raw, nil
 }
 
-func parseJWKS(raw []byte) (map[string]*ecdsa.PublicKey, error) {
+// parseJWKS reads the control plane's /v1/jwt/bundle into the keys the
+// agent verifies JWT-SVIDs with. It accepts the same signing keys the
+// control plane does (EC P-256, EC P-384, RSA) through the same parser, so
+// an upstream SPIRE whose JWT key is RSA validates here too. Keys it does
+// not consume are skipped; a recognised key that cannot be decoded is an
+// error.
+func parseJWKS(raw []byte) (map[string]identity.JWTVerificationKey, error) {
 	var jwks struct {
-		Keys []struct {
-			Kty string `json:"kty"`
-			Crv string `json:"crv"`
-			Kid string `json:"kid"`
-			X   string `json:"x"`
-			Y   string `json:"y"`
-		} `json:"keys"`
+		Keys []identity.JWK `json:"keys"`
 	}
 	if err := json.Unmarshal(raw, &jwks); err != nil {
 		return nil, err
 	}
-	out := make(map[string]*ecdsa.PublicKey, len(jwks.Keys))
+	out := make(map[string]identity.JWTVerificationKey, len(jwks.Keys))
 	for _, k := range jwks.Keys {
-		if k.Kty != "EC" || k.Crv != "P-256" {
+		key, ok, err := identity.ParseJWTSigningKey(k)
+		if !ok {
 			continue
 		}
-		xb, err := base64.RawURLEncoding.DecodeString(k.X)
 		if err != nil {
-			return nil, fmt.Errorf("jwk x: %w", err)
+			return nil, err
 		}
-		yb, err := base64.RawURLEncoding.DecodeString(k.Y)
-		if err != nil {
-			return nil, fmt.Errorf("jwk y: %w", err)
-		}
-		if len(xb) != 32 || len(yb) != 32 {
-			return nil, fmt.Errorf("jwk coordinates must be 32 bytes each (got x=%d, y=%d)", len(xb), len(yb))
-		}
-		// SEC 1 uncompressed encoding; ParseUncompressedPublicKey rejects
-		// points off the curve and the point at infinity, which the raw
-		// big.Int coordinate assignment this replaced never checked.
-		point := make([]byte, 0, 65)
-		point = append(point, 0x04)
-		point = append(point, xb...)
-		point = append(point, yb...)
-		pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
-		if err != nil {
-			return nil, fmt.Errorf("jwk point is not on the P-256 curve: %w", err)
-		}
-		out[k.Kid] = pub
+		out[k.Kid] = key
 	}
 	return out, nil
 }

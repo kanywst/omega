@@ -66,6 +66,19 @@ off-curve coordinate, a missing `kid`, a duplicate `kid`) is a corrupt
 trust anchor, not a foreign one, and fails closed at boot rather than
 being silently dropped.
 
+Amendment (November 2026): EC P-384 (ES384) and RSA (RS256, a modulus of
+at least 2048 bits) keys are consumed as well, which covers every
+`jwt_key_type` SPIRE offers. ES256-only meant an upstream on an RSA JWT
+key had to change its key type before omega could consume it. Each key
+verifies only the algorithm its type is pinned to, and a token whose
+`alg` header differs from its key's is refused, so the header never
+chooses how its own signature is checked. An RSA key that advertises
+another algorithm (`RS512`, `PS256`) is skipped as foreign; a recognised
+key that cannot be decoded (a short modulus, an even exponent) fails
+closed like a bad EC point. The control plane and the agent share one
+key parser, which keeps them on the same algorithm set as the obligation
+below requires.
+
 The issuance posture from ADR 0007 is unchanged: this source still runs
 no CA, and the issuance / token-exchange routes still return **501**.
 Consuming the upstream JWKS adds **validation**, not minting.
@@ -86,10 +99,10 @@ Harder:
 - The operator now supplies and rotates a second piece of upstream trust
   material (the JWKS) when they want JWT flows. Rotation is a file swap
   plus restart, the same lifecycle as the X.509 bundle.
-- Only EC P-256 is consumed. An upstream domain whose JWT-SVIDs are
-  signed with RSA or another curve has those keys ignored, so those
-  tokens cannot be validated until that algorithm support is added; the
-  JWKS still loads as long as it also carries an EC P-256 signing key.
+- Only EC P-256 is consumed (widened to P-384 and RSA by the amendment
+  above). An upstream domain whose JWT-SVIDs are signed with another
+  key type has those keys ignored, so those tokens cannot be validated;
+  the JWKS still loads as long as it also carries a key omega consumes.
 
 New obligations:
 

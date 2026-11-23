@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Upstream JWT-SVIDs signed with RSA or EC P-384 validate.** Under `--identity-source=spire-upstream`, the upstream JWKS may now carry EC P-384 (ES384) and RSA (RS256, 2048 bits or more) signing keys as well as EC P-256, which covers every SPIRE `jwt_key_type`. Before, an upstream on an RSA JWT key had no usable key and `--identity-source-workload-api-jwt` failed startup. Each key verifies only the algorithm its type is pinned to, and the agent validates with the same parser as the control plane. `examples/spire-interop` now runs SPIRE with `jwt_key_type = "rsa-2048"` and validates a JWT-SVID minted by `spire-server jwt mint`.
+
 ## [0.15.2] - 2026-11-24
 
 A security fix: Go 1.27.4 for GO-2026-6859, an HTTP/1 server crash in `net/http`.

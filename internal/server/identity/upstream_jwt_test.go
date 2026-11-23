@@ -142,7 +142,7 @@ func TestNewUpstreamSourceWithJWTRejectsBadJWKS(t *testing.T) {
 	cases := map[string][]byte{
 		"not json":        []byte("{not json"),
 		"no usable keys":  []byte(`{"keys":[]}`),
-		"unsupported kty": []byte(`{"keys":[{"kty":"RSA","kid":"a","n":"x","e":"AQAB"}]}`),
+		"unsupported kty": []byte(`{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"a","x":"AA"}]}`),
 		"bad coordinate":  []byte(`{"keys":[{"kty":"EC","crv":"P-256","kid":"a","x":"!!","y":"!!"}]}`),
 		"off curve":       []byte(`{"keys":[{"kty":"EC","crv":"P-256","kid":"a","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","y":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}`),
 		// Valid P-256 coordinates so the failure is tied to the intended
@@ -287,9 +287,10 @@ func TestUpstreamSourceSkipsUnsupportedKeys(t *testing.T) {
 	const td = "upstream.example"
 	key, ecJWKS := ecSigningKey(t, "k1")
 
-	// A heterogeneous upstream JWKS: an RSA key and a P-384 key omega cannot
-	// consume, alongside the one EC P-256 signer it can. The unsupported keys
-	// are ignored (RFC 7517 §5) rather than failing the whole bundle.
+	// A heterogeneous upstream JWKS: keys omega does not consume (a P-521
+	// key, an Ed25519 key, an RSA key pinned to RS512) alongside the one EC
+	// P-256 signer it can. The unsupported keys are ignored (RFC 7517 §5)
+	// rather than failing the whole bundle.
 	var set struct {
 		Keys []json.RawMessage `json:"keys"`
 	}
@@ -300,8 +301,9 @@ func TestUpstreamSourceSkipsUnsupportedKeys(t *testing.T) {
 	mixed, err := json.Marshal(struct {
 		Keys []json.RawMessage `json:"keys"`
 	}{Keys: []json.RawMessage{
-		json.RawMessage(`{"kty":"RSA","kid":"rsa1","use":"sig","n":"x","e":"AQAB"}`),
-		json.RawMessage(`{"kty":"EC","crv":"P-384","kid":"ec384","x":"AA","y":"AA"}`),
+		json.RawMessage(`{"kty":"EC","crv":"P-521","kid":"ec521","x":"AA","y":"AA"}`),
+		json.RawMessage(`{"kty":"OKP","crv":"Ed25519","kid":"ed","x":"AA"}`),
+		json.RawMessage(`{"kty":"RSA","alg":"RS512","kid":"rs512","use":"sig","n":"x","e":"AQAB"}`),
 		// A P-256 key whose alg is a key-agreement alg, and one whose
 		// key_ops omit "verify": both must be skipped, not trusted as
 		// ES256 signers.

@@ -61,7 +61,7 @@ make down
 
 Three things the mock could not have taught, all now visible in `compose.yaml` and `conf/`:
 
-- **`jwt_key_type = "ec-p256"` on the server.** SPIRE's JWT signing key follows `ca_key_type`, and omega consumes only EC P-256 (ES256) signing keys. On an RSA upstream, `--identity-source-workload-api-jwt` has no usable key and startup fails closed. This is the one place a real deployment has to meet omega halfway.
+- **`jwt_key_type = "rsa-2048"` on the server.** Until 0.16.0 omega consumed only EC P-256 (ES256) JWT signing keys, so this example had to set `ec-p256` and an RSA upstream failed closed at startup. omega now consumes every SPIRE `jwt_key_type`, and the demo runs SPIRE on RSA to prove it: it mints a JWT-SVID with `spire-server jwt mint` and validates it through omega's agent.
 - **omega needs a registration entry.** The agent answers the Workload API only for callers it can attest. Without an entry omega gets `PermissionDenied` and does not start, which is the correct behaviour and worth seeing once.
 - **The agent needs the host PID namespace.** The workload attestor resolves a caller from the pid `SO_PEERCRED` reports, which only means something in a namespace the agent can see. Without it every call fails with `could not resolve caller information` — the agent is answering, it just cannot tell who is asking.
 - **`discover_workload_path = true` on the unix attestor.** Without it the attestor emits only `uid`, `gid`, and `supplementary_gid`, so the strongest available selector is `unix:uid:0` — satisfied by every root process on the node. With it the entry can name the binary, which is what this demo registers on.
