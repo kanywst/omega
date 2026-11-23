@@ -11,6 +11,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 ### Security
 
 - **Raised the Go requirement to 1.26.11** for GO-2026-6859 in `net/http`.
+- **The release image builds with Go 1.27.4.** `go.mod` only sets the minimum; the image is built by the `golang` builder image, which was still `1.27.3-alpine` and so still shipped GO-2026-6859. v0.15.1's image is affected.
 
 ## [0.15.1] - 2026-10-31
 
