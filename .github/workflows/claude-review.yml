@@ -76,7 +76,7 @@ jobs:
         id: started
         run: echo "at=$(date -u -d '-2 minutes' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      - uses: anthropics/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc # v1
+      - uses: anthropics/claude-code-action@c84e279f859e2591391e95bd309286eb111c345f # v1
         id: claude
         with:
           # A subscription token, not an API key: runs against the Claude plan
