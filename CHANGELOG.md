@@ -8,6 +8,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-11-24
+
+A security fix: Go 1.27.4 for GO-2026-6859, an HTTP/1 server crash in `net/http`.
+
 ### Security
 
 - **Raised the Go requirement to 1.26.11** for GO-2026-6859 in `net/http`.
@@ -1033,7 +1037,8 @@ and the Kubernetes operator.
   example demos, helm lint, kind-based operator smoke test,
   govulncheck, gosec, markdownlint.
 
-[Unreleased]: https://github.com/kanywst/omega/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/kanywst/omega/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/kanywst/omega/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/kanywst/omega/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/kanywst/omega/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kanywst/omega/compare/v0.13.0...v0.14.0
