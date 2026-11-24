@@ -463,19 +463,23 @@ func (s *Server) getOIDCDiscovery(w http.ResponseWriter, _ *http.Request) {
 // ES384; a relying party that takes this list as its allow-list would
 // otherwise refuse every upstream token.
 func (s *Server) jwtSigningAlgs() []string {
+	raw, err := s.ca.JWTBundle()
+	var set struct {
+		Keys []struct {
+			Alg string `json:"alg"`
+		} `json:"keys"`
+	}
+	if err == nil {
+		err = json.Unmarshal(raw, &set)
+	}
+	if err != nil {
+		slog.Warn("oidc discovery: cannot read the JWT bundle; advertising ES256", "err", err)
+		return []string{"ES256"}
+	}
 	algs := []string{}
-	if raw, err := s.ca.JWTBundle(); err == nil {
-		var set struct {
-			Keys []struct {
-				Alg string `json:"alg"`
-			} `json:"keys"`
-		}
-		if json.Unmarshal(raw, &set) == nil {
-			for _, k := range set.Keys {
-				if k.Alg != "" && !slices.Contains(algs, k.Alg) {
-					algs = append(algs, k.Alg)
-				}
-			}
+	for _, k := range set.Keys {
+		if k.Alg != "" && !slices.Contains(algs, k.Alg) {
+			algs = append(algs, k.Alg)
 		}
 	}
 	if len(algs) == 0 {

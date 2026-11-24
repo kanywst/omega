@@ -164,7 +164,9 @@ func TestNewUpstreamSourceWithJWTRejectsCorruptRSAAndP384Keys(t *testing.T) {
 		// verification, so every token would fail after a clean start.
 		"RSA even modulus":          fmt.Appendf(nil, `{"keys":[{"kty":"RSA","kid":"a","n":%q,"e":"AQAB"}]}`, base64.RawURLEncoding.EncodeToString(append([]byte{1}, make([]byte, 256)...))),
 		"RSA exponent above 2^31-1": fmt.Appendf(nil, `{"keys":[{"kty":"RSA","kid":"a","n":%q,"e":"_____w"}]}`, rsaJWK["n"]),
-		"RSA missing kid":           fmt.Appendf(nil, `{"keys":[{"kty":"RSA","n":%q,"e":"AQAB"}]}`, rsaJWK["n"]),
+		// 8200 bits of odd modulus: above the 8192-bit ceiling.
+		"RSA over 8192 bits": fmt.Appendf(nil, `{"keys":[{"kty":"RSA","kid":"a","n":%q,"e":"AQAB"}]}`, base64.RawURLEncoding.EncodeToString(append(append([]byte{1}, make([]byte, 1024)...), 1))),
+		"RSA missing kid":    fmt.Appendf(nil, `{"keys":[{"kty":"RSA","n":%q,"e":"AQAB"}]}`, rsaJWK["n"]),
 		// P-256-sized coordinates on a P-384 key.
 		"P-384 short coordinates": fmt.Appendf(nil, `{"keys":[{"kty":"EC","crv":"P-384","kid":"a","x":%q,"y":%q}]}`, x, y),
 	}

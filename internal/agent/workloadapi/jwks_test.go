@@ -100,3 +100,32 @@ func TestValidateAgainstJWKSAcceptsEverySPIREKeyType(t *testing.T) {
 		})
 	}
 }
+
+// The control plane refuses a JWKS with an empty or duplicate kid; the
+// agent refuses one too, so a token is never checked against whichever
+// duplicate happened to be parsed last.
+func TestParseJWKSRejectsMissingAndDuplicateKid(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+	encode := func(kids ...string) []byte {
+		var set jose.JSONWebKeySet
+		for _, kid := range kids {
+			set.Keys = append(set.Keys, jose.JSONWebKey{Key: &key.PublicKey, KeyID: kid, Algorithm: "ES256", Use: "sig"})
+		}
+		out, err := json.Marshal(set)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return out
+	}
+	if _, err := parseJWKS(encode("a", "b")); err != nil {
+		t.Fatalf("two distinct kids: %v", err)
+	}
+	for name, raw := range map[string][]byte{"missing kid": encode(""), "duplicate kid": encode("a", "a")} {
+		if _, err := parseJWKS(raw); err == nil {
+			t.Errorf("%s: parseJWKS accepted it", name)
+		}
+	}
+}

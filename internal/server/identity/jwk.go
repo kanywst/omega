@@ -19,9 +19,13 @@ import (
 // ec-p384 -> ES384, rsa-2048 / rsa-4096 -> RS256).
 var JWTSVIDAlgs = []jose.SignatureAlgorithm{jose.ES256, jose.ES384, jose.RS256}
 
-// minRSAKeyBits is the smallest RSA modulus accepted as a JWT-SVID
-// signing key. SPIRE's smallest RSA key type is rsa-2048.
-const minRSAKeyBits = 2048
+// minRSAKeyBits and maxRSAKeyBits bound the RSA modulus accepted as a
+// JWT-SVID signing key. SPIRE's RSA key types are rsa-2048 and rsa-4096;
+// the ceiling keeps an oversized key from making every verification slow.
+const (
+	minRSAKeyBits = 2048
+	maxRSAKeyBits = 8192
+)
 
 // JWTVerificationKey is one JWT-SVID signing key and the single algorithm
 // it verifies. Pinning the algorithm to the key, rather than accepting any
@@ -176,8 +180,8 @@ func rsaPublicKeyFromJWK(n, e string) (*rsa.PublicKey, error) {
 	if modulus.Bit(0) == 0 {
 		return nil, errors.New("jwk RSA modulus is even")
 	}
-	if bits := modulus.BitLen(); bits < minRSAKeyBits {
-		return nil, fmt.Errorf("jwk RSA modulus is %d bits, want at least %d", bits, minRSAKeyBits)
+	if bits := modulus.BitLen(); bits < minRSAKeyBits || bits > maxRSAKeyBits {
+		return nil, fmt.Errorf("jwk RSA modulus is %d bits, want %d to %d", bits, minRSAKeyBits, maxRSAKeyBits)
 	}
 	if len(eb) == 0 || len(eb) > 4 || eb[0] == 0 {
 		return nil, errors.New("jwk e must be a big-endian integer of 1 to 4 bytes without leading zeros")

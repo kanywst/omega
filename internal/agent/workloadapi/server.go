@@ -634,6 +634,14 @@ func parseJWKS(raw []byte) (map[string]identity.JWTVerificationKey, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The control plane already refuses both; checking again keeps a
+		// token from being verified against whichever duplicate came last.
+		if k.Kid == "" {
+			return nil, errors.New("jwks signing key has no kid")
+		}
+		if _, dup := out[k.Kid]; dup {
+			return nil, fmt.Errorf("jwks has duplicate kid %q", k.Kid)
+		}
 		out[k.Kid] = key
 	}
 	return out, nil
