@@ -24,10 +24,10 @@ jobs:
           persist-credentials: false
 
       # ossf/scorecard-action does not ship a rolling `v2` major tag;
-      # only patch tags exist (latest: v2.4.3, 2025-09-30). Pin to the
-      # exact patch.
+      # only patch tags exist, so pin the exact one. v2.6.0 cannot be
+      # pulled (ossf/scorecard-action#1752), hence v2.5.0.
       - name: run scorecard
-        uses: ossf/scorecard-action@v2.6.0
+        uses: ossf/scorecard-action@v2.5.0
         with:
           results_file: results.sarif
           results_format: sarif
