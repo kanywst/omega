@@ -19,6 +19,12 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 10
+    ignore:
+      # v2.6.0's image index points at deleted manifests, so the action
+      # cannot be pulled (ossf/scorecard-action#1752). Drop this once a
+      # fixed release is out.
+      - dependency-name: ossf/scorecard-action
+        versions: ["2.6.0"]
     groups:
       actions-minor-and-patch:
         update-types:
