@@ -67,7 +67,7 @@ trust anchor, not a foreign one, and fails closed at boot rather than
 being silently dropped.
 
 Amendment (November 2026): EC P-384 (ES384) and RSA (RS256, a modulus of
-at least 2048 bits) keys are consumed as well, which covers every
+2048 to 8192 bits) keys are consumed as well, which covers every
 `jwt_key_type` SPIRE offers. ES256-only meant an upstream on an RSA JWT
 key had to change its key type before omega could consume it. Each key
 verifies only the algorithm its type is pinned to, and a token whose

@@ -75,7 +75,7 @@ The address must be `unix://`. A network endpoint is dialled without transport s
 Two deployment facts this demo does not cover, both exercised against upstream SPIRE images in [examples/spire-interop](../spire-interop/):
 
 - **omega must be an attested workload of that agent.** SPIRE answers the Workload API only for callers it can attest, so the control-plane process needs a registration entry (typically a `unix:uid:` or `k8s:` selector). Without one, startup fails with a `PermissionDenied` from the socket.
-- **`--identity-source-workload-api-jwt` needs a JWT signing key omega consumes upstream.** That is EC P-256 (ES256), EC P-384 (ES384) or RSA of 2048 bits or more (RS256), so every SPIRE `jwt_key_type` works. An upstream JWKS with none of these fails startup closed. Leave the flag off for X.509-only consumption.
+- **`--identity-source-workload-api-jwt` needs a JWT signing key omega consumes upstream.** That is EC P-256 (ES256), EC P-384 (ES384) or RSA of 2048 to 8192 bits (RS256), so every SPIRE `jwt_key_type` works. An upstream JWKS with none of these fails startup closed. Leave the flag off for X.509-only consumption.
 
 ## Why a mock agent
 

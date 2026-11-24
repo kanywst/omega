@@ -10,7 +10,7 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ### Added
 
-- **Upstream JWT-SVIDs signed with RSA or EC P-384 validate.** Under `--identity-source=spire-upstream`, the upstream JWKS may now carry EC P-384 (ES384) and RSA (RS256, 2048 bits or more) signing keys as well as EC P-256, which covers every SPIRE `jwt_key_type`. Before, an upstream on an RSA JWT key had no usable key and `--identity-source-workload-api-jwt` failed startup. Each key verifies only the algorithm its type is pinned to, and the agent validates with the same parser as the control plane. `examples/spire-interop` now runs SPIRE with `jwt_key_type = "rsa-2048"` and validates a JWT-SVID minted by `spire-server jwt mint`.
+- **Upstream JWT-SVIDs signed with RSA or EC P-384 validate.** Under `--identity-source=spire-upstream`, the upstream JWKS may now carry EC P-384 (ES384) and RSA (RS256, 2048 to 8192 bits) signing keys as well as EC P-256, which covers every SPIRE `jwt_key_type`. Before, an upstream on an RSA JWT key had no usable key and `--identity-source-workload-api-jwt` failed startup. Each key verifies only the algorithm its type is pinned to, and the agent validates with the same parser as the control plane. `examples/spire-interop` now runs SPIRE with `jwt_key_type = "rsa-2048"` and validates a JWT-SVID minted by `spire-server jwt mint`.
 - **OIDC discovery advertises the algorithms of the keys at `jwks_uri`.** `id_token_signing_alg_values_supported` was always `["ES256"]`; under `spire-upstream` it now lists the upstream keys' algorithms, so a relying party that uses it as an allow-list accepts RS256 and ES384 upstream tokens.
 
 ### Changed
