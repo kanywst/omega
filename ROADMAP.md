@@ -10,9 +10,9 @@ Items are grouped by horizon, not by semver version. Pre-1.0 we
 release as features are ready rather than on a fixed cadence; see
 [RELEASING.md](RELEASING.md).
 
-## Now (next release, post-0.15.1)
+## Now (next release, post-0.15.2)
 
-Nothing is committed yet. Sign-in to the UI and policy writes as the signed-in person, through `--ui-proxy` ([ADR 0023](docs/adr/0023-ui-proxy-acts-for-signed-in-people.md)), shipped in 0.14.0, with chart values and multi-replica sign-in in 0.15.0. 0.15.1 is a security fix for `null` values in AuthZEN requests.
+Nothing is committed yet. Sign-in to the UI and policy writes as the signed-in person, through `--ui-proxy` ([ADR 0023](docs/adr/0023-ui-proxy-acts-for-signed-in-people.md)), shipped in 0.14.0, with chart values and multi-replica sign-in in 0.15.0. 0.15.1 is a security fix for `null` values in AuthZEN requests, and 0.15.2 rebuilds on Go 1.27.4 for GO-2026-6859.
 
 ## Next (3-6 months)
 
