@@ -8,6 +8,17 @@ changes (see [SECURITY.md](SECURITY.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Upstream JWT-SVIDs signed with RSA or EC P-384 validate.** Under `--identity-source=spire-upstream`, the upstream JWKS may now carry EC P-384 (ES384) and RSA (RS256, 2048 to 8192 bits) signing keys as well as EC P-256, which covers every SPIRE `jwt_key_type`. Before, an upstream on an RSA JWT key had no usable key and `--identity-source-workload-api-jwt` failed startup. Each key verifies only the algorithm its type is pinned to, and the agent validates with the same parser as the control plane. `examples/spire-interop` now runs SPIRE with `jwt_key_type = "rsa-2048"` and validates a JWT-SVID minted by `spire-server jwt mint`.
+- **OIDC discovery advertises the algorithms of the keys at `jwks_uri`.** `id_token_signing_alg_values_supported` was always `["ES256"]`; under `spire-upstream` it now lists the upstream keys' algorithms, so a relying party that uses it as an allow-list accepts RS256 and ES384 upstream tokens.
+
+### Changed
+
+- **An undecodable RSA or EC P-384 key in an upstream JWKS now fails startup.** These keys used to be skipped as foreign, so a JWKS carrying one beside a valid EC P-256 key loaded. They are now consumed, and a consumed key that cannot be decoded (a modulus under 2048 bits, an even exponent, an off-curve point) fails closed, as an undecodable EC P-256 key always has. An RSA key that advertises an algorithm other than `RS256` is still skipped.
+- **The agent refuses a JWT-SVID without `exp`.** go-jose skips the expiry check when `exp` is absent, so such a token validated at the agent forever; the control plane already refused it.
+- **The upstream JWKS served at `/v1/jwt/bundle` is sorted by `kid`.** go-spiffe pushes the same keys in a different order each time, and each reordered push advanced `spiffe_sequence` as if the keys had rotated.
+
 ## [0.15.2] - 2026-11-24
 
 A security fix: Go 1.27.4 for GO-2026-6859, an HTTP/1 server crash in `net/http`.

@@ -151,6 +151,31 @@ if [ -z "$JWT_KIDS" ]; then
 	exit 1
 fi
 echo "[demo]   ok: /v1/jwt/bundle carries SPIRE's signing key ($JWT_KIDS)"
+assert_eq "SPIRE's JWT signing key is served as RS256" \
+	"$(curl -fsS "$OMEGA_URL/v1/jwt/bundle" | python3 -c 'import sys, json; print(",".join(sorted({k.get("alg", "") for k in json.load(sys.stdin)["keys"]})))')" "RS256"
+
+# The JWT half is only useful if a JWT-SVID SPIRE signs actually validates.
+# omega's own agent is the validator a workload talks to: it pulls the bundle
+# above from the control plane and checks tokens locally. It runs inside the
+# omega container so the demo needs no second image.
+echo "[demo] validating a JWT-SVID SPIRE signed, through omega's agent"
+# The agent requires a --map; validation does not use it, since ValidateJWTSVID
+# answers any caller.
+dc exec -T omega /usr/local/bin/omega agent --server http://127.0.0.1:8080 --socket /tmp/omega-agent.sock \
+	--map "uid=0,id=spiffe://$TRUST_DOMAIN/validator" \
+	>"$RUN_DIR/omega-agent.log" 2>&1 &
+SPIRE_JWT="$(spire_server jwt mint -spiffeID "spiffe://$TRUST_DOMAIN/web" -audience omega-demo -output json |
+	python3 -c 'import sys, json; d = json.load(sys.stdin); print(d.get("token") or d["svid"]["token"])')"
+validate() { dc exec -T omega /usr/local/bin/omega svid validate --json --audience omega-demo "$SPIRE_JWT" 2>&1; }
+for _ in $(seq 1 30); do
+	VALIDATED="$(validate || true)"
+	case "$VALIDATED" in *'"valid":true'*) break ;; esac
+	sleep 1
+done
+case "$VALIDATED" in *'"valid":true'*) ;; *) sed 's/^/       agent: /' "$RUN_DIR/omega-agent.log" | tail -20 ;; esac
+assert_eq "omega agent validated SPIRE's RS256 JWT-SVID" \
+	"$(printf '%s' "$VALIDATED" | python3 -c 'import sys, json; print(json.load(sys.stdin)["spiffe_id"])' 2>/dev/null || printf '%s' "$VALIDATED")" \
+	"spiffe://$TRUST_DOMAIN/web"
 assert_eq "spiffe_sequence starts at 1" "$(sequence)" "1"
 
 # ADR 0007: consuming an upstream does not make omega an issuer.

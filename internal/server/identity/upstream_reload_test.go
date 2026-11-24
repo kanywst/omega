@@ -1,6 +1,7 @@
 package identity_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -169,6 +170,51 @@ func TestUpstreamSourceReloadUnchangedDoesNotAdvanceSequence(t *testing.T) {
 	}
 	if changed {
 		t.Fatal("reformatting the JWKS file was reported as a rotation")
+	}
+}
+
+// go-spiffe marshals a JWT bundle from a map, so the Workload API pushes
+// the same keys in a different order each time. A reordered push is not a
+// rotation.
+func TestUpstreamSourceReloadIgnoresKeyOrder(t *testing.T) {
+	const td = "upstream.example"
+	var keys []json.RawMessage
+	for _, kid := range []string{"a", "b", "c"} {
+		_, one := ecSigningKey(t, kid)
+		var set struct {
+			Keys []json.RawMessage `json:"keys"`
+		}
+		if err := json.Unmarshal(one, &set); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		keys = append(keys, set.Keys[0])
+	}
+	encode := func(order ...int) []byte {
+		var ks []json.RawMessage
+		for _, i := range order {
+			ks = append(ks, keys[i])
+		}
+		out, err := json.Marshal(struct {
+			Keys []json.RawMessage `json:"keys"`
+		}{Keys: ks})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return out
+	}
+	bundle := upstreamBundle(t)
+	src, err := identity.NewUpstreamSourceWithJWT(td, "", bundle, encode(0, 1, 2))
+	if err != nil {
+		t.Fatalf("NewUpstreamSourceWithJWT: %v", err)
+	}
+	for _, order := range [][]int{{2, 1, 0}, {1, 2, 0}, {0, 2, 1}} {
+		changed, err := reloadable(t, src).Reload(bundle, encode(order...))
+		if err != nil {
+			t.Fatalf("Reload %v: %v", order, err)
+		}
+		if changed {
+			t.Fatalf("reordering the keys %v was reported as a rotation", order)
+		}
 	}
 }
 

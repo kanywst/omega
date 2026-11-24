@@ -2,7 +2,6 @@ package identity
 
 import (
 	"bytes"
-	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -64,7 +63,7 @@ type upstreamTrust struct {
 	jwtBundle []byte
 	// jwtKeys maps each upstream signing key's kid to its public key for
 	// JWT-SVID verification. nil / empty when no upstream JWKS was supplied.
-	jwtKeys map[string]*ecdsa.PublicKey
+	jwtKeys map[string]JWTVerificationKey
 }
 
 // newUpstreamTrust is the single validation path shared by construction

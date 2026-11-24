@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -24,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/go-jose/go-jose/v4"
 
 	"github.com/kanywst/omega/internal/server/api"
 	"github.com/kanywst/omega/internal/server/attest"
@@ -1202,6 +1205,50 @@ func TestOIDCDiscoveryReturnsDocumentWhenIssuerConfigured(t *testing.T) {
 	}
 	if got := strings.Join(doc.IDTokenSigningAlgValuesSupported, ","); got != "ES256" {
 		t.Errorf("alg: got %q want ES256", got)
+	}
+}
+
+// In spire-upstream mode jwks_uri serves the upstream's keys, so discovery
+// has to advertise their algorithms: a relying party that takes the list
+// as its allow-list would otherwise refuse every RS256 upstream token.
+func TestOIDCDiscoveryAdvertisesTheUpstreamKeysAlgorithms(t *testing.T) {
+	const wantIss = "https://omega.example.com"
+	dir := t.TempDir()
+	store, err := storage.Open(filepath.Join(dir, "omega.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	up, err := identity.LoadOrCreate(filepath.Join(dir, "up"), "upstream.example")
+	if err != nil {
+		t.Fatalf("upstream ca: %v", err)
+	}
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa: %v", err)
+	}
+	jwks, err := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &rsaKey.PublicKey, KeyID: "r1"}}})
+	if err != nil {
+		t.Fatalf("jwks: %v", err)
+	}
+	src, err := identity.NewUpstreamSourceWithJWT("upstream.example", wantIss, up.BundlePEM(), jwks)
+	if err != nil {
+		t.Fatalf("upstream source: %v", err)
+	}
+	srv := httptest.NewServer(api.NewServer(store, src, policy.New()).Handler())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var doc api.OIDCDiscoveryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := strings.Join(doc.IDTokenSigningAlgValuesSupported, ","); got != "RS256" {
+		t.Errorf("alg: got %q want RS256", got)
 	}
 }
 

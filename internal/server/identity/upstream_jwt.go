@@ -1,105 +1,76 @@
 package identity
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
-	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 // parseUpstreamJWKS parses an upstream JWT bundle (RFC 7517 JWKS) into a
-// kid -> public key map plus a canonical, public-only re-encoding to serve
-// at /v1/jwt/bundle. It is fail-closed: a malformed JWKS, a key with a bad
-// coordinate, or an off-curve point is an error rather than a silently
-// dropped trust anchor. A nil/empty input is the X.509-only case and yields
-// no keys with the empty JWKS as the canonical bundle.
+// kid -> verification key map plus a canonical, public-only re-encoding to
+// serve at /v1/jwt/bundle. It is fail-closed: a malformed JWKS, a key with
+// a bad coordinate or modulus, or an off-curve point is an error rather
+// than a silently dropped trust anchor. A nil/empty input is the X.509-only
+// case and yields no keys with the empty JWKS as the canonical bundle.
 //
-// Only EC P-256 (ES256) keys are consumed, matching the rest of omega's
-// JWT-SVID path (issuance, the agent's local validator) and SPIRE / Istio
-// defaults. Keys that are structurally not ours - other key types, other
-// curves, non-signing usages, a non-ES256 alg, or key_ops without verify -
-// are skipped so a heterogeneous upstream JWKS stays usable as long as it
-// carries at least one EC P-256 signing key.
-func parseUpstreamJWKS(jwksJSON []byte) (map[string]*ecdsa.PublicKey, []byte, error) {
+// EC P-256 (ES256), EC P-384 (ES384) and RSA (RS256, 2048 bits or more)
+// keys are consumed: the signing keys SPIRE produces for each of its
+// jwt_key_type values. Keys that are structurally not ours - other key
+// types or curves, non-signing usages, an alg other than the one the key
+// type is pinned to, or key_ops without verify - are skipped so a
+// heterogeneous upstream JWKS stays usable as long as it carries at least
+// one signing key omega consumes.
+func parseUpstreamJWKS(jwksJSON []byte) (map[string]JWTVerificationKey, []byte, error) {
 	if len(jwksJSON) == 0 {
 		return nil, []byte(emptyJWKS), nil
 	}
 
 	var raw struct {
-		Keys []struct {
-			Kty    string   `json:"kty"`
-			Crv    string   `json:"crv"`
-			Kid    string   `json:"kid"`
-			Use    string   `json:"use"`
-			Alg    string   `json:"alg"`
-			KeyOps []string `json:"key_ops"`
-			X      string   `json:"x"`
-			Y      string   `json:"y"`
-		} `json:"keys"`
+		Keys []JWK `json:"keys"`
 	}
 	if err := json.Unmarshal(jwksJSON, &raw); err != nil {
 		return nil, nil, fmt.Errorf("identity: upstream JWKS is not valid JSON: %w", err)
 	}
 
-	keys := make(map[string]*ecdsa.PublicKey, len(raw.Keys))
+	keys := make(map[string]JWTVerificationKey, len(raw.Keys))
 	canonical := make([]map[string]string, 0, len(raw.Keys))
 	for i, k := range raw.Keys {
-		// Ignore keys that are structurally not ours (RFC 7517 §5): other
-		// key types, other curves, or non-signing keys. A heterogeneous
-		// upstream JWKS - e.g. EC and RSA side by side during a key
-		// transition, or an "enc" key alongside the signing one - stays
-		// usable as long as it carries at least one EC P-256 signing key.
-		if k.Kty != "EC" || k.Crv != "P-256" {
+		key, ok, err := ParseJWTSigningKey(k)
+		if !ok {
 			continue
 		}
-		if k.Use != "" && k.Use != "sig" {
-			continue
-		}
-		// A key whose advertised alg is not ES256, or whose key_ops omit
-		// "verify", is not a JWT-SVID signing key even though it is EC
-		// P-256: skip it rather than canonicalising it as an ES256 signer
-		// (e.g. an ECDH-ES key-agreement key must never verify signatures).
-		if k.Alg != "" && k.Alg != string(jose.ES256) {
-			continue
-		}
-		if len(k.KeyOps) > 0 && !slices.Contains(k.KeyOps, "verify") {
-			continue
-		}
-		// From here the key is a recognised EC P-256 signing key. One we
-		// cannot consume is a corrupt trust anchor, not a foreign one, so
-		// fail closed rather than silently drop it.
+		// From here the key is a recognised signing key. One we cannot
+		// consume is a corrupt trust anchor, not a foreign one, so fail
+		// closed rather than silently drop it.
 		if k.Kid == "" {
-			return nil, nil, fmt.Errorf("identity: upstream JWKS key %d is EC/P-256 but has no kid (a kid is required to select the verification key)", i)
+			return nil, nil, fmt.Errorf("identity: upstream JWKS key %d is a %s signing key but has no kid (a kid is required to select the verification key)", i, k.Kty)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("identity: upstream JWKS key %q: %w", k.Kid, err)
 		}
 		if _, dup := keys[k.Kid]; dup {
 			return nil, nil, fmt.Errorf("identity: upstream JWKS has duplicate kid %q", k.Kid)
 		}
-		pub, err := ecPublicKeyFromXY(k.X, k.Y)
+		jwk, err := canonicalJWK(k.Kid, key)
 		if err != nil {
-			return nil, nil, fmt.Errorf("identity: upstream JWKS key %q: %w", k.Kid, err)
+			return nil, nil, fmt.Errorf("identity: re-encode upstream JWKS key %q: %w", k.Kid, err)
 		}
-		keys[k.Kid] = pub
-		canonical = append(canonical, map[string]string{
-			"kty": "EC",
-			"crv": "P-256",
-			"alg": "ES256",
-			"use": "sig",
-			"kid": k.Kid,
-			"x":   k.X,
-			"y":   k.Y,
-		})
+		keys[k.Kid] = key
+		canonical = append(canonical, jwk)
 	}
+	// Sorted by kid: go-spiffe marshals a bundle from a map, so the same
+	// keys arrive in a different order on every push, and an unsorted
+	// re-encoding would count each re-push as a rotation.
+	slices.SortFunc(canonical, func(a, b map[string]string) int { return strings.Compare(a["kid"], b["kid"]) })
 	if len(keys) == 0 {
-		return nil, nil, errors.New("identity: upstream JWKS contained no usable EC P-256 signing keys")
+		return nil, nil, errors.New("identity: upstream JWKS contained no usable signing keys (EC P-256, EC P-384 or RSA)")
 	}
 
 	out, err := json.Marshal(struct {
@@ -109,42 +80,6 @@ func parseUpstreamJWKS(jwksJSON []byte) (map[string]*ecdsa.PublicKey, []byte, er
 		return nil, nil, fmt.Errorf("identity: re-encode upstream JWKS: %w", err)
 	}
 	return keys, out, nil
-}
-
-// ecPublicKeyFromXY decodes a base64url EC point (x, y) into an ECDSA
-// public key, rejecting points that are not on the P-256 curve.
-// ParseUncompressedPublicKey performs the on-curve and point-at-infinity
-// checks itself, so the SEC 1 uncompressed encoding is the whole
-// validation step.
-func ecPublicKeyFromXY(x, y string) (*ecdsa.PublicKey, error) {
-	xb, err := base64.RawURLEncoding.DecodeString(x)
-	if err != nil {
-		return nil, fmt.Errorf("jwk x: %w", err)
-	}
-	yb, err := base64.RawURLEncoding.DecodeString(y)
-	if err != nil {
-		return nil, fmt.Errorf("jwk y: %w", err)
-	}
-	if len(xb) != 32 || len(yb) != 32 {
-		return nil, fmt.Errorf("jwk coordinates must be 32 bytes each (got x=%d, y=%d)", len(xb), len(yb))
-	}
-	pub, err := ecPublicKeyFromCoords(xb, yb)
-	if err != nil {
-		return nil, fmt.Errorf("jwk point is not on the P-256 curve: %w", err)
-	}
-	return pub, nil
-}
-
-// ecPublicKeyFromCoords assembles the SEC 1 uncompressed encoding of a
-// P-256 point and parses it. Callers must have length-checked the
-// coordinates; a short or long coordinate yields a malformed point that
-// the parser rejects rather than silently left-padding.
-func ecPublicKeyFromCoords(xb, yb []byte) (*ecdsa.PublicKey, error) {
-	point := make([]byte, 0, 65)
-	point = append(point, 0x04)
-	point = append(point, xb...)
-	point = append(point, yb...)
-	return ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
 }
 
 // validateUpstreamJWT verifies token against the upstream signing keys: it
@@ -161,7 +96,7 @@ func (u *upstreamSource) validateUpstreamJWT(token string, aud *string) (spiffei
 	if len(trust.jwtKeys) == 0 {
 		return spiffeid.ID{}, nil, ErrUpstreamJWTNotConfigured
 	}
-	parsed, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES256})
+	parsed, err := jwt.ParseSigned(token, JWTSVIDAlgs)
 	if err != nil {
 		return spiffeid.ID{}, nil, fmt.Errorf("parse jwt: %w", err)
 	}
@@ -172,13 +107,16 @@ func (u *upstreamSource) validateUpstreamJWT(token string, aud *string) (spiffei
 	if kid == "" {
 		return spiffeid.ID{}, nil, errors.New("jwt has no kid header")
 	}
-	pub, ok := trust.jwtKeys[kid]
+	key, ok := trust.jwtKeys[kid]
 	if !ok {
 		return spiffeid.ID{}, nil, fmt.Errorf("jwt signed by unknown kid %q", kid)
 	}
+	if alg := parsed.Headers[0].Algorithm; alg != string(key.Alg) {
+		return spiffeid.ID{}, nil, fmt.Errorf("jwt alg %q does not match the %s key %q", alg, key.Alg, kid)
+	}
 	var std jwt.Claims
 	var rawClaims map[string]any
-	if err := parsed.Claims(pub, &std, &rawClaims); err != nil {
+	if err := parsed.Claims(key.Key, &std, &rawClaims); err != nil {
 		return spiffeid.ID{}, nil, fmt.Errorf("verify jwt: %w", err)
 	}
 	// SPIFFE JWT-SVID requires exp; go-jose's ValidateWithLeeway does not
