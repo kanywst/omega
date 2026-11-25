@@ -19,6 +19,10 @@ changes (see [SECURITY.md](SECURITY.md)).
 - **The agent refuses a JWT-SVID without `exp`.** go-jose skips the expiry check when `exp` is absent, so such a token validated at the agent forever; the control plane already refused it.
 - **The upstream JWKS served at `/v1/jwt/bundle` is sorted by `kid`.** go-spiffe pushes the same keys in a different order each time, and each reordered push advanced `spiffe_sequence` as if the keys had rotated.
 
+### Security
+
+- **Raised `golang.org/x/net` to v0.63.0 and `golang.org/x/crypto` to v0.59.0** for GO-2026-6866 and GO-2026-6860 (`x/net/html`) and GO-2026-5932 (`x/crypto/openpgp`). Source analysis finds none of them reachable from omega, but the stripped release binary still reported them under `govulncheck -mode=binary`, which cannot tell linked from called.
+
 ## [0.15.2] - 2026-11-24
 
 A security fix: Go 1.27.4 for GO-2026-6859, an HTTP/1 server crash in `net/http`.
